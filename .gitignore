@@ -1,0 +1,26 @@
+.venv/
+.env
+# runtime logs/pids/state — never commit (logs can contain the bot token!)
+*.log
+*.pid
+state*.json
+risk_settings*.json
+state.json.tmp
+# secrets / TLS material — never commit
+*.key
+*.crt
+*.pem
+*.jsonl
+*.pyc
+__pycache__/
+.pytest_cache/
+*.egg-info/
+.DS_Store
+*.db
+*.db-shm
+*.db-wal
+# frontend build + deps
+node_modules/
+frontend/dist/
+# local dev/preview config (machine-specific absolute paths)
+.claude/

@@ -1,0 +1,28 @@
+# polymarket-copybot — runtime dependencies (Polymarket only)
+
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+aiosqlite>=0.20.0
+httpx>=0.27.0
+python-dotenv>=1.0.1
+eth-account>=0.11.0
+cryptography>=42.0.0
+pydantic>=2.7.0
+
+# On-chain leader-trade detection (OrderFilled logs via Polygon RPC).
+web3>=6.0.0
+
+# Order placement + wallet creation via polymarket-client's AsyncSecureClient.
+# Not py-clob-client (archived upstream 2026-05-25, signs a rejected order
+# format) or py-clob-client-v2 (its L1 auth binds the API key to the EOA
+# regardless of signature_type/funder, breaking POLY_1271/deposit-wallet order
+# placement — github.com/Polymarket/py-clob-client-v2 issues #70/#64/#53, all
+# open). polymarket-client's AsyncSecureClient is confirmed working end-to-end
+# (this build's own live tests): gasless Deposit Wallet creation, deployment,
+# and trading approvals, all for free via the relayer, with a Builder API key
+# (POLYMARKET_BUILDER_API_KEY/_SECRET/_PASSPHRASE — see .env.example). Without
+# a Builder key it falls back to plain EOA mode. See BUILD_PLAN.md §wallet model.
+#
+# Still in prerelease (0.1.0bNN) — `pip install -r requirements.txt` needs
+# --pre, or use `uv pip install --prerelease allow -r requirements.txt`.
+polymarket-client>=0.1.0b11

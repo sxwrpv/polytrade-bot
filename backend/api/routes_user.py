@@ -1,0 +1,246 @@
+"""/api/user/* — wallet onboarding, profile, PnL, settings, referral, key export."""
+from __future__ import annotations
+
+import logging
+import time
+
+import aiosqlite
+from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel
+
+from backend.config import CREATE_WALLET_RATE_LIMIT, ENCRYPTION_SECRET, TELEGRAM_BOT_TOKEN
+from backend.core import auth, pnl as pnl_mod, wallet
+from backend.api.deps import get_current_user, get_db, get_pm, get_user_client
+from backend.db.database import now_iso
+
+log = logging.getLogger("routes_user")
+
+# Wallet creation hits Polymarket's shared relayer (deploy + approvals), which
+# rate-limits by builder key — one abusive IP must not exhaust it for every
+# user. In-memory per-IP sliding window; sufficient for a single process.
+_create_hits: dict[str, list[float]] = {}
+
+
+def _create_rate_limited(ip: str) -> bool:
+    limit_s, _, window_s = CREATE_WALLET_RATE_LIMIT.partition("/")
+    limit, window = int(limit_s), float(window_s or 3600)
+    now = time.time()
+    hits = [t for t in _create_hits.get(ip, []) if now - t < window]
+    limited = len(hits) >= limit
+    if not limited:
+        hits.append(now)
+    _create_hits[ip] = hits
+    return limited
+
+# Bridge response keys verified live against bridge.polymarket.com/deposit
+# (2026-07-01) — one address per chain family; whatever arrives is converted
+# to pUSD at the destination wallet by Polymarket's own Collateral Onramp.
+_DEPOSIT_CHAIN_LABELS = {
+    "evm": "ETHEREUM / POLYGON / ARBITRUM / BASE / OPTIMISM / BNB (USDC or USDT)",
+    "svm": "SOLANA (USDC or USDT)",
+    "btc": "BITCOIN (BTC)",
+    "tron": "TRON (USDT)",
+}
+
+router = APIRouter()
+
+
+class CreateWallet(BaseModel):
+    display_name: str | None = None
+    referred_by: str | None = None
+    init_data: str | None = None      # Telegram initData — links the account
+
+
+class SettingsBody(BaseModel):
+    display_name: str | None = None
+    paused: bool | None = None
+    copy_multiplier: float | None = None
+    max_slippage_pct: float | None = None
+    max_total_exposure_usd: float | None = None
+    daily_loss_limit_usd: float | None = None
+    default_allocation_pct: float | None = None
+    default_max_position_usd: float | None = None
+
+
+_SETTINGS_KEYS = (
+    "display_name", "paused", "copy_multiplier", "max_slippage_pct",
+    "max_total_exposure_usd", "daily_loss_limit_usd",
+    "default_allocation_pct", "default_max_position_usd",
+)
+
+
+@router.post("/create-wallet")
+async def create_wallet(body: CreateWallet, request: Request, db=Depends(get_db)):
+    """Generate a signer, build its client (derives + deploys the gasless
+    Deposit Wallet automatically when a Builder key is configured; falls back
+    to EOA otherwise), wait for backend indexing, then set up trading
+    approvals — all before the user ever sees the wallet, so it's ready to
+    fund and trade immediately. Launched inside Telegram, the account is also
+    linked to the Telegram user — and if that Telegram user already has a
+    wallet, their existing session is returned instead of minting an orphan."""
+    if not ENCRYPTION_SECRET:
+        raise HTTPException(500, "ENCRYPTION_SECRET not configured")
+
+    tg_user = None
+    if body.init_data and TELEGRAM_BOT_TOKEN:
+        tg_user = auth.validate_init_data(body.init_data, TELEGRAM_BOT_TOKEN)
+        if tg_user:
+            existing = await db.fetchone(
+                "SELECT * FROM users WHERE telegram_user_id = ?", (int(tg_user["id"]),))
+            if existing:
+                return {"address": existing["id"], "signer_address": existing["signer_address"],
+                        "referral_code": existing["referral_code"],
+                        "api_token": existing["api_token"],
+                        "gasless": existing["id"] != existing["signer_address"]}
+
+    ip = request.client.host if request.client else "unknown"
+    if _create_rate_limited(ip):
+        raise HTTPException(429, "too many wallets created from this address — try again later")
+
+    kp = wallet.create_signer()
+    signer, pk = kp["address"], kp["private_key"]
+
+    try:
+        client = await wallet.make_clob_client(pk)
+    except Exception as e:
+        log.exception("wallet client creation failed")
+        raise HTTPException(503, f"wallet creation temporarily unavailable, try again shortly: {e}")
+
+    funder = client.wallet
+    try:
+        await wallet.wait_wallet_ready(client)
+        await wallet.ensure_allowances(client)
+    except Exception:
+        log.exception("wallet setup (readiness/approvals) failed for %s — "
+                      "wallet exists but may need funding/approval retried later", funder)
+    finally:
+        await client.close()
+
+    enc = wallet.encrypt_private_key(pk, ENCRYPTION_SECRET)
+    ref_code = "REF" + signer[2:8].upper()
+    token = auth.new_api_token()
+    display_name = body.display_name
+    if not display_name and tg_user:
+        display_name = tg_user.get("username") or tg_user.get("first_name")
+    try:
+        await db.execute(
+            "INSERT INTO users(id, signer_address, api_token, telegram_user_id, "
+            "display_name, private_key_enc, referral_code, referred_by, created_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?)",
+            (funder, signer, token, int(tg_user["id"]) if tg_user else None,
+             display_name, enc, ref_code, body.referred_by, now_iso()))
+    except aiosqlite.IntegrityError:
+        raise HTTPException(409, "wallet already exists")
+    return {"address": funder, "signer_address": signer, "referral_code": ref_code,
+            "api_token": token, "gasless": funder != signer}
+
+
+@router.get("/me")
+async def me(request: Request, balance: bool = False, user=Depends(get_current_user)):
+    bal = None
+    if balance:   # live balance is expensive (derives creds) — opt-in
+        try:
+            client = await get_user_client(request, user)
+            r = await client.get_balance_allowance(asset_type="COLLATERAL")
+            bal = r.balance / 1e6
+        except Exception:
+            bal = None
+    return {"address": user["id"], "signer_address": user["signer_address"],
+            "display_name": user["display_name"], "balance": bal,
+            "referral_code": user["referral_code"],
+            # deposit wallet (gasless) vs EOA fallback — cheap DB-only check,
+            # no client build needed: a deposit wallet's funder != its signer.
+            "gasless": user["id"] != user["signer_address"]}
+
+
+@router.get("/deposit-address")
+async def deposit_address(user=Depends(get_current_user), pmc=Depends(get_pm)):
+    """Bridge deposit addresses so the user can fund their wallet from any
+    supported chain in USDC/USDT/etc — arrives as pUSD automatically. This is
+    Polymarket's own bridge, not something we run; see BUILD_PLAN §wallet model
+    for why the one-time allowance approval (separate from funding) still
+    needs a little MATIC on this EOA wallet model."""
+    r = await pmc.create_bridge_address(user["id"])
+    addresses = r.get("address", {})
+    return {
+        "addresses": [
+            {"chain": chain, "label": _DEPOSIT_CHAIN_LABELS.get(chain, chain.upper()),
+             "address": addr}
+            for chain, addr in addresses.items()
+        ],
+    }
+
+
+@router.get("/activity")
+async def activity(limit: int = 30, user=Depends(get_current_user), db=Depends(get_db)):
+    """The engine's recent actions on this account — the 'it's alive' feed.
+    Every open/close/partial/resolve the copy engine (or a manual close)
+    records lands in trade_events; joined here with the position's market."""
+    limit = max(1, min(int(limit), 100))
+    rows = await db.fetchall(
+        "SELECT e.ts, e.event_type, e.amount_usd, e.pnl, "
+        "p.market_title, p.market_slug, p.outcome, p.trader_address, "
+        "p.entry_price, p.exit_price "
+        "FROM trade_events e JOIN copy_positions p ON p.id = e.position_id "
+        "WHERE e.user_id = ? ORDER BY e.ts DESC LIMIT ?",
+        (user["id"], limit))
+    for r in rows:
+        cached = await db.fetchone(
+            "SELECT display_name FROM trader_cache WHERE address = ?",
+            (r["trader_address"],))
+        r["trader_name"] = cached["display_name"] if cached else None
+    return rows
+
+
+@router.get("/pnl")
+async def pnl(period: str = "30d", user=Depends(get_current_user),
+              db=Depends(get_db), pmc=Depends(get_pm)):
+    stats = await pnl_mod.get_pnl_stats(user["id"], db, pmc)
+    curve = await pnl_mod.get_equity_curve(user["id"], db, period)
+    return {**stats, "equity_curve": curve}
+
+
+@router.get("/pnl/by-wallet")
+async def pnl_by_wallet(user=Depends(get_current_user), db=Depends(get_db)):
+    """Realized PnL breakdown per copied wallet, with cached display name/tier
+    joined in for the User > Performance > breakdown folder."""
+    rows = await pnl_mod.get_pnl_by_wallet(user["id"], db)
+    for r in rows:
+        cached = await db.fetchone(
+            "SELECT display_name FROM trader_cache WHERE address = ?",
+            (r["trader_address"],))
+        r["display_name"] = cached["display_name"] if cached else None
+    return rows
+
+
+@router.get("/settings")
+async def get_settings(user=Depends(get_current_user)):
+    return {k: user[k] for k in _SETTINGS_KEYS}
+
+
+@router.post("/settings")
+async def update_settings(body: SettingsBody, user=Depends(get_current_user), db=Depends(get_db)):
+    updates = {k: v for k, v in body.model_dump(exclude_unset=True).items() if k in _SETTINGS_KEYS}
+    if "paused" in updates:
+        updates["paused"] = int(bool(updates["paused"]))
+    if updates:
+        cols = ", ".join(f"{k} = ?" for k in updates)
+        await db.execute(f"UPDATE users SET {cols} WHERE id = ?",
+                         [*updates.values(), user["id"]])
+    return {"ok": True, "updated": list(updates)}
+
+
+@router.get("/referral")
+async def referral(user=Depends(get_current_user), db=Depends(get_db)):
+    cnt = await db.fetchval("SELECT COUNT(*) FROM users WHERE referred_by = ?",
+                            (user["referral_code"],))
+    return {"code": user["referral_code"], "referred_count": cnt or 0, "total_earned": 0.0}
+
+
+@router.post("/export-key")
+async def export_key(user=Depends(get_current_user)):
+    """Reveal the signer private key. Gated by the Bearer session token (a
+    secret only this user's client holds) — no passphrase second factor; see
+    BUILD_PLAN.md for that deliberate tradeoff."""
+    pk = wallet.decrypt_private_key(user["private_key_enc"], ENCRYPTION_SECRET)
+    return {"private_key": pk}
