@@ -263,6 +263,8 @@ class CopyEngine:
                     self._cursors[key] = max(self._cursors[key], t.timestamp)
 
     async def _handle_leader_trade(self, follow: dict, trade) -> None:
+        detected_at = time.time()
+        leader_age = detected_at - float(trade.timestamp or detected_at)
         user_id = follow["user_id"]
         trader = follow["trader_address"]
         frisk = self._follow_risk(follow)
@@ -294,7 +296,13 @@ class CopyEngine:
                                   if r["trader_address"] == trader)
                 notional = min(notional, max(0.0, frisk["max_exposure"] - trader_open))
             if notional < MIN_NOTIONAL_USD:
+                log.info(
+                    "fast-open skipped %s age=%.1fs notional=%.2f reason=below_engine_min trader=%s",
+                    token, leader_age, notional, trader[:10])
                 return
+            log.info(
+                "fast-open submit %s age=%.1fs side=%s notional=%.2f ref=%.4f trader=%s",
+                token, leader_age, trade.side.upper(), notional, float(trade.price or 0), trader[:10])
             result = await self._place_order(
                 client, self.pm, token, "BUY", notional,
                 reference_price=trade.price, max_slippage_pct=frisk["slippage"])
@@ -317,8 +325,15 @@ class CopyEngine:
                     trade.slug, trade.title, trade.outcome.upper(),
                     result.filled_shares, trader_total, result.avg_price,
                     round(result.filled_shares * result.avg_price, 2))
+                log.info(
+                    "fast-open filled %s total_age=%.1fs shares=%.4f avg=%.4f notional=%.2f trader=%s",
+                    token, time.time() - float(trade.timestamp or detected_at),
+                    result.filled_shares, result.avg_price,
+                    round(result.filled_shares * result.avg_price, 2), trader[:10])
             else:
-                log.info("fast-open skipped %s: %s", token, result.reason)
+                log.info(
+                    "fast-open skipped %s age=%.1fs notional=%.2f reason=%s trader=%s",
+                    token, leader_age, notional, result.reason, trader[:10])
         else:  # leader SELL — exit fast (market FOK; exits aren't spread-sensitive).
             # Deliberately NOT gated on paused: pause stops new buys, but the
             # money already in open copies keeps being managed.

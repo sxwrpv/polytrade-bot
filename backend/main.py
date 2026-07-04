@@ -24,6 +24,11 @@ from backend.core.polymarket import PolymarketClient
 from backend.db.database import Database
 from backend.api import routes_auth, routes_positions, routes_traders, routes_user
 
+logging.basicConfig(
+    level=os.environ.get("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s %(levelname)s %(name)s | %(message)s",
+)
+
 log = logging.getLogger("main")
 _FRONTEND_DIST = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")
 
