@@ -45,15 +45,6 @@ body {
   line-height: 1.5;
 }
 
-/* G2-continuity (squircle) corners where the browser supports them; the
-   generous border-radius below is the approximation everywhere else. */
-@supports (corner-shape: squircle) {
-  .card, .modal, .btn, .chip, .stat-grid, .addr, .search-box, .warn-box,
-  .tab-bar, .app-header, input, select, .sparkline, .chart-box {
-    corner-shape: squircle;
-  }
-}
-
 /* frosted chrome */
 .card {
   background: var(--surface);
