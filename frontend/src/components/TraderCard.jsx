@@ -109,51 +109,62 @@ export default function TraderCard({ t, period = '30d', onFollowed, balance }) {
         )}
       </div>
 
-      {hasPeriodStats && (
-        <div className="tc-period">
-          <table className="tc-table">
-            <thead>
-              <tr>
-                <th />
-                <th>WR</th>
-                <th>PNL</th>
-                <th>VOL</th>
-                <th title={EXIT_FILL_HELP}>EXIT/FILL</th>
-                <th title="days with positive vs negative realized pnl">G/R DAYS</th>
-              </tr>
-            </thead>
-            <tbody>
-              {PERIODS.map((p) => {
-                const ppnl = t[`pnl_${p}`] || 0
-                return (
-                  <tr key={p} className={p === chartPeriod ? 'active' : ''}>
-                    <td>
-                      <button className="tc-period-btn" onClick={() => setChartPeriod(p)}>
-                        {p.toUpperCase()}
-                      </button>
-                    </td>
-                    <td>{((t[`winrate_${p}`] || 0) * 100).toFixed(0)}%</td>
-                    <td className={ppnl >= 0 ? 'pos' : 'neg'}>{money(ppnl)}</td>
-                    <td>${Math.round(t[`volume_${p}`] || 0).toLocaleString()}</td>
-                    <td>{(t[`fill_exit_ratio_${p}`] ?? 0).toFixed(0)}%</td>
-                    <td>
-                      <span className="pos">{t[`green_days_${p}`] || 0}</span>
-                      {'/'}
-                      <span className="neg">{t[`red_days_${p}`] || 0}</span>
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-          <div
-            className="tc-chart"
-            title={`cumulative realized pnl, last ${chartPeriod} (from recent trade history)`}
-          >
-            <Sparkline daily={daily} />
+      {hasPeriodStats && (() => {
+        const p = chartPeriod
+        const days = { '7d': 7, '30d': 30, '90d': 90 }[p]
+        const ppnl = t[`pnl_${p}`] || 0
+        // history_days < the selected window = the trade feed didn't reach the
+        // whole period (hyper-active wallet) — label the stats as partial
+        const partial = t.history_days != null && t.history_days < days - 0.5
+        return (
+          <div className="tc-period">
+            <div className="sort-row">
+              {PERIODS.map((k) => (
+                <button
+                  key={k}
+                  className={`chip ${k === p ? 'active' : ''}`}
+                  onClick={() => setChartPeriod(k)}
+                >
+                  {k.toUpperCase()}
+                </button>
+              ))}
+              {partial && (
+                <span
+                  className="muted small"
+                  title="this wallet trades so much that only part of the period is covered by fetched history — stats below reflect that shorter span"
+                >
+                  DATA: LAST ~{Math.round(t.history_days)}D
+                </span>
+              )}
+            </div>
+            <div className="tc-stats">
+              <span title="closing-trade win rate in the period (sells + resolution wins/losses)">
+                WR {((t[`winrate_${p}`] || 0) * 100).toFixed(0)}%
+              </span>
+              <span className={ppnl >= 0 ? 'pos' : 'neg'} title="realized pnl in the period">
+                PNL {money(ppnl)}
+              </span>
+              <span title="traded volume in the period">
+                VOL ${Math.round(t[`volume_${p}`] || 0).toLocaleString()}
+              </span>
+              <span title={EXIT_FILL_HELP}>
+                EXIT/FILL {(t[`fill_exit_ratio_${p}`] ?? 0).toFixed(0)}%
+              </span>
+              <span title="days with positive vs negative realized pnl">
+                <span className="pos">{t[`green_days_${p}`] || 0}</span>
+                {'/'}
+                <span className="neg">{t[`red_days_${p}`] || 0}</span> DAYS
+              </span>
+            </div>
+            <div
+              className="tc-chart"
+              title={`cumulative realized pnl, last ${p} (sells + resolutions, avg-cost basis)`}
+            >
+              <Sparkline daily={daily} />
+            </div>
           </div>
-        </div>
-      )}
+        )
+      })()}
 
       <div className="tc-actions">
         <button className="btn" onClick={() => setOpen(true)}>COPY TRADER</button>

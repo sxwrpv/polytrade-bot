@@ -133,6 +133,7 @@ CREATE TABLE IF NOT EXISTS trader_cache (
     exits_90d               INTEGER,
     fill_exit_ratio_90d     REAL,
     daily_pnl_90d           TEXT,   -- JSON {"YYYY-MM-DD": realized_pnl} last 90d
+    history_days            REAL,   -- how far back fetched trade history reaches (90 = full window; less = page budget hit, windowed stats are partial)
     stats_refreshed_at      TEXT,   -- when windowed stats were last computed
     last_refreshed    TEXT NOT NULL
 );
@@ -220,6 +221,9 @@ MIGRATIONS = (
     # per-day realized PnL for the last 90d as a JSON object {"YYYY-MM-DD": pnl}
     # — powers the per-card 7/30/90d equity sparkline without extra API calls.
     "ALTER TABLE trader_cache ADD COLUMN daily_pnl_90d TEXT",
+    # trade-history coverage in days (90 = the whole 90d window was fetched;
+    # less = pagination budget ran out — the UI marks wider periods as partial)
+    "ALTER TABLE trader_cache ADD COLUMN history_days REAL",
     # when the windowed screener stats were last computed (last_refreshed is
     # bumped by every upsert incl. cheap discovery, so it can't drive the
     # stale-first refresh rotation).
