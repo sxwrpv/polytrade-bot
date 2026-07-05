@@ -4,12 +4,18 @@ from __future__ import annotations
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel
 
 from backend.core import execution
 from backend.api.deps import get_current_user, get_db, get_pm, get_user_client
 from backend.db.database import now_iso
 
 router = APIRouter()
+
+# copy_positions.trader_address for wallet holdings the user closed manually —
+# they were never copied from anyone, but the row keeps them in closed history
+# and in the per-wallet PnL breakdown (shown as MANUAL in the UI).
+MANUAL_TRADER = "manual"
 
 
 @router.get("/open")
@@ -47,6 +53,56 @@ async def closed_positions(user=Depends(get_current_user), db=Depends(get_db)):
     return await db.fetchall(
         "SELECT * FROM copy_positions WHERE user_id = ? AND status IN ('closed','resolved') "
         "ORDER BY closed_at DESC", (user["id"],))
+
+
+class CloseExternalBody(BaseModel):
+    token_id: str
+
+
+@router.post("/close-external")
+async def close_external_position(body: CloseExternalBody, request: Request,
+                                  user=Depends(get_current_user), db=Depends(get_db),
+                                  pmc=Depends(get_pm)):
+    """Sell a wallet holding the engine doesn't manage (bought manually on
+    polymarket.com with the exported key). No copy_positions row exists yet, so
+    there's no status to claim — the exchange-side FOK is the double-submit
+    guard (the second sell has no shares left to fill). On success a closed row
+    is inserted so the trade lands in history / the PnL breakdown."""
+    managed = await db.fetchone(
+        "SELECT id FROM copy_positions WHERE user_id = ? AND token_id = ? AND "
+        "status IN ('open', 'closing')", (user["id"], body.token_id))
+    if managed:
+        raise HTTPException(409, "position is managed by the bot — close it from its card")
+    live = await pmc.get_positions(user["id"], size_threshold=0)
+    p = next((x for x in live if x.asset == body.token_id), None)
+    if p is None or p.size <= 0.01:
+        raise HTTPException(404, "wallet does not hold this token")
+    if p.redeemable:
+        raise HTTPException(400, "market already resolved — winnings redeem automatically, "
+                                 "there is nothing to sell")
+    client = await get_user_client(request, user)
+    result = await execution.place_market_order(
+        client, pmc, body.token_id, "SELL", p.size, reference_price=p.cur_price)
+    if result.ok:
+        pnl = (result.avg_price - p.avg_price) * result.filled_shares
+        position_id = uuid.uuid4().hex
+        ts = now_iso()
+        await db.execute(
+            "INSERT INTO copy_positions(id, user_id, trader_address, condition_id, "
+            "token_id, market_slug, market_title, outcome, shares, entry_price, "
+            "notional_usd, status, exit_price, realized_pnl, opened_at, closed_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,'closed',?,?,?,?)",
+            (position_id, user["id"], MANUAL_TRADER, p.condition_id, body.token_id,
+             p.event_slug or p.slug, p.title, (p.outcome or "").upper(),
+             result.filled_shares, p.avg_price, round(p.initial_value, 2),
+             result.avg_price, pnl, ts, ts))
+        await db.execute(
+            "INSERT INTO trade_events(id, user_id, position_id, event_type, amount_usd, pnl, ts) "
+            "VALUES(?,?,?,?,?,?,?)",
+            (uuid.uuid4().hex, user["id"], position_id, "close",
+             round(p.initial_value, 2), pnl, ts))
+    return {"ok": result.ok, "reason": result.reason, "order_id": result.order_id,
+            "avg_price": result.avg_price}
 
 
 @router.post("/{position_id}/close")

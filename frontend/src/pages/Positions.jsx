@@ -2,23 +2,25 @@ import { useEffect, useState, useCallback, useMemo } from 'react'
 import { api } from '../api'
 import PositionCard from '../components/PositionCard'
 
+const signed = (v) => `${v >= 0 ? '+' : '-'}$${Math.abs(v).toFixed(2)}`
+
 function summarize(rows, closed) {
   if (closed) {
     const realized = rows.map((r) => Number(r.realized_pnl || 0))
     const total = realized.reduce((a, b) => a + b, 0)
     const wins = realized.filter((v) => v > 0).length
     return [
-      ['REALIZED PNL', `${total >= 0 ? '+' : ''}$${total.toFixed(2)}`, total >= 0 ? 'pos' : 'neg'],
+      ['REALIZED PNL', signed(total), total >= 0 ? 'pos' : 'neg'],
       ['WIN RATE', realized.length ? `${Math.round((wins / realized.length) * 100)}%` : '—', ''],
-      ['BEST', realized.length ? `+$${Math.max(...realized).toFixed(2)}` : '—', 'pos'],
-      ['WORST', realized.length ? `$${Math.min(...realized).toFixed(2)}` : '—', 'neg'],
+      ['BEST', realized.length ? signed(Math.max(...realized)) : '—', 'pos'],
+      ['WORST', realized.length ? signed(Math.min(...realized)) : '—', 'neg'],
     ]
   }
   const exposure = rows.reduce((a, r) => a + Number(r.notional_usd || 0), 0)
   const unrealized = rows.reduce((a, r) => a + Number(r.unrealized_pnl || 0), 0)
   return [
     ['OPEN EXPOSURE', `$${exposure.toFixed(2)}`, ''],
-    ['UNREALIZED PNL', `${unrealized >= 0 ? '+' : ''}$${unrealized.toFixed(2)}`, unrealized >= 0 ? 'pos' : 'neg'],
+    ['UNREALIZED PNL', signed(unrealized), unrealized >= 0 ? 'pos' : 'neg'],
     ['OPEN POSITIONS', rows.length, ''],
   ]
 }

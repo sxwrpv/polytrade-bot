@@ -71,13 +71,14 @@ async def get_pnl_by_wallet(user_id: str, db) -> list[dict]:
     """Realized PnL grouped by copied trader — answers "which of my copied
     wallets is actually making money" (User > Performance > breakdown)."""
     rows = await db.fetchall(
-        "SELECT trader_address, "
-        "COALESCE(SUM(realized_pnl), 0) AS realized_pnl, "
+        "SELECT p.trader_address, c.display_name, "
+        "COALESCE(SUM(p.realized_pnl), 0) AS realized_pnl, "
         "COUNT(*) AS closed_trades, "
-        "SUM(CASE WHEN realized_pnl > 0 THEN 1 ELSE 0 END) AS wins "
-        "FROM copy_positions "
-        "WHERE user_id = ? AND status IN ('closed', 'resolved') "
-        "GROUP BY trader_address ORDER BY realized_pnl DESC",
+        "SUM(CASE WHEN p.realized_pnl > 0 THEN 1 ELSE 0 END) AS wins "
+        "FROM copy_positions p "
+        "LEFT JOIN trader_cache c ON c.address = p.trader_address "
+        "WHERE p.user_id = ? AND p.status IN ('closed', 'resolved') "
+        "GROUP BY p.trader_address ORDER BY realized_pnl DESC",
         (user_id,))
     out = []
     for r in rows:
@@ -85,6 +86,7 @@ async def get_pnl_by_wallet(user_id: str, db) -> list[dict]:
         wins = int(r["wins"] or 0)
         out.append({
             "trader_address": r["trader_address"],
+            "display_name": r["display_name"],
             "realized_pnl": round(float(r["realized_pnl"] or 0.0), 2),
             "closed_trades": trades,
             "win_rate": round(wins / trades, 4) if trades else 0.0,

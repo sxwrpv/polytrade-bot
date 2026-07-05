@@ -77,7 +77,11 @@ export default function TraderCard({ t, period = '30d', onFollowed, balance }) {
     <div className="card trader-card">
       <div className="tc-top">
         <div>
-          <span className="tc-name">{t.display_name || short(t.address)}</span>
+          {/* Polymarket auto-generates "0x…-<timestamp>" usernames for wallets
+              that never set one — show the short address instead of that blob */}
+          <span className="tc-name">
+            {t.display_name && !t.display_name.startsWith('0x') ? t.display_name : short(t.address)}
+          </span>
           <span className={`tier-badge tier-${tier}`}>{tier.toUpperCase()}</span>
         </div>
         <span className="muted addr-inline" onClick={copyAddress} title="click to copy">

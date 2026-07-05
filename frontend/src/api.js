@@ -72,4 +72,7 @@ export const api = {
   openPositions: () => req('/positions/open'),
   closedPositions: () => req('/positions/closed'),
   closePosition: (id) => req(`/positions/${id}/close`, { method: 'POST' }),
+  // sell a wallet holding the bot didn't open (marked MANUAL on the card)
+  closeExternal: (tokenId) =>
+    req('/positions/close-external', { method: 'POST', body: JSON.stringify({ token_id: tokenId }) }),
 }

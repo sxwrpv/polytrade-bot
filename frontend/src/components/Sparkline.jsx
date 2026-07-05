@@ -24,7 +24,7 @@ export default function Sparkline({ daily, width = 260, height = 48 }) {
       viewBox={`0 0 ${width} ${height}`}
       preserveAspectRatio="none"
       role="img"
-      aria-label={`realized pnl curve, ${final >= 0 ? '+' : ''}$${final.toFixed(0)}`}
+      aria-label={`realized pnl curve, ${final >= 0 ? '+' : '-'}$${Math.abs(final).toFixed(0)}`}
     >
       <line x1="0" y1={y(0)} x2={width} y2={y(0)} stroke="var(--border)" strokeWidth="1" />
       <polyline points={path} fill="none" stroke={color} strokeWidth="1.5" />

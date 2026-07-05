@@ -4,7 +4,7 @@ export default function KpiStrip({ me, pnl, followingCount }) {
   const bal = me?.balance
   const p7 = pnl?.pnl_7d
   const cls = (v) => (v == null ? '' : v >= 0 ? 'pos' : 'neg')
-  const fmt = (v) => (v == null ? '—' : `${v >= 0 ? '+' : ''}$${Number(v).toFixed(2)}`)
+  const fmt = (v) => (v == null ? '—' : `${v >= 0 ? '+' : '-'}$${Math.abs(Number(v)).toFixed(2)}`)
 
   return (
     <div className="kpi-strip stat-grid">

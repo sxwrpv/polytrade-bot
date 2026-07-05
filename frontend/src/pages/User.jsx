@@ -85,7 +85,7 @@ export default function User({ onLogout }) {
 
   const curve = pnl?.equity_curve || []
   const dayValues = curve.map((d) => d.pnl)
-  const dayTitles = curve.map((d) => `${d.date}: ${d.pnl >= 0 ? '+' : ''}$${d.pnl.toFixed(2)}`)
+  const dayTitles = curve.map((d) => `${d.date}: ${d.pnl >= 0 ? '+' : '-'}$${Math.abs(d.pnl).toFixed(2)}`)
 
   return (
     <div>
@@ -130,9 +130,13 @@ export default function User({ onLogout }) {
             byWallet.map((w) => (
               <div className="card" key={w.trader_address}>
                 <div className="tc-top">
-                  <span className="tc-name">{w.display_name || `${w.trader_address.slice(0, 6)}…${w.trader_address.slice(-4)}`}</span>
+                  <span className="tc-name">
+                    {w.trader_address === 'manual'
+                      ? 'MANUAL TRADES'
+                      : w.display_name || `${w.trader_address.slice(0, 6)}…${w.trader_address.slice(-4)}`}
+                  </span>
                   <span className={w.realized_pnl >= 0 ? 'pos' : 'neg'}>
-                    {w.realized_pnl >= 0 ? '+' : ''}${w.realized_pnl.toFixed(2)}
+                    {w.realized_pnl >= 0 ? '+' : '-'}${Math.abs(w.realized_pnl).toFixed(2)}
                   </span>
                 </div>
                 <div className="tc-stats">

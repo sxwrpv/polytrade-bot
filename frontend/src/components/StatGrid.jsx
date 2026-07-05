@@ -1,4 +1,4 @@
-const fmt = (v) => (v == null ? '—' : `${v >= 0 ? '+' : ''}$${Number(v).toFixed(2)}`)
+const fmt = (v) => (v == null ? '—' : `${v >= 0 ? '+' : '-'}$${Math.abs(Number(v)).toFixed(2)}`)
 const cls = (v) => (v == null ? '' : v >= 0 ? 'pos' : 'neg')
 
 export default function StatGrid({ pnl }) {

@@ -15,11 +15,15 @@ export default function PositionCard({ p, closed, onClose }) {
     ? ((refPrice - p.entry_price) / p.entry_price) * 100
     : null
 
+  // manual = held in the wallet but not opened by the bot: live rows carry
+  // `external`; closed history rows carry the 'manual' sentinel trader_address
+  const manual = p.external || p.trader_address === 'manual'
+
   async function doClose() {
     setBusy(true)
     setMsg('')
     try {
-      const r = await api.closePosition(p.id)
+      const r = p.external ? await api.closeExternal(p.token_id) : await api.closePosition(p.id)
       setMsg(r.ok ? 'CLOSED ✓' : r.reason || 'failed')
       if (r.ok) {
         haptic('success')
@@ -48,9 +52,10 @@ export default function PositionCard({ p, closed, onClose }) {
           p.market_title || `token ${(p.token_id || '').slice(0, 16)}…`
         )}
       </div>
-      {p.external ? (
+      {manual ? (
         <div className="muted">
-          <span className="badge">MANUAL</span> opened outside the bot — not auto-managed
+          <span className="badge">MANUAL</span>{' '}
+          {closed ? 'closed by you — was not opened by the bot' : 'opened outside the bot — exits are yours to manage'}
         </div>
       ) : (
         <div className="muted">copying {short(p.trader_address)}</div>
@@ -66,19 +71,26 @@ export default function PositionCard({ p, closed, onClose }) {
           </span>
         )}
         <span className={value >= 0 ? 'pos' : 'neg'}>
-          {value == null ? '—' : `${value >= 0 ? '+' : ''}$${value.toFixed(2)}`}
+          {value == null ? '—' : `${value >= 0 ? '+' : '-'}$${Math.abs(value).toFixed(2)}`}
         </span>
       </div>
       <div className="muted">{(p.shares || 0).toFixed(0)} shares</div>
-      {!closed && !p.external && (
+      {!closed && (p.redeemable ? (
+        <div className="muted" style={{ marginTop: 8 }}>
+          <span className="badge pos">RESOLVED</span> winnings redeem automatically — nothing to sell
+        </div>
+      ) : (
         <button className="btn btn-danger" style={{ marginTop: 8 }} onClick={() => setConfirm(true)}>
           CLOSE
         </button>
-      )}
+      ))}
 
       {confirm && (
         <Modal title="CONFIRM CLOSE" accent="red" onClose={() => setConfirm(false)}>
-          <p className="muted">Sell {(p.shares || 0).toFixed(0)} shares at market?</p>
+          <p className="muted">
+            Sell {(p.shares || 0).toFixed(0)} shares at market
+            {p.current_price != null ? ` (~$${((p.shares || 0) * p.current_price).toFixed(2)} at ${cents(p.current_price)})` : ''}?
+          </p>
           {msg && <div className="muted">{msg}</div>}
           <button className="btn btn-danger" disabled={busy} onClick={doClose}>
             {busy ? 'CLOSING…' : 'CONFIRM CLOSE'}
