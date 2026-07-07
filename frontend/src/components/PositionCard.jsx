@@ -54,8 +54,7 @@ export default function PositionCard({ p, closed, onClose }) {
       </div>
       {manual ? (
         <div className="muted">
-          <span className="badge">MANUAL</span>{' '}
-          {closed ? 'closed by you — was not opened by the bot' : 'opened outside the bot — exits are yours to manage'}
+          {closed ? 'closed by you' : 'opened outside the bot — exits are yours to manage'}
         </div>
       ) : (
         <div className="muted">copying {short(p.trader_address)}</div>

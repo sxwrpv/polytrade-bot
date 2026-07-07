@@ -97,9 +97,33 @@ export default function User({ onLogout }) {
             DISPLAY NAME
             <input value={name} onChange={(e) => setName(e.target.value)} onBlur={saveName} />
           </label>
-          <div className="muted">
-            BALANCE {me?.balance != null ? `$${me.balance.toFixed(2)} pUSD` : '— (fund wallet to trade)'}
+          <div className="stat-grid" style={{ marginTop: 10 }}>
+            <div className="stat-cell">
+              <div className="label">BALANCE (CASH)</div>
+              <div className="value">{me?.balance != null ? `$${me.balance.toFixed(2)}` : '—'}</div>
+            </div>
+            <div className="stat-cell">
+              <div className="label">IN POSITIONS</div>
+              <div className="value">{me?.positions_value != null ? `$${me.positions_value.toFixed(2)}` : '—'}</div>
+            </div>
+            <div className="stat-cell">
+              <div className="label" title="resolved wins not yet redeemed — claim on polymarket.com">CLAIMABLE</div>
+              <div className="value">{me?.claimable != null ? `$${me.claimable.toFixed(2)}` : '—'}</div>
+            </div>
+            <div className="stat-cell">
+              <div className="label">EQUITY (TOTAL)</div>
+              <div className="value">{me?.equity != null ? `$${me.equity.toFixed(2)}` : '—'}</div>
+            </div>
           </div>
+          {me?.balance == null && (
+            <div className="muted small" style={{ marginTop: 6 }}>fund wallet to trade</div>
+          )}
+          {me?.claimable > 0 && (
+            <div className="warn-box" style={{ marginTop: 8 }}>
+              ${me.claimable.toFixed(2)} in resolved winnings isn&apos;t auto-claimed yet —
+              redeem it on polymarket.com to turn it into spendable cash.
+            </div>
+          )}
         </div>
       </Folder>
 

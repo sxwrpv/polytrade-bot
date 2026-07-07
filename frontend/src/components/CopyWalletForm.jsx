@@ -5,8 +5,8 @@ const ADDR = /^0x[0-9a-fA-F]{40}$/
 
 export default function CopyWalletForm({ defaults, onAdded }) {
   const [addr, setAddr] = useState('')
-  const [alloc, setAlloc] = useState(defaults?.default_allocation_pct ?? 10)
-  const [maxPos, setMaxPos] = useState(defaults?.default_max_position_usd ?? 50)
+  const [ratio, setRatio] = useState(1)
+  const [maxPos, setMaxPos] = useState(defaults?.default_max_position_usd ?? 15)
   const [msg, setMsg] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -19,7 +19,7 @@ export default function CopyWalletForm({ defaults, onAdded }) {
     setBusy(true)
     setMsg('')
     try {
-      await api.follow(a, { allocation_pct: Number(alloc), max_position_usd: Number(maxPos) })
+      await api.follow(a, { copy_ratio_pct: Number(ratio), max_position_usd: Number(maxPos) })
       setAddr('')
       setMsg('COPYING ✓')
       onAdded?.()
@@ -35,11 +35,11 @@ export default function CopyWalletForm({ defaults, onAdded }) {
       <input placeholder="0x… trader wallet to copy" value={addr} onChange={(e) => setAddr(e.target.value)} />
       <div className="pc-row" style={{ marginTop: 10 }}>
         <label className="fld" style={{ flex: 1, margin: 0 }}>
-          ALLOCATION %
-          <input value={alloc} onChange={(e) => setAlloc(e.target.value)} />
+          RATIO % (of leader)
+          <input value={ratio} onChange={(e) => setRatio(e.target.value)} />
         </label>
         <label className="fld" style={{ flex: 1, margin: 0 }}>
-          MAX / POSITION (pUSD)
+          MAX / TRADE (pUSD)
           <input value={maxPos} onChange={(e) => setMaxPos(e.target.value)} />
         </label>
       </div>

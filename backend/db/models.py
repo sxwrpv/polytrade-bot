@@ -43,12 +43,19 @@ CREATE TABLE IF NOT EXISTS followed_traders (
     user_id          TEXT NOT NULL REFERENCES users(id),
     trader_address   TEXT NOT NULL,                    -- proxyWallet of the copied trader
     -- per-wallet risk settings (each copied trader is configured independently)
-    allocation_pct   REAL NOT NULL DEFAULT 10.0,       -- % of user capital to copy
-    max_position_usd REAL NOT NULL DEFAULT 50.0,       -- pUSD cap per position
-    paused           INTEGER NOT NULL DEFAULT 0,       -- pause copying this wallet
+    allocation_pct   REAL NOT NULL DEFAULT 10.0,       -- LEGACY (portfolio-weight model); superseded by copy_ratio_pct
+    max_position_usd REAL NOT NULL DEFAULT 50.0,       -- MAX/TRADE: pUSD cap per position
+    paused           INTEGER NOT NULL DEFAULT 0,       -- ENABLED (inverted): 1 = paused (no new buys)
     max_slippage_pct REAL,                              -- vs leader price (NULL = global)
-    max_total_exposure_usd REAL,                        -- cap total open notional for this trader
+    max_total_exposure_usd REAL,                        -- MAX EXPOSURE: cap total open notional for this trader
     daily_loss_limit_usd REAL,                          -- block opens after today's loss on this trader
+    -- sizing + entry filters (screenshot settings). NULL = use config default.
+    copy_ratio_pct   REAL,                              -- RATIO %: copy = leader position value × this %
+    min_leader_usd   REAL,                              -- MIN LEADER $: skip if leader's position value < this
+    ignore_below_usd REAL,                              -- IGNORE POSITIONS < $: skip if OUR copy notional < this
+    max_open_positions INTEGER,                         -- MAX OPEN: cap simultaneous open copies for this trader
+    min_price        REAL,                              -- MIN PRICE: skip leader positions priced below this
+    max_price        REAL,                              -- MAX PRICE: skip leader positions priced above this
     is_active        INTEGER NOT NULL DEFAULT 1,
     created_at       TEXT NOT NULL,
     UNIQUE(user_id, trader_address)
@@ -179,6 +186,13 @@ MIGRATIONS = (
     "ALTER TABLE followed_traders ADD COLUMN max_slippage_pct REAL",
     "ALTER TABLE followed_traders ADD COLUMN max_total_exposure_usd REAL",
     "ALTER TABLE followed_traders ADD COLUMN daily_loss_limit_usd REAL",
+    # per-wallet sizing (ratio-of-leader) + entry filters — see followed_traders above
+    "ALTER TABLE followed_traders ADD COLUMN copy_ratio_pct REAL",
+    "ALTER TABLE followed_traders ADD COLUMN min_leader_usd REAL",
+    "ALTER TABLE followed_traders ADD COLUMN ignore_below_usd REAL",
+    "ALTER TABLE followed_traders ADD COLUMN max_open_positions INTEGER",
+    "ALTER TABLE followed_traders ADD COLUMN min_price REAL",
+    "ALTER TABLE followed_traders ADD COLUMN max_price REAL",
     # windowed wallet-screener metrics (7d/30d/90d) + pnl quality — see trader_cache above.
     "ALTER TABLE trader_cache ADD COLUMN unrealized_pnl REAL",
     "ALTER TABLE trader_cache ADD COLUMN pnl_quality REAL",

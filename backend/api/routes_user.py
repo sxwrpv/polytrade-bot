@@ -136,17 +136,37 @@ async def create_wallet(body: CreateWallet, request: Request, db=Depends(get_db)
 
 
 @router.get("/me")
-async def me(request: Request, balance: bool = False, user=Depends(get_current_user)):
-    bal = None
-    if balance:   # live balance is expensive (derives creds) — opt-in
+async def me(request: Request, balance: bool = False,
+             user=Depends(get_current_user), pmc=Depends(get_pm)):
+    """Profile. With ?balance=true it also computes the account's money split:
+      balance       = free cash collateral (spendable pUSD)
+      positions_val = live market value of open positions
+      claimable     = value of resolved-but-unredeemed winnings (redeem on
+                      polymarket.com to turn into cash; not auto-claimed)
+      equity        = balance + positions_val + claimable (total account value)
+    Splitting these is why the single 'balance' looked wrong: money sitting in
+    open positions or unclaimed wins was invisible."""
+    bal = positions_val = claimable = equity = None
+    if balance:   # live reads are expensive (derive creds) — opt-in
         try:
             client = await get_user_client(request, user)
             r = await client.get_balance_allowance(asset_type="COLLATERAL")
             bal = r.balance / 1e6
         except Exception:
             bal = None
+        try:
+            positions = await pmc.get_positions(user["id"], size_threshold=0)
+            positions_val = round(sum(p.current_value for p in positions
+                                      if p.size > 0 and not p.redeemable), 2)
+            claimable = round(sum(p.current_value for p in positions
+                                  if p.size > 0 and p.redeemable), 2)
+        except Exception:
+            positions_val = claimable = None
+        if bal is not None:
+            equity = round(bal + (positions_val or 0.0) + (claimable or 0.0), 2)
     return {"address": user["id"], "signer_address": user["signer_address"],
             "display_name": user["display_name"], "balance": bal,
+            "positions_value": positions_val, "claimable": claimable, "equity": equity,
             "referral_code": user["referral_code"],
             # deposit wallet (gasless) vs EOA fallback — cheap DB-only check,
             # no client build needed: a deposit wallet's funder != its signer.

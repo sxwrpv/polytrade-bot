@@ -31,6 +31,10 @@ import httpx
 
 from backend.config import (
     COPY_ENGINE_POLL_SECONDS,
+    DEFAULT_COPY_RATIO_PCT,
+    DEFAULT_MAX_POSITION_USD,
+    DEFAULT_MAX_PRICE,
+    DEFAULT_MIN_PRICE,
     DETECTION_POLL_SECONDS,
     ENCRYPTION_SECRET,
     MAX_COPY_SLIPPAGE_PCT,
@@ -77,13 +81,31 @@ def plan_actions(
     size_multiplier: float = 1.0,
     max_total_exposure: float | None = None,
     block_opens: bool = False,
+    ratio_pct: float = DEFAULT_COPY_RATIO_PCT,
+    max_per_trade: float | None = None,
+    min_leader: float = 0.0,
+    ignore_below: float | None = None,
+    max_open: int | None = None,
+    min_price: float = DEFAULT_MIN_PRICE,
+    max_price: float = DEFAULT_MAX_PRICE,
 ) -> list[Action]:
+    """Diff a leader's live positions against our open copies and emit
+    open/close/resize/resolve intents.
+
+    Sizing (owner model, 2026-07-06): each OPEN mirrors the LEADER's own
+    position value — copy notional = leader_position_value × ratio_pct% — then
+    clamped by MAX/TRADE (max_per_trade), available collateral, and the
+    per-trader exposure cap. Entry filters skip a leader position when it's too
+    small (min_leader), outside the price band (min_price..max_price), when our
+    resulting copy would be dust (ignore_below), or when we're already at the
+    MAX OPEN count for this trader.
+    """
     pos_by_token = {p.asset: p for p in trader_positions if p.size > 0}
     rows_by_token = {r["token_id"]: r for r in open_rows}
 
-    port_val = sum(p.current_value for p in pos_by_token.values() if not p.redeemable)
-    alloc_capital = user_capital * follow["allocation_pct"] / 100.0 * size_multiplier
-    max_pos = follow["max_position_usd"]
+    max_pos = max_per_trade if max_per_trade is not None else follow["max_position_usd"]
+    dust_floor = ignore_below if ignore_below is not None else min_notional
+    open_count = len(open_rows)              # already-open copies for this trader
     remaining = available_collateral
     if max_total_exposure is not None:   # portfolio exposure cap
         current_exposure = sum(r["notional_usd"] for r in open_rows)
@@ -102,18 +124,22 @@ def plan_actions(
         if row is None:
             if block_opens:                 # risk gate (paused-opens / daily loss)
                 continue
-            # OPEN: size by the trader's weight within their portfolio at open-time
-            # (one-shot; we do NOT re-weight every tick — that would churn whenever
-            # the trader's other positions change). Then mirror this position's own
-            # scaling thereafter.
-            weight = (p.current_value / port_val) if port_val > 0 else 0.0
-            amt = min(min(alloc_capital * weight, max_pos), remaining)
-            if amt >= min_notional:
+            if max_open is not None and open_count >= max_open:
+                continue                    # MAX OPEN reached for this trader
+            leader_notional = p.current_value
+            if leader_notional < min_leader:            # MIN LEADER $ filter
+                continue
+            if not (min_price <= p.cur_price <= max_price):  # price-band filter
+                continue
+            # OPEN: copy the leader's dollar position, scaled by RATIO %, capped.
+            amt = min(leader_notional * ratio_pct / 100.0, max_pos, remaining)
+            if amt >= dust_floor:
                 actions.append(Action(
                     kind="open", token_id=token, condition_id=p.condition_id,
                     outcome=p.outcome.upper(), side="BUY", amount=amt, notional_usd=amt,
                     reference_price=p.avg_price, trader_shares=p.size, position=p))
                 remaining -= amt
+                open_count += 1
         else:
             # RESIZE: mirror the trader's own change in share count for THIS market.
             base = row.get("trader_shares") or p.size
@@ -283,21 +309,52 @@ class CopyEngine:
                 return
             if await self._opens_blocked(user_id, trader, frisk["daily_limit"]):
                 return
-            client = await self._get_client(user)   # expensive — after the cheap exits
+            # Leader's TOTAL position in this market — needed BOTH to size the
+            # copy (ratio-of-leader) and as trader_shares for the resize math
+            # (the reconciler resizes off p.size/trader_shares, so recording a
+            # single top-up trade against a large position would read as a big
+            # increase and churn). Falls back to this trade if not yet indexed.
+            trader_total = trade.size
+            leader_price = float(trade.price or 0)
+            try:
+                tpos = await self.pm.get_positions(trader, size_threshold=0)
+                match = next((p for p in tpos if p.asset == token), None)
+                if match and match.size > 0:
+                    trader_total = match.size
+                    leader_price = match.cur_price or leader_price
+            except Exception:
+                log.exception("trader position lookup failed; using trade size")
+            leader_notional = trader_total * (leader_price or float(trade.price or 0))
+
+            # entry filters (same as the reconciler's plan_actions)
+            if leader_notional < frisk["min_leader"]:
+                log.info("fast-open skipped %s reason=below_min_leader (%.2f<%.2f) trader=%s",
+                         token, leader_notional, frisk["min_leader"], trader[:10])
+                return
+            if not (frisk["min_price"] <= (leader_price or 0) <= frisk["max_price"]):
+                log.info("fast-open skipped %s reason=price_out_of_band (%.3f) trader=%s",
+                         token, leader_price or 0, trader[:10])
+                return
+
+            client = await self._get_client(user)   # expensive — after the cheap checks
             available = await self._collateral_fn(client)
             all_open = await self.db.fetchall(
                 "SELECT notional_usd, trader_address FROM copy_positions "
                 "WHERE user_id = ? AND status = 'open'", (user_id,))
-            user_capital = available + sum(r["notional_usd"] for r in all_open)
-            notional = min(follow["max_position_usd"], available,
-                           user_capital * follow["allocation_pct"] / 100.0)
+            trader_open_rows = [r for r in all_open if r["trader_address"] == trader]
+            if frisk["max_open"] is not None and len(trader_open_rows) >= frisk["max_open"]:
+                log.info("fast-open skipped %s reason=max_open (%d) trader=%s",
+                         token, frisk["max_open"], trader[:10])
+                return
+            # RATIO %: copy the leader's dollar position, scaled, then capped.
+            notional = min(leader_notional * frisk["ratio_pct"] / 100.0,
+                           frisk["max_per_trade"], available)
             if frisk["max_exposure"] is not None:   # cap exposure to THIS trader
-                trader_open = sum(r["notional_usd"] for r in all_open
-                                  if r["trader_address"] == trader)
+                trader_open = sum(r["notional_usd"] for r in trader_open_rows)
                 notional = min(notional, max(0.0, frisk["max_exposure"] - trader_open))
-            if notional < MIN_NOTIONAL_USD:
+            if notional < frisk["ignore_below"]:
                 log.info(
-                    "fast-open skipped %s age=%.1fs notional=%.2f reason=below_engine_min trader=%s",
+                    "fast-open skipped %s age=%.1fs notional=%.2f reason=below_dust_floor trader=%s",
                     token, leader_age, notional, trader[:10])
                 return
             log.info(
@@ -307,19 +364,6 @@ class CopyEngine:
                 client, self.pm, token, "BUY", notional,
                 reference_price=trade.price, max_slippage_pct=frisk["slippage"])
             if result.ok:
-                # trader_shares must be the leader's TOTAL position in this
-                # market, not this single trade's size — the reconciler resizes
-                # off the ratio p.size/trader_shares, so recording a 100-share
-                # top-up against a 1000-share position would read as a 10x
-                # increase and trigger a runaway resize-up on the next sweep.
-                trader_total = trade.size
-                try:
-                    tpos = await self.pm.get_positions(trader, size_threshold=0)
-                    match = next((p for p in tpos if p.asset == token), None)
-                    if match and match.size > 0:
-                        trader_total = match.size
-                except Exception:
-                    log.exception("trader position lookup failed; using trade size")
                 await self._insert_open(
                     user_id, trade.proxy_wallet, trade.condition_id, token,
                     trade.slug, trade.title, trade.outcome.upper(),
@@ -421,9 +465,13 @@ class CopyEngine:
             positions = await self.pm.get_positions(trader)
             block_opens = frisk["paused"] or await self._opens_blocked(
                 user_id, trader, frisk["daily_limit"])
-            actions = plan_actions(positions, open_rows, follow, user_capital, available,
-                                   max_total_exposure=frisk["max_exposure"],
-                                   block_opens=block_opens)
+            actions = plan_actions(
+                positions, open_rows, follow, user_capital, available,
+                max_total_exposure=frisk["max_exposure"], block_opens=block_opens,
+                ratio_pct=frisk["ratio_pct"], max_per_trade=frisk["max_per_trade"],
+                min_leader=frisk["min_leader"], ignore_below=frisk["ignore_below"],
+                max_open=frisk["max_open"], min_price=frisk["min_price"],
+                max_price=frisk["max_price"])
             for action in actions:
                 spent = await self._execute(user_id, client, action, slippage=frisk["slippage"])
                 if action.side == "BUY":
@@ -594,15 +642,28 @@ class CopyEngine:
     # --- per-wallet risk settings -----------------------------------------
     @staticmethod
     def _follow_risk(follow: dict) -> dict:
-        """Effective risk settings for one copied wallet (NULL = global default)."""
+        """Effective risk/sizing settings for one copied wallet (NULL = default)."""
+        def _f(key, default):
+            v = follow.get(key)
+            return float(v) if v is not None else default
+
         slip = follow.get("max_slippage_pct")
         exp = follow.get("max_total_exposure_usd")
         lim = follow.get("daily_loss_limit_usd")
+        mo = follow.get("max_open_positions")
         return {
             "paused": bool(follow.get("paused")),
             "slippage": float(slip) if slip is not None else MAX_COPY_SLIPPAGE_PCT,
             "max_exposure": float(exp) if exp is not None else None,
             "daily_limit": float(lim) if lim is not None else None,
+            # ratio-of-leader sizing + entry filters (screenshot settings)
+            "ratio_pct": _f("copy_ratio_pct", DEFAULT_COPY_RATIO_PCT),
+            "max_per_trade": _f("max_position_usd", DEFAULT_MAX_POSITION_USD),
+            "min_leader": _f("min_leader_usd", 0.0),
+            "ignore_below": _f("ignore_below_usd", MIN_NOTIONAL_USD),
+            "max_open": int(mo) if mo is not None else None,
+            "min_price": _f("min_price", DEFAULT_MIN_PRICE),
+            "max_price": _f("max_price", DEFAULT_MAX_PRICE),
         }
 
     async def _opens_blocked(self, user_id: str, trader_address: str,

@@ -34,7 +34,11 @@ async def get_pnl_stats(user_id: str, db, pm=None) -> dict:
     unrealized = 0.0
     if pm is not None:
         positions = await pm.get_positions(user_id, size_threshold=0)
-        unrealized = sum(p.cash_pnl for p in positions)
+        # OPEN positions only. Resolved-but-held (`redeemable`) positions are
+        # realized outcomes already booked as closed rows — counting their
+        # cash_pnl here too would double-book them into total_pnl.
+        unrealized = sum(p.cash_pnl for p in positions
+                         if p.size > 0 and not p.redeemable)
 
     return {
         "total_pnl": round(total_realized + unrealized, 2),

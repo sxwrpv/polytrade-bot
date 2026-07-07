@@ -8,7 +8,10 @@ from dataclasses import asdict
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
-from backend.config import DEFAULT_ALLOCATION_PCT, DEFAULT_MAX_POSITION_USD
+from backend.config import (
+    DEFAULT_ALLOCATION_PCT, DEFAULT_COPY_RATIO_PCT, DEFAULT_MAX_POSITION_USD,
+    DEFAULT_MAX_PRICE, DEFAULT_MIN_PRICE,
+)
 from backend.core import trader_stats
 from backend.core.trader_stats import assign_tier
 from backend.api.deps import get_current_user, get_db, get_pm
@@ -19,22 +22,32 @@ _ADDR_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
 
 
 class FollowBody(BaseModel):
-    allocation_pct: float = DEFAULT_ALLOCATION_PCT
+    # RATIO %: copy = leader position value × this %. max_position_usd = MAX/TRADE.
+    copy_ratio_pct: float = DEFAULT_COPY_RATIO_PCT
     max_position_usd: float = DEFAULT_MAX_POSITION_USD
+    allocation_pct: float = DEFAULT_ALLOCATION_PCT   # legacy; kept for back-compat
 
 
 class FollowSettings(BaseModel):
-    allocation_pct: float | None = None
-    max_position_usd: float | None = None
     paused: bool | None = None
+    copy_ratio_pct: float | None = None          # RATIO %
+    max_position_usd: float | None = None        # MAX / TRADE $
+    min_leader_usd: float | None = None          # MIN LEADER $
+    ignore_below_usd: float | None = None        # IGNORE POSITIONS < $
+    max_open_positions: int | None = None        # MAX OPEN
+    max_total_exposure_usd: float | None = None  # MAX EXPOSURE $
+    min_price: float | None = None               # MIN PRICE
+    max_price: float | None = None               # MAX PRICE
     max_slippage_pct: float | None = None
-    max_total_exposure_usd: float | None = None
     daily_loss_limit_usd: float | None = None
+    allocation_pct: float | None = None          # legacy
 
 
 _FOLLOW_KEYS = (
-    "allocation_pct", "max_position_usd", "paused",
-    "max_slippage_pct", "max_total_exposure_usd", "daily_loss_limit_usd",
+    "paused", "copy_ratio_pct", "max_position_usd", "min_leader_usd",
+    "ignore_below_usd", "max_open_positions", "max_total_exposure_usd",
+    "min_price", "max_price", "max_slippage_pct", "daily_loss_limit_usd",
+    "allocation_pct",
 )
 
 
@@ -56,8 +69,10 @@ async def leaderboard(request: Request, sort: str = "consistency", limit: int = 
 async def following(user=Depends(get_current_user), db=Depends(get_db)):
     """The user's active follows (leaderboard- or manually-added), with cached stats."""
     rows = await db.fetchall(
-        "SELECT f.trader_address, f.allocation_pct, f.max_position_usd, f.paused, "
-        "f.max_slippage_pct, f.max_total_exposure_usd, f.daily_loss_limit_usd, f.created_at, "
+        "SELECT f.trader_address, f.allocation_pct, f.copy_ratio_pct, f.max_position_usd, "
+        "f.paused, f.min_leader_usd, f.ignore_below_usd, f.max_open_positions, "
+        "f.min_price, f.max_price, f.max_slippage_pct, f.max_total_exposure_usd, "
+        "f.daily_loss_limit_usd, f.created_at, "
         "c.display_name, c.consistency_score, c.total_pnl, c.open_positions "
         "FROM followed_traders f LEFT JOIN trader_cache c ON c.address = f.trader_address "
         "WHERE f.user_id = ? AND f.is_active = 1 ORDER BY f.created_at DESC", (user["id"],))
@@ -93,17 +108,18 @@ async def follow(address: str, body: FollowBody,
         (user["id"], address))
     if existing:
         await db.execute(
-            "UPDATE followed_traders SET allocation_pct = ?, max_position_usd = ?, "
-            "is_active = 1 WHERE id = ?",
-            (body.allocation_pct, body.max_position_usd, existing["id"]))
+            "UPDATE followed_traders SET copy_ratio_pct = ?, max_position_usd = ?, "
+            "allocation_pct = ?, paused = 0, is_active = 1 WHERE id = ?",
+            (body.copy_ratio_pct, body.max_position_usd, body.allocation_pct,
+             existing["id"]))
     else:
         await db.execute(
-            "INSERT INTO followed_traders(id, user_id, trader_address, allocation_pct, "
-            "max_position_usd, created_at) VALUES(?,?,?,?,?,?)",
-            (uuid.uuid4().hex, user["id"], address, body.allocation_pct,
-             body.max_position_usd, now_iso()))
+            "INSERT INTO followed_traders(id, user_id, trader_address, copy_ratio_pct, "
+            "max_position_usd, allocation_pct, created_at) VALUES(?,?,?,?,?,?,?)",
+            (uuid.uuid4().hex, user["id"], address, body.copy_ratio_pct,
+             body.max_position_usd, body.allocation_pct, now_iso()))
     return {"ok": True, "following": address,
-            "allocation_pct": body.allocation_pct, "max_position_usd": body.max_position_usd}
+            "copy_ratio_pct": body.copy_ratio_pct, "max_position_usd": body.max_position_usd}
 
 
 @router.post("/{address}/settings")

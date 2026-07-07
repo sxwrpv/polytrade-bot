@@ -35,8 +35,8 @@ function money(v) {
 export default function TraderCard({ t, period = '30d', onFollowed, balance }) {
   const [open, setOpen] = useState(false)
   const [expanded, setExpanded] = useState(false)
-  const [alloc, setAlloc] = useState(10)
-  const [maxPos, setMaxPos] = useState(50)
+  const [ratio, setRatio] = useState(1)
+  const [maxPos, setMaxPos] = useState(15)
   const [msg, setMsg] = useState('')
   const [copied, setCopied] = useState(false)
   // the screener's global period picks the default; each card can flip its own
@@ -61,7 +61,7 @@ export default function TraderCard({ t, period = '30d', onFollowed, balance }) {
     setMsg('')
     try {
       await api.follow(t.address, {
-        allocation_pct: Number(alloc),
+        copy_ratio_pct: Number(ratio),
         max_position_usd: Number(maxPos),
       })
       setMsg('COPYING ✓')
@@ -176,15 +176,19 @@ export default function TraderCard({ t, period = '30d', onFollowed, balance }) {
       {expanded && <TraderProfile address={t.address} />}
 
       {open && (
-        <Modal title="COPY ALLOCATION" accent="green" onClose={() => setOpen(false)}>
+        <Modal title="COPY SETTINGS" accent="green" onClose={() => setOpen(false)}>
           <label className="fld">
-            ALLOCATION %
-            <input value={alloc} onChange={(e) => setAlloc(e.target.value)} />
+            RATIO % (of leader&apos;s position size)
+            <input value={ratio} onChange={(e) => setRatio(e.target.value)} />
           </label>
           <label className="fld">
-            MAX / POSITION (pUSD)
+            MAX / TRADE (pUSD)
             <input value={maxPos} onChange={(e) => setMaxPos(e.target.value)} />
           </label>
+          <div className="muted small">
+            each copy = leader&apos;s position × {ratio || 0}%, capped at ${maxPos || 0}. Fine-tune
+            price/exposure/max-open filters after copying, under COPIED WALLETS.
+          </div>
           {balance != null && balance <= 0 && (
             <div className="warn-box">
               YOUR BALANCE IS $0 — COPYING WILL BE SET UP, BUT NO TRADES CAN
