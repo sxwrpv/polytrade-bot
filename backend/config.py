@@ -49,8 +49,13 @@ DEFAULT_MAX_POSITION_USD = float(os.environ.get("DEFAULT_MAX_POSITION_USD", "50.
 DEFAULT_COPY_RATIO_PCT = float(os.environ.get("DEFAULT_COPY_RATIO_PCT", "1.0"))
 # Price band a leader position must sit in to be copied (skip longshot dust and
 # near-resolved markets). Per-wallet overridable.
-DEFAULT_MIN_PRICE = float(os.environ.get("DEFAULT_MIN_PRICE", "0.02"))
+# NOTE: these MUST match the WalletRiskCard UI defaults (frontend) — when a
+# per-wallet column is NULL the engine falls back to these, and the slider shows
+# the same number, so "what you see is what the engine enforces".
+DEFAULT_MIN_PRICE = float(os.environ.get("DEFAULT_MIN_PRICE", "0.1"))
 DEFAULT_MAX_PRICE = float(os.environ.get("DEFAULT_MAX_PRICE", "0.98"))
+# Skip a copy whose notional would be below this (dust). Matches UI default.
+DEFAULT_IGNORE_BELOW_USD = float(os.environ.get("DEFAULT_IGNORE_BELOW_USD", "2.0"))
 # Max adverse price vs the LEADER's fill price. Copies execute as market (FOK)
 # orders — owner's call: filling beats strictly bounding price — but the
 # pre-flight quote is still checked against leader_price*(1+this) and the copy

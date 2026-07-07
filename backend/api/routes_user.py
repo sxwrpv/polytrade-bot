@@ -194,15 +194,17 @@ async def deposit_address(user=Depends(get_current_user), pmc=Depends(get_pm)):
 @router.get("/activity")
 async def activity(limit: int = 30, user=Depends(get_current_user), db=Depends(get_db)):
     """The engine's recent actions on this account — the 'it's alive' feed.
-    Every open/close/partial/resolve the copy engine (or a manual close)
-    records lands in trade_events; joined here with the position's market."""
+    Resolutions ('resolve') are excluded: a market resolving isn't an action
+    the bot took, and the owner doesn't want them in the Positions feed. The
+    realized PnL from a resolution still lands in the PnL stats / closed
+    positions — this only hides it from the activity stream."""
     limit = max(1, min(int(limit), 100))
     rows = await db.fetchall(
         "SELECT e.ts, e.event_type, e.amount_usd, e.pnl, "
         "p.market_title, p.market_slug, p.outcome, p.trader_address, "
         "p.entry_price, p.exit_price "
         "FROM trade_events e JOIN copy_positions p ON p.id = e.position_id "
-        "WHERE e.user_id = ? ORDER BY e.ts DESC LIMIT ?",
+        "WHERE e.user_id = ? AND e.event_type != 'resolve' ORDER BY e.ts DESC LIMIT ?",
         (user["id"], limit))
     for r in rows:
         cached = await db.fetchone(

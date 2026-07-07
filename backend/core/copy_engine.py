@@ -32,6 +32,7 @@ import httpx
 from backend.config import (
     COPY_ENGINE_POLL_SECONDS,
     DEFAULT_COPY_RATIO_PCT,
+    DEFAULT_IGNORE_BELOW_USD,
     DEFAULT_MAX_POSITION_USD,
     DEFAULT_MAX_PRICE,
     DEFAULT_MIN_PRICE,
@@ -656,12 +657,14 @@ class CopyEngine:
             "slippage": float(slip) if slip is not None else MAX_COPY_SLIPPAGE_PCT,
             "max_exposure": float(exp) if exp is not None else None,
             "daily_limit": float(lim) if lim is not None else None,
-            # ratio-of-leader sizing + entry filters (screenshot settings)
+            # ratio-of-leader sizing + entry filters (screenshot settings).
+            # Fallbacks here MUST match the WalletRiskCard UI defaults so a
+            # never-touched slider shows the exact number the engine enforces.
             "ratio_pct": _f("copy_ratio_pct", DEFAULT_COPY_RATIO_PCT),
             "max_per_trade": _f("max_position_usd", DEFAULT_MAX_POSITION_USD),
             "min_leader": _f("min_leader_usd", 0.0),
-            "ignore_below": _f("ignore_below_usd", MIN_NOTIONAL_USD),
-            "max_open": int(mo) if mo is not None else None,
+            "ignore_below": _f("ignore_below_usd", DEFAULT_IGNORE_BELOW_USD),
+            "max_open": int(mo) if mo is not None else None,   # NULL/0 = unlimited
             "min_price": _f("min_price", DEFAULT_MIN_PRICE),
             "max_price": _f("max_price", DEFAULT_MAX_PRICE),
         }

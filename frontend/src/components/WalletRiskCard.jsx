@@ -7,13 +7,17 @@ const short = (a) => (a ? `${a.slice(0, 6)}…${a.slice(-4)}` : '')
 
 // Per-wallet copy settings. Nulls from the DB fall back to these so every
 // slider always shows a concrete value; MAX OPEN 0 = unlimited (stored null).
+// Must match the backend config fallbacks (backend/config.py + copy_engine
+// _follow_risk) so a slider a user never touched shows exactly what the engine
+// enforces. The three "no-limit" fields (max_open / max_exposure / daily_loss)
+// show 0 when unset = unlimited/none, which is how the engine reads NULL.
 const DEFAULTS = {
   copy_ratio_pct: 1.0,
   max_position_usd: 15,
   min_leader_usd: 0,
   ignore_below_usd: 2,
-  max_open_positions: 8,
-  max_total_exposure_usd: 200,
+  max_open_positions: 0,
+  max_total_exposure_usd: 0,
   min_price: 0.1,
   max_price: 0.98,
   max_slippage_pct: 2,
