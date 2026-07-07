@@ -1,10 +1,8 @@
 import { useEffect, useState, useCallback } from 'react'
 import { api } from '../api'
-import CopyWalletForm from './CopyWalletForm'
 import WalletRiskCard from './WalletRiskCard'
-import Folder from './Folder'
 
-export default function CopiedWallets({ defaults, onChange }) {
+export default function CopiedWallets({ onChange }) {
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
 
@@ -19,15 +17,13 @@ export default function CopiedWallets({ defaults, onChange }) {
 
   return (
     <div>
-      <Folder id="copied-add-wallet" title="COPY A WALLET" open={rows.length === 0}>
-        <CopyWalletForm defaults={defaults} onAdded={load} />
-      </Folder>
-
       <div className="section-header">YOUR WALLETS ({rows.length})</div>
       {loading ? (
         <div className="muted">loading…</div>
       ) : rows.length === 0 ? (
-        <div className="muted">not copying anyone yet — add a wallet above or COPY from the WALLET SCREENER</div>
+        <div className="muted">
+          not copying anyone yet — find a wallet in the WALLET SCREENER and hit COPY TRADER
+        </div>
       ) : (
         rows.map((w) => <WalletRiskCard key={w.trader_address} w={w} onChange={load} />)
       )}
