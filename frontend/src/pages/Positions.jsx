@@ -1,6 +1,8 @@
 import { useEffect, useState, useCallback, useMemo } from 'react'
 import { api } from '../api'
 import PositionCard from '../components/PositionCard'
+import ActivityFeed from '../components/ActivityFeed'
+import Folder from '../components/Folder'
 
 const signed = (v) => `${v >= 0 ? '+' : '-'}$${Math.abs(v).toFixed(2)}`
 
@@ -85,6 +87,10 @@ export default function Positions() {
           <PositionCard key={r.id || r.token_id} p={r} closed={tab === 'closed'} onClose={load} />
         ))
       )}
+
+      <Folder id="positions-activity" title="ACTIVITY" open={false}>
+        <ActivityFeed />
+      </Folder>
     </div>
   )
 }

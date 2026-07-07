@@ -22,7 +22,7 @@ export default function CopiedWallets({ onChange }) {
         <div className="muted">loading…</div>
       ) : rows.length === 0 ? (
         <div className="muted">
-          not copying anyone yet — find a wallet in the WALLET SCREENER and hit COPY TRADER
+          not copying anyone yet — find a wallet under COPY WALLET and hit COPY TRADER
         </div>
       ) : (
         rows.map((w) => <WalletRiskCard key={w.trader_address} w={w} onChange={load} />)

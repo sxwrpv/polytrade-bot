@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api'
-import ActivityFeed from '../components/ActivityFeed'
 import Folder from '../components/Folder'
 import GettingStarted from '../components/GettingStarted'
 import KpiStrip from '../components/KpiStrip'
@@ -31,11 +30,7 @@ export default function Home() {
 
       {me && <GettingStarted balance={me.balance} followingCount={followingCount} />}
 
-      <Folder id="home-activity" title="ACTIVITY" open>
-        <ActivityFeed />
-      </Folder>
-
-      <Folder id="home-screener" title="WALLET SCREENER" open>
+      <Folder id="home-screener" title="COPY WALLET" open>
         <WalletScreener onFollowed={refreshFollowing} balance={me?.balance} />
       </Folder>
 
