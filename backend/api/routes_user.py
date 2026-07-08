@@ -9,7 +9,9 @@ import aiosqlite
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
-from backend.config import CREATE_WALLET_RATE_LIMIT, ENCRYPTION_SECRET, TELEGRAM_BOT_TOKEN
+from backend.config import (
+    CREATE_WALLET_RATE_LIMIT, ENCRYPTION_SECRET, OWNER_REFERRAL_CODE, TELEGRAM_BOT_TOKEN,
+)
 from backend.core import auth, equity as equity_mod, pnl as pnl_mod, wallet
 from backend.api.deps import get_current_user, get_db, get_pm, get_user_client
 from backend.db.database import now_iso
@@ -123,13 +125,19 @@ async def create_wallet(body: CreateWallet, request: Request, db=Depends(get_db)
     display_name = body.display_name
     if not display_name and tg_user:
         display_name = tg_user.get("username") or tg_user.get("first_name")
+    # Referral: honor an explicit invite (peer referral deep link) if present;
+    # otherwise default every new account to the owner's code — so the owner is
+    # the referrer of the whole base, not left blank. Never self-refer.
+    referred_by = (body.referred_by or "").strip() or OWNER_REFERRAL_CODE or None
+    if referred_by == ref_code:
+        referred_by = None
     try:
         await db.execute(
             "INSERT INTO users(id, signer_address, api_token, telegram_user_id, "
             "display_name, private_key_enc, referral_code, referred_by, created_at) "
             "VALUES(?,?,?,?,?,?,?,?,?)",
             (funder, signer, token, int(tg_user["id"]) if tg_user else None,
-             display_name, enc, ref_code, body.referred_by, now_iso()))
+             display_name, enc, ref_code, referred_by, now_iso()))
     except aiosqlite.IntegrityError:
         raise HTTPException(409, "wallet already exists")
     return {"address": funder, "signer_address": signer, "referral_code": ref_code,
