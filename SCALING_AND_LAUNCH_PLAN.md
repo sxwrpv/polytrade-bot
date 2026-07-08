@@ -15,10 +15,15 @@ legal, custody-security, and Polymarket's rate limits — **not** servers. You c
 buy compute in an afternoon; you cannot buy your way out of a key-honeypot
 breach or a regulator.
 
-**Three hard gates must clear before any mass marketing (§2). Running paid
-acquisition on a custodial money-handling bot before they're cleared is the fast
-path to a drained treasury or a shutdown.** Everything else (§3–§6) is standard
-engineering and can proceed in parallel.
+**Decisions locked (owner, 2026-07):** it ships as a **hosted, custodial
+product** (not open-source, not self-host). **Legal/compliance is deferred** —
+parked in §2 as a known item to revisit before public/mass launch, not resolved.
+
+That leaves two **active** engineering gates before scale: **key-custody
+security** and **Polymarket rate-limit capacity** (§2). Because custody is now a
+locked-in product decision, the key-security gate is *more* important, not less —
+you're the one holding the honeypot. Everything in §3–§6 and §9 is standard
+engineering and can proceed now.
 
 ---
 
@@ -39,25 +44,26 @@ Specific chokepoints in the code as it stands today:
 
 ---
 
-## 2. The three hard gates (do these before "mass")
+## 2. Gates before "mass"
 
-### Gate 1 — Legal / regulatory  *(blocker; needs a lawyer, not this doc)*
+### Gate 1 — Legal / regulatory  *(DEFERRED — owner call, 2026-07)*
+> **Parked, not resolved.** Revisit before any public / mass launch; safe to
+> defer while the product is invite-only / small and hosted on the owner's own
+> setup. Left here so it isn't forgotten. Custody model is **decided: custodial**
+> (which is why Gate 2 is now firmly in scope).
+
+When it's picked back up, the checklist:
 - Custodying funds + trading on users' behalf can constitute **money
   transmission / VASP / investment-advisory** activity depending on
-  jurisdiction. Get a crypto/fintech lawyer before mass onboarding. This doc is
-  not legal advice.
-- Polymarket itself geoblocks the US and other regions. The engine already
-  checks geoblock per order (`execution.place_market_order`), but **signup and
-  marketing must be jurisdiction-gated too.**
-- Minimum before open launch: legal entity; Terms of Service; Privacy Policy;
-  prominent **risk disclosure** ("real money, total loss possible, not
-  investment advice" — already in the LEGAL folder, needs to be a signup gate);
-  jurisdiction gating on wallet creation; a decision on KYC/AML.
-- **Strategic fork — custody model:** custodial (today; maximum liability) vs
-  non-custodial / MPC (user or split key; far lower liability, slightly worse
-  UX). This choice drives Gate 2 and the whole risk profile. Decide it early.
+  jurisdiction. Get a crypto/fintech lawyer before mass onboarding. Not legal
+  advice.
+- Polymarket geoblocks the US and other regions. The engine already checks
+  geoblock per order (`execution.place_market_order`), but **signup must be
+  jurisdiction-gated too** before public launch.
+- Legal entity; Terms of Service; Privacy Policy; **risk disclosure** as a signup
+  gate (the copy already exists in the LEGAL folder); KYC/AML decision.
 
-### Gate 2 — Key-custody security  *(blocker)*
+### Gate 2 — Key-custody security  *(ACTIVE — now the top risk)*
 Current model: every user's signer key is AES-256-GCM encrypted with a single
 server-side `ENCRYPTION_SECRET` and stored in the DB. At scale that DB is a
 **catastrophic honeypot**. Requirements before mass:
@@ -70,10 +76,10 @@ server-side `ENCRYPTION_SECRET` and stored in the DB. At scale that DB is a
   KMS key must be protected *and* recoverable).
 - Independent **penetration test** + a bug bounty before open launch; documented
   key-compromise incident-response runbook; evaluate insurance.
-- Seriously evaluate **shedding custody** (non-custodial signing / MPC / delegated
-  approvals) — the cheapest way to de-risk is to not hold the keys.
+- (Custody is a locked product decision, so "don't hold keys" is off the table —
+  which makes KMS + audit + pen-test non-negotiable rather than optional.)
 
-### Gate 3 — Polymarket API capacity  *(hard ceiling)*
+### Gate 3 — Polymarket API capacity  *(ACTIVE — hard ceiling)*
 The entire product rides Polymarket's public APIs, which already 429 at
 concurrency 8. Before mass:
 - **Contact Polymarket** for a partnership / higher rate limits / a builder tier.
@@ -156,29 +162,21 @@ concurrency 8. Before mass:
 
 ## 7. Content / go-to-market plan
 
-> **Positioning pivot (2026-07): personal dev brand / build-in-public.** The
-> product is the proof-of-skill; *you* are the brand. This is also the
-> **low-liability path** — because it lets you sidestep Gates 1–2:
->
-> | Framing | Custody/compliance exposure |
-> |---|---|
-> | Open-source + users **self-host** (their keys, their server) | ~none — you ship code, not a money service |
-> | Public demo on **your own funds** only | ~none — no third-party custody |
-> | You **host & custody strangers' funds** | full Gate 1–2 apply (money-service) |
->
-> Lead with the first two. The dev-brand and the safe path are the same path.
-
-> **Gate first (only if you custody others' money).** Don't run acquisition into
-> a hosted custodial bot until Gates 1–2 clear.
+> **Positioning (2026-07): personal dev brand behind a real product.** It stays
+> a **hosted, closed-source, custodial product** — the brand is *you as the dev
+> who built it*, not an open-source repo. Build-in-public as marketing (share the
+> architecture, the live-money bugs, the design decisions) while the product
+> itself stays proprietary.
 
 ### Positioning
 - **You, as the dev**: "I build real, on-chain, real-money systems." The bot is
-  the flagship artifact — architecture, the live-money bugs you fixed, the
-  copy-engine design, the screener math. Build-in-public > product-launch.
-- Secondary: the bot itself — "copy proven Polymarket traders." Transparency-first
-  (real PnL, wins *and* losses). Never promise returns.
-- **Non-negotiable in any asset that touches money:** no guaranteed returns;
-  risk disclaimer; jurisdiction notice; "not investment advice."
+  the flagship artifact — the copy-engine design, the live-money bugs you fixed,
+  the screener math, the equity infra. Tell the build story; keep the code closed.
+- **The product**: "copy proven Polymarket traders." Transparency-first — real
+  PnL, wins *and* losses. Never promise returns.
+- **Cheap, always-on hygiene** (not legal-gated, just sane): no guaranteed
+  returns; a visible risk line; "not investment advice." Full compliance rides
+  with the deferred Gate 1.
 - Funnels into **G7 Systems** — the brand doubles as agency lead-gen.
 
 ### Channels (prediction-market / crypto native)
@@ -210,25 +208,29 @@ deposit, builder-fee revenue, CAC vs LTV.
 
 ## 8. Phased roadmap
 
-**Phase 1 — Get off the laptop (weeks, still invite-only).**
-Containerize; single cloud VM; managed Postgres; `ENCRYPTION_SECRET` → KMS; real
-domain + TLS; basic monitoring + backups. Hosted, not yet mass.
+**Phase 1 — Get off the laptop (now; still invite-only).**
+Dockerize; deploy api + worker to Fly; Supabase Postgres; `ENCRYPTION_SECRET` →
+Fly/Vault secret (KMS later); Cloudflare domain + TLS; Sentry + uptime; backups.
+Hosted, not yet mass. **Nothing here is blocked** by the deferred legal gate.
 
 **Phase 2 — Make it scalable (closed beta, deposit caps).**
-Split API / worker tiers; Redis rate-limiter + shared leader feed; websockets;
-Alembic migrations; runbooks; CI/CD + staging.
+Split API / worker tiers; Upstash rate-limiter + shared leader feed; websockets;
+Supabase-CLI migrations; **Gate 2 hardening (KMS + audit + pen test)**; runbooks;
+CI/CD + staging.
 
-**Phase 3 — Mass (blocked on Gate 1).**
-Entity + ToS + compliance + jurisdiction gating; finalize custody model
-(KMS-hardened custodial *or* non-custodial); Polymarket rate-limit partnership;
-pen test + bug bounty. **Only then** open the content/acquisition engine in §7.
+**Phase 3 — Mass.**
+Polymarket rate-limit partnership (Gate 3) + full Gate 2. **Un-park Gate 1 here**
+— entity, ToS, jurisdiction gating, KYC/AML — *before* opening the §7 acquisition
+engine to the public. Deferred ≠ skipped; it's the toll gate on the public-launch
+lane.
 
 ---
 
 ### One-line summary
-Compute is easy; **custody, compliance, and Polymarket's rate limits are the
-real gates.** Harden those three first — then the hosting (§3–5) and growth (§7)
-are execution.
+It's a hosted custodial product with legal parked for later. Compute is easy;
+the two live gates are **key-custody security** (you hold the honeypot) and
+**Polymarket's rate limits** — harden those, ship §3–5 / §9, and keep legal on
+the calendar for before public launch.
 
 ---
 
