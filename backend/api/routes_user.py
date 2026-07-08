@@ -1,6 +1,7 @@
 """/api/user/* — wallet onboarding, profile, PnL, settings, referral, key export."""
 from __future__ import annotations
 
+import datetime as dt
 import logging
 import time
 
@@ -191,21 +192,27 @@ async def deposit_address(user=Depends(get_current_user), pmc=Depends(get_pm)):
     }
 
 
+ACTIVITY_WINDOW_HOURS = 12
+
+
 @router.get("/activity")
 async def activity(limit: int = 30, user=Depends(get_current_user), db=Depends(get_db)):
     """The engine's recent actions on this account — the 'it's alive' feed.
-    Resolutions ('resolve') are excluded: a market resolving isn't an action
-    the bot took, and the owner doesn't want them in the Positions feed. The
-    realized PnL from a resolution still lands in the PnL stats / closed
-    positions — this only hides it from the activity stream."""
+    Only the last 12h is shown (a live feed, not a full ledger — closed-position
+    history and PnL stats cover the long tail). Resolutions ('resolve') are
+    excluded: a market resolving isn't an action the bot took; its realized PnL
+    still lands in the PnL stats / closed positions."""
     limit = max(1, min(int(limit), 100))
+    cutoff = (dt.datetime.now(dt.timezone.utc)
+              - dt.timedelta(hours=ACTIVITY_WINDOW_HOURS)).isoformat()
     rows = await db.fetchall(
         "SELECT e.ts, e.event_type, e.amount_usd, e.pnl, "
         "p.market_title, p.market_slug, p.outcome, p.trader_address, "
         "p.entry_price, p.exit_price "
         "FROM trade_events e JOIN copy_positions p ON p.id = e.position_id "
-        "WHERE e.user_id = ? AND e.event_type != 'resolve' ORDER BY e.ts DESC LIMIT ?",
-        (user["id"], limit))
+        "WHERE e.user_id = ? AND e.event_type != 'resolve' AND e.ts >= ? "
+        "ORDER BY e.ts DESC LIMIT ?",
+        (user["id"], cutoff, limit))
     for r in rows:
         cached = await db.fetchone(
             "SELECT display_name FROM trader_cache WHERE address = ?",
