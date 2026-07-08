@@ -90,6 +90,14 @@ async def _equity_snapshot_loop(app, stop: asyncio.Event) -> None:
         except Exception:
             log.exception("equity snapshot pass failed (continuing)")
         try:
+            # thin old snapshots to the resolution the charts render (keeps
+            # storage bounded; never changes a chart)
+            pruned = await equity.prune_snapshots(db)
+            if pruned:
+                log.info("equity snapshot: pruned %d redundant rows", pruned)
+        except Exception:
+            log.exception("equity snapshot prune failed (continuing)")
+        try:
             await asyncio.wait_for(stop.wait(), timeout=interval)
         except asyncio.TimeoutError:
             pass
