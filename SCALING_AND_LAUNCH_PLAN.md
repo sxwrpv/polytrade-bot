@@ -156,15 +156,30 @@ concurrency 8. Before mass:
 
 ## 7. Content / go-to-market plan
 
-> **Gate first.** Do not run mass acquisition until Gates 1–2 clear. A
-> custodial real-money bot + hype + no compliance = shutdown risk.
+> **Positioning pivot (2026-07): personal dev brand / build-in-public.** The
+> product is the proof-of-skill; *you* are the brand. This is also the
+> **low-liability path** — because it lets you sidestep Gates 1–2:
+>
+> | Framing | Custody/compliance exposure |
+> |---|---|
+> | Open-source + users **self-host** (their keys, their server) | ~none — you ship code, not a money service |
+> | Public demo on **your own funds** only | ~none — no third-party custody |
+> | You **host & custody strangers' funds** | full Gate 1–2 apply (money-service) |
+>
+> Lead with the first two. The dev-brand and the safe path are the same path.
+
+> **Gate first (only if you custody others' money).** Don't run acquisition into
+> a hosted custodial bot until Gates 1–2 clear.
 
 ### Positioning
-- "**Copy proven Polymarket traders automatically.**" Transparency-first — it's
-  real money, on-chain, verifiable. Lead with the wallet screener / real PnL,
-  never with promises.
-- **Non-negotiable in every asset:** no guaranteed returns; prominent risk
-  disclaimer; jurisdiction notice; "not investment advice."
+- **You, as the dev**: "I build real, on-chain, real-money systems." The bot is
+  the flagship artifact — architecture, the live-money bugs you fixed, the
+  copy-engine design, the screener math. Build-in-public > product-launch.
+- Secondary: the bot itself — "copy proven Polymarket traders." Transparency-first
+  (real PnL, wins *and* losses). Never promise returns.
+- **Non-negotiable in any asset that touches money:** no guaranteed returns;
+  risk disclaimer; jurisdiction notice; "not investment advice."
+- Funnels into **G7 Systems** — the brand doubles as agency lead-gen.
 
 ### Channels (prediction-market / crypto native)
 - **X (primary)** — the `hermessxd` handle: trader spotlights, transparency
@@ -214,3 +229,73 @@ pen test + bug bounty. **Only then** open the content/acquisition engine in §7.
 Compute is easy; **custody, compliance, and Polymarket's rate limits are the
 real gates.** Harden those three first — then the hosting (§3–5) and growth (§7)
 are execution.
+
+---
+
+## 9. Recommended concrete stack (solo dev, Supabase-anchored)
+
+Opinionated, minimal-ops, GitHub-native. Stand up the **bold** items first;
+everything else is later.
+
+### Containers — Docker
+- **Multi-stage Dockerfile**: node stage builds `frontend/dist` → python-slim
+  runtime runs uvicorn. One image; `CMD` selects role (`api` vs `worker`).
+- **`docker-compose.yml`** for local dev: backend + redis (+ optional
+  `supabase start` local stack). Reproduces prod locally.
+- The copy engine is a **long-lived asyncio loop** — it must run as an
+  always-on process, **not** serverless/Lambda/Vercel functions (they'd kill the
+  loop). This is why the host below is container-based.
+
+### Compute host — **Fly.io** (recommended)
+- Docker-native, cheap, runs persistent workers. Two process groups:
+  - **`api`** — FastAPI, scale to N replicas (stateless).
+  - **`worker`** — count = 1: the copy engine + snapshot loop + stats crawler
+    (must be a singleton, or sharded by `hash(user_id)` — never double-run).
+- Alternatives: Railway / Render (similar). Avoid serverless for the worker.
+
+### Database — **Supabase** (Postgres)
+- Use the **pooled** connection string (Supavisor, port 6543) from containers.
+- **Migrations via the Supabase CLI** (`supabase migration new …`): port
+  `db/models.py` `SCHEMA_SQL` + the `MIGRATIONS` list into versioned SQL; retire
+  the ALTER-on-boot pattern.
+- PITR + daily backups on the Pro tier (the DB holds encrypted keys — protect
+  and test-restore it).
+- RLS optional while the backend is the only client (service-role key); enable
+  it if the browser ever talks to Supabase directly.
+- **Code work (contained but real):** swap `aiosqlite` → **`asyncpg`** behind the
+  existing `Database` seam in `db/database.py`. Placeholders `?` → `$1..$n`;
+  a few SQLite-isms to port (`INSERT OR IGNORE`, `AUTOINCREMENT` →
+  `BIGSERIAL/IDENTITY`, `ON CONFLICT` is compatible). `try_transition`,
+  `executemany`, `fetch*` keep their signatures — callers don't change.
+
+### Secrets & keys
+- **Fly secrets** (or **Supabase Vault**) for `ENCRYPTION_SECRET`, the
+  Polymarket builder key set, and the Telegram token. Never baked into the image.
+- Custody hardening later: envelope-encrypt user keys under a dedicated **KMS**
+  (AWS/GCP KMS) — Vault/Fly secrets are fine for app config, KMS for the master
+  wrapping key (see Gate 2).
+
+### Redis — **Upstash**
+- Serverless, generous free tier. Powers the cross-process **rate limiter**,
+  the shared **leader-position cache**, and a lightweight **job queue** (`arq`)
+  for snapshots/stats so they stop being a tight in-process loop.
+
+### Frontend
+- Simplest: keep serving `frontend/dist` from the container (FastAPI
+  StaticFiles). CDN upgrade: deploy to **Cloudflare Pages** / Vercel later.
+
+### Edge / domain — **Cloudflare**
+- DNS + TLS + proxy. Point the Telegram Mini App button at the stable domain
+  **once** — retires the whole tunnel-URL-rotation supervisor.
+
+### CI/CD — **GitHub Actions**
+- On push: build image → `flyctl deploy`. Add a **staging** app before prod.
+
+### Observability
+- **Sentry** (backend + frontend) — cheapest, highest-value error tracking.
+- Fly logs + **BetterStack/UptimeRobot** pinging `/api/health`.
+- Prometheus/Grafana only when scale warrants it.
+
+### Minimal viable hosted stack (stand this up first)
+**Fly.io (api + worker) · Supabase Postgres · Upstash Redis · Cloudflare ·
+GitHub Actions · Sentry.** That's the whole thing — everything else is later.
