@@ -18,7 +18,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from backend.core import auth, trader_stats
+from backend.config import ENCRYPTION_SECRET
+from backend.core import auth, equity, trader_stats, wallet
 from backend.core.copy_engine import CopyEngine
 from backend.core.polymarket import PolymarketClient
 from backend.db.database import Database
@@ -66,6 +67,34 @@ async def _stats_refresh_loop(db, pm, stop: asyncio.Event) -> None:
             pass
 
 
+async def _equity_snapshot_loop(app, stop: asyncio.Event) -> None:
+    """Snapshot every user's equity on a fixed cadence (default 5 min) so the
+    Performance chart has a dense, market-moving time series. Reuses the API's
+    per-user CLOB client cache (app.state.clients) so it doesn't rebuild creds.
+    Runs once on boot so a fresh chart has a first point quickly."""
+    interval = float(os.environ.get("EQUITY_SNAPSHOT_SECONDS", "300"))
+    db, pm = app.state.db, app.state.pm
+
+    async def client_for(user):
+        cache = app.state.clients
+        cid = user["id"]
+        if cid not in cache:
+            pk = wallet.decrypt_private_key(user["private_key_enc"], ENCRYPTION_SECRET)
+            cache[cid] = await wallet.make_clob_client(pk, funder=cid)
+        return cache[cid]
+
+    while not stop.is_set():
+        try:
+            n = await equity.snapshot_all(db, pm, client_for)
+            log.info("equity snapshot: recorded %d users", n)
+        except Exception:
+            log.exception("equity snapshot pass failed (continuing)")
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=interval)
+        except asyncio.TimeoutError:
+            pass
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db = Database()
@@ -104,6 +133,9 @@ async def lifespan(app: FastAPI):
 
     if os.environ.get("STATS_REFRESH_AUTOSTART", "1") == "1":
         tasks.append(asyncio.create_task(_stats_refresh_loop(db, pm, stop)))
+
+    if os.environ.get("EQUITY_SNAPSHOT_AUTOSTART", "1") == "1":
+        tasks.append(asyncio.create_task(_equity_snapshot_loop(app, stop)))
 
     try:
         yield

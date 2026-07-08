@@ -46,6 +46,7 @@ export const api = {
   createWallet: (body) => req('/user/create-wallet', { method: 'POST', body: JSON.stringify(body) }),
   me: (balance = false) => req(`/user/me${balance ? '?balance=true' : ''}`),
   pnl: (period = '30d') => req(`/user/pnl?period=${period}`),
+  equitySeries: (period = '7d') => req(`/user/equity-series?period=${period}`),
   pnlByWallet: () => req('/user/pnl/by-wallet'),
   getSettings: () => req('/user/settings'),
   activity: (limit = 30) => req(`/user/activity?limit=${limit}`),

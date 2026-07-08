@@ -91,6 +91,24 @@ CREATE TABLE IF NOT EXISTS trade_events (
     ts          TEXT NOT NULL
 );
 
+-- Periodic point-in-time snapshots of each user's account, taken by the
+-- background loop in main.py (default every 5 min). Powers the Performance
+-- equity/PnL line chart: a dense time series that moves with the market,
+-- instead of the sparse one-point-per-closed-trade realized curve. Wider
+-- windows downsample this (30d -> 30-min buckets, all -> 4-hour buckets).
+CREATE TABLE IF NOT EXISTS equity_snapshots (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id         TEXT NOT NULL REFERENCES users(id),
+    ts              TEXT NOT NULL,                     -- ISO8601 UTC
+    equity          REAL,                              -- balance + positions_value (total account value)
+    balance         REAL,                              -- free cash collateral
+    positions_value REAL,                              -- market value of open positions
+    realized_pnl    REAL,                              -- cumulative realized to date
+    unrealized_pnl  REAL                               -- mark-to-market on open positions
+);
+CREATE INDEX IF NOT EXISTS idx_equity_snapshots_user_ts
+    ON equity_snapshots(user_id, ts);
+
 CREATE TABLE IF NOT EXISTS trader_cache (
     address           TEXT PRIMARY KEY,                -- proxyWallet
     display_name      TEXT,                            -- userName

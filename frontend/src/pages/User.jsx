@@ -11,7 +11,9 @@ import DepositAddresses from '../components/DepositAddresses'
 export default function User({ onLogout }) {
   const [me, setMe] = useState(null)
   const [pnl, setPnl] = useState(null)
-  const [period, setPeriod] = useState('30d')
+  const [period, setPeriod] = useState('7d')
+  const [series, setSeries] = useState([])
+  const [metric, setMetric] = useState('equity')   // 'equity' | 'pnl'
   const [byWallet, setByWallet] = useState([])
   const [ref, setRef] = useState(null)
   const [name, setName] = useState('')
@@ -33,7 +35,8 @@ export default function User({ onLogout }) {
   }, [])
 
   useEffect(() => {
-    api.pnl(period).then(setPnl)
+    api.pnl(period).then(setPnl).catch(() => {})
+    api.equitySeries(period).then(setSeries).catch(() => setSeries([]))
   }, [period])
 
   async function saveName() {
@@ -133,14 +136,26 @@ export default function User({ onLogout }) {
 
       <Folder id="user-performance" title="PERFORMANCE" open>
         <StatGrid pnl={pnl} />
-        <div className="sort-row">
-          {['7d', '30d', 'all'].map((p) => (
-            <button key={p} className={`chip ${period === p ? 'active' : ''}`} onClick={() => setPeriod(p)}>
-              {p.toUpperCase()}
-            </button>
-          ))}
+        <div className="sort-row" style={{ justifyContent: 'space-between' }}>
+          <div className="sort-row" style={{ margin: 0 }}>
+            {['7d', '30d', 'all'].map((p) => (
+              <button key={p} className={`chip ${period === p ? 'active' : ''}`} onClick={() => setPeriod(p)}>
+                {p.toUpperCase()}
+              </button>
+            ))}
+          </div>
+          <div className="sort-row" style={{ margin: 0 }}>
+            {[['equity', 'EQUITY'], ['pnl', 'PNL']].map(([k, l]) => (
+              <button key={k} className={`chip ${metric === k ? 'active' : ''}`} onClick={() => setMetric(k)}>
+                {l}
+              </button>
+            ))}
+          </div>
         </div>
-        <PnLChart data={curve} />
+        <PnLChart
+          data={series.map((s) => ({ t: s.ts, y: metric === 'equity' ? s.equity : s.pnl }))}
+          kind={metric}
+        />
 
         <div className="section-header">DAILY PNL ({period.toUpperCase()})</div>
         <div className="card">

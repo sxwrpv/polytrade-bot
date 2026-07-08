@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from backend.config import CREATE_WALLET_RATE_LIMIT, ENCRYPTION_SECRET, TELEGRAM_BOT_TOKEN
-from backend.core import auth, pnl as pnl_mod, wallet
+from backend.core import auth, equity as equity_mod, pnl as pnl_mod, wallet
 from backend.api.deps import get_current_user, get_db, get_pm, get_user_client
 from backend.db.database import now_iso
 
@@ -220,6 +220,13 @@ async def pnl(period: str = "30d", user=Depends(get_current_user),
     stats = await pnl_mod.get_pnl_stats(user["id"], db, pmc)
     curve = await pnl_mod.get_equity_curve(user["id"], db, period)
     return {**stats, "equity_curve": curve}
+
+
+@router.get("/equity-series")
+async def equity_series(period: str = "7d", user=Depends(get_current_user), db=Depends(get_db)):
+    """Downsampled equity/PnL snapshots for the Performance line chart.
+    period=7d (5-min points) | 30d (30-min) | all (4-hour)."""
+    return await equity_mod.get_series(db, user["id"], period)
 
 
 @router.get("/pnl/by-wallet")

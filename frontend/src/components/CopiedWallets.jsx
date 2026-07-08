@@ -17,7 +17,6 @@ export default function CopiedWallets({ onChange }) {
 
   return (
     <div>
-      <div className="section-header">YOUR WALLETS ({rows.length})</div>
       {loading ? (
         <div className="muted">loading…</div>
       ) : rows.length === 0 ? (
