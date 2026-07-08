@@ -15,7 +15,6 @@ export default function User({ onLogout }) {
   const [series, setSeries] = useState([])
   const [metric, setMetric] = useState('equity')   // 'equity' | 'pnl'
   const [byWallet, setByWallet] = useState([])
-  const [ref, setRef] = useState(null)
   const [name, setName] = useState('')
   const [exp, setExp] = useState(false)
   const [key, setKey] = useState('')
@@ -30,7 +29,6 @@ export default function User({ onLogout }) {
       setName(m.display_name || '')
     })
     api.me(true).then(setMe).catch(() => {})
-    api.referral().then(setRef)
     api.pnlByWallet().then(setByWallet).catch(() => {})
   }, [])
 
@@ -54,35 +52,6 @@ export default function User({ onLogout }) {
       setKey(r.private_key)
     } catch (e) {
       setExpErr(String(e.message || e))
-    }
-  }
-
-  const [shared, setShared] = useState(false)
-  async function shareReferral() {
-    const code = ref?.code
-    if (!code) return
-    let cfg = {}
-    try {
-      cfg = await api.config()
-    } catch {
-      /* fall through to web link */
-    }
-    // t.me/<bot>?startapp=<code> lands new users in the Mini App with the code
-    // as start_param (picked up by onboarding as referred_by)
-    const link = cfg.telegram_bot_username
-      ? `https://t.me/${cfg.telegram_bot_username}?startapp=${code}`
-      : `${window.location.origin}/?ref=${code}`
-    const text = `Copy top Polymarket traders automatically — invite code ${code}`
-    const tg = window.Telegram?.WebApp
-    if (tg?.openTelegramLink) {
-      tg.openTelegramLink(
-        `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(text)}`)
-    } else if (navigator.share) {
-      navigator.share({ url: link, text }).catch(() => {})
-    } else {
-      navigator.clipboard?.writeText(`${text} — ${link}`)
-      setShared(true)
-      setTimeout(() => setShared(false), 1500)
     }
   }
 
@@ -191,17 +160,6 @@ export default function User({ onLogout }) {
       <Folder id="user-security" title="SECURITY">
         <div className="card">
           <button className="btn btn-danger" onClick={() => setExp(true)}>EXPORT PRIVATE KEY</button>
-        </div>
-      </Folder>
-
-      <Folder id="user-referral" title="REFERRAL">
-        <div className="card">
-          <div className="muted">YOUR CODE (click to copy)</div>
-          <CopyText value={ref?.code || ''} display={ref?.code || '—'} />
-          <button className="btn" style={{ marginTop: 10 }} onClick={shareReferral}>
-            {shared ? 'LINK COPIED ✓' : 'SHARE INVITE'}
-          </button>
-          <div className="muted" style={{ marginTop: 8 }}>REFERRED {ref?.referred_count || 0}</div>
         </div>
       </Folder>
 

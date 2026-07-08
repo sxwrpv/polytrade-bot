@@ -87,13 +87,6 @@ POLYMARKET_BUILDER_PASSPHRASE = os.environ.get("POLYMARKET_BUILDER_PASSPHRASE", 
 # wallet-creation path).
 POLYMARKET_BUILDER_CODE = os.environ.get("POLYMARKET_BUILDER_CODE", "").strip()
 
-# The app's OWN referral (not Polymarket's — that can't attach to API-created
-# wallets). Every new account that didn't arrive through another user's invite
-# is credited to this code, so the owner is the default referrer of the whole
-# user base. For the in-app REFERRAL screen to show the count, the owner's bot
-# account's `referral_code` must equal this value.
-OWNER_REFERRAL_CODE = os.environ.get("OWNER_REFERRAL_CODE", "hermessxd").strip()
-
 # --- Security ---
 # Encrypts signer private keys at rest (AES-256-GCM). Must be set in production.
 ENCRYPTION_SECRET = os.environ.get("ENCRYPTION_SECRET", "")

@@ -1,4 +1,4 @@
-"""/api/user/* — wallet onboarding, profile, PnL, settings, referral, key export."""
+"""/api/user/* — wallet onboarding, profile, PnL, settings, key export."""
 from __future__ import annotations
 
 import datetime as dt
@@ -9,9 +9,7 @@ import aiosqlite
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
-from backend.config import (
-    CREATE_WALLET_RATE_LIMIT, ENCRYPTION_SECRET, OWNER_REFERRAL_CODE, TELEGRAM_BOT_TOKEN,
-)
+from backend.config import CREATE_WALLET_RATE_LIMIT, ENCRYPTION_SECRET, TELEGRAM_BOT_TOKEN
 from backend.core import auth, equity as equity_mod, pnl as pnl_mod, wallet
 from backend.api.deps import get_current_user, get_db, get_pm, get_user_client
 from backend.db.database import now_iso
@@ -50,7 +48,6 @@ router = APIRouter()
 
 class CreateWallet(BaseModel):
     display_name: str | None = None
-    referred_by: str | None = None
     init_data: str | None = None      # Telegram initData — links the account
 
 
@@ -92,7 +89,6 @@ async def create_wallet(body: CreateWallet, request: Request, db=Depends(get_db)
                 "SELECT * FROM users WHERE telegram_user_id = ?", (int(tg_user["id"]),))
             if existing:
                 return {"address": existing["id"], "signer_address": existing["signer_address"],
-                        "referral_code": existing["referral_code"],
                         "api_token": existing["api_token"],
                         "gasless": existing["id"] != existing["signer_address"]}
 
@@ -120,27 +116,20 @@ async def create_wallet(body: CreateWallet, request: Request, db=Depends(get_db)
         await client.close()
 
     enc = wallet.encrypt_private_key(pk, ENCRYPTION_SECRET)
-    ref_code = "REF" + signer[2:8].upper()
     token = auth.new_api_token()
     display_name = body.display_name
     if not display_name and tg_user:
         display_name = tg_user.get("username") or tg_user.get("first_name")
-    # Referral: honor an explicit invite (peer referral deep link) if present;
-    # otherwise default every new account to the owner's code — so the owner is
-    # the referrer of the whole base, not left blank. Never self-refer.
-    referred_by = (body.referred_by or "").strip() or OWNER_REFERRAL_CODE or None
-    if referred_by == ref_code:
-        referred_by = None
     try:
         await db.execute(
             "INSERT INTO users(id, signer_address, api_token, telegram_user_id, "
-            "display_name, private_key_enc, referral_code, referred_by, created_at) "
-            "VALUES(?,?,?,?,?,?,?,?,?)",
+            "display_name, private_key_enc, created_at) "
+            "VALUES(?,?,?,?,?,?,?)",
             (funder, signer, token, int(tg_user["id"]) if tg_user else None,
-             display_name, enc, ref_code, referred_by, now_iso()))
+             display_name, enc, now_iso()))
     except aiosqlite.IntegrityError:
         raise HTTPException(409, "wallet already exists")
-    return {"address": funder, "signer_address": signer, "referral_code": ref_code,
+    return {"address": funder, "signer_address": signer,
             "api_token": token, "gasless": funder != signer}
 
 
@@ -176,7 +165,6 @@ async def me(request: Request, balance: bool = False,
     return {"address": user["id"], "signer_address": user["signer_address"],
             "display_name": user["display_name"], "balance": bal,
             "positions_value": positions_val, "claimable": claimable, "equity": equity,
-            "referral_code": user["referral_code"],
             # deposit wallet (gasless) vs EOA fallback — cheap DB-only check,
             # no client build needed: a deposit wallet's funder != its signer.
             "gasless": user["id"] != user["signer_address"]}
@@ -272,13 +260,6 @@ async def update_settings(body: SettingsBody, user=Depends(get_current_user), db
         await db.execute(f"UPDATE users SET {cols} WHERE id = ?",
                          [*updates.values(), user["id"]])
     return {"ok": True, "updated": list(updates)}
-
-
-@router.get("/referral")
-async def referral(user=Depends(get_current_user), db=Depends(get_db)):
-    cnt = await db.fetchval("SELECT COUNT(*) FROM users WHERE referred_by = ?",
-                            (user["referral_code"],))
-    return {"code": user["referral_code"], "referred_count": cnt or 0, "total_earned": 0.0}
 
 
 @router.post("/export-key")

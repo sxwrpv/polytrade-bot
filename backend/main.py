@@ -183,13 +183,6 @@ async def health():
     return {"status": "ok"}
 
 
-@app.get("/api/config")
-async def public_config():
-    """Non-secret config the frontend needs: the bot's username builds the
-    t.me referral/share deep link (empty = share the web URL instead)."""
-    return {"telegram_bot_username": os.environ.get("TELEGRAM_BOT_USERNAME", "").strip()}
-
-
 # SPA (built in phase 10) — mount last so it doesn't shadow /api.
 if os.path.isdir(_FRONTEND_DIST):
     app.mount("/", StaticFiles(directory=_FRONTEND_DIST, html=True), name="spa")

@@ -37,8 +37,6 @@ export function haptic(type = 'success') {
 }
 
 export const api = {
-  // public
-  config: () => req('/config'),
   // auth
   telegramAuth: (initData) =>
     req('/auth/telegram', { method: 'POST', body: JSON.stringify({ init_data: initData }) }),
@@ -52,7 +50,6 @@ export const api = {
   activity: (limit = 30) => req(`/user/activity?limit=${limit}`),
   depositAddress: () => req('/user/deposit-address'),
   settings: (body) => req('/user/settings', { method: 'POST', body: JSON.stringify(body) }),
-  referral: () => req('/user/referral'),
   exportKey: () => req('/user/export-key', { method: 'POST' }),
   // traders — leaderboard doubles as the wallet screener: pass sort/limit/offset
   // plus any number of `<column>_min` / `<column>_max` filter keys (see
