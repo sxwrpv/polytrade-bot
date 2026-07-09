@@ -26,3 +26,6 @@ web3>=6.0.0
 # Still in prerelease (0.1.0bNN) — `pip install -r requirements.txt` needs
 # --pre, or use `uv pip install --prerelease allow -r requirements.txt`.
 polymarket-client>=0.1.0b11
+
+# Postgres/Supabase backend (used when DATABASE_URL is set; SQLite otherwise).
+asyncpg>=0.29.0

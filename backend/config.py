@@ -34,6 +34,13 @@ POLYGON_RPC_URL = os.environ.get("POLYGON_RPC_URL", "").strip()
 REFERRAL_CODE = os.environ.get("REFERRAL_CODE", "").strip()
 
 # --- Database ---
+# When DATABASE_URL is set (a Postgres/Supabase DSN) the app uses Postgres via
+# asyncpg; otherwise it falls back to local SQLite at DB_PATH. Supabase: use the
+# direct connection string, e.g.
+#   postgresql://postgres:<PW>@db.<ref>.supabase.co:5432/postgres
+# (or the session pooler on :5432). The app sets statement_cache_size=0 so the
+# transaction pooler on :6543 also works.
+DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
 DB_PATH = os.environ.get("DB_PATH", "copybot.db")
 
 # --- Copy engine ---
