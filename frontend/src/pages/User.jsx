@@ -11,9 +11,10 @@ import DepositAddresses from '../components/DepositAddresses'
 export default function User({ onLogout }) {
   const [me, setMe] = useState(null)
   const [pnl, setPnl] = useState(null)
-  const [period, setPeriod] = useState('30d')
+  const [period, setPeriod] = useState('7d')
+  const [series, setSeries] = useState([])
+  const [metric, setMetric] = useState('equity')   // 'equity' | 'pnl'
   const [byWallet, setByWallet] = useState([])
-  const [ref, setRef] = useState(null)
   const [name, setName] = useState('')
   const [exp, setExp] = useState(false)
   const [key, setKey] = useState('')
@@ -28,12 +29,12 @@ export default function User({ onLogout }) {
       setName(m.display_name || '')
     })
     api.me(true).then(setMe).catch(() => {})
-    api.referral().then(setRef)
     api.pnlByWallet().then(setByWallet).catch(() => {})
   }, [])
 
   useEffect(() => {
-    api.pnl(period).then(setPnl)
+    api.pnl(period).then(setPnl).catch(() => {})
+    api.equitySeries(period).then(setSeries).catch(() => setSeries([]))
   }, [period])
 
   async function saveName() {
@@ -54,38 +55,9 @@ export default function User({ onLogout }) {
     }
   }
 
-  const [shared, setShared] = useState(false)
-  async function shareReferral() {
-    const code = ref?.code
-    if (!code) return
-    let cfg = {}
-    try {
-      cfg = await api.config()
-    } catch {
-      /* fall through to web link */
-    }
-    // t.me/<bot>?startapp=<code> lands new users in the Mini App with the code
-    // as start_param (picked up by onboarding as referred_by)
-    const link = cfg.telegram_bot_username
-      ? `https://t.me/${cfg.telegram_bot_username}?startapp=${code}`
-      : `${window.location.origin}/?ref=${code}`
-    const text = `Copy top Polymarket traders automatically — invite code ${code}`
-    const tg = window.Telegram?.WebApp
-    if (tg?.openTelegramLink) {
-      tg.openTelegramLink(
-        `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(text)}`)
-    } else if (navigator.share) {
-      navigator.share({ url: link, text }).catch(() => {})
-    } else {
-      navigator.clipboard?.writeText(`${text} — ${link}`)
-      setShared(true)
-      setTimeout(() => setShared(false), 1500)
-    }
-  }
-
   const curve = pnl?.equity_curve || []
   const dayValues = curve.map((d) => d.pnl)
-  const dayTitles = curve.map((d) => `${d.date}: ${d.pnl >= 0 ? '+' : ''}$${d.pnl.toFixed(2)}`)
+  const dayTitles = curve.map((d) => `${d.date}: ${d.pnl >= 0 ? '+' : '-'}$${Math.abs(d.pnl).toFixed(2)}`)
 
   return (
     <div>
@@ -97,9 +69,33 @@ export default function User({ onLogout }) {
             DISPLAY NAME
             <input value={name} onChange={(e) => setName(e.target.value)} onBlur={saveName} />
           </label>
-          <div className="muted">
-            BALANCE {me?.balance != null ? `$${me.balance.toFixed(2)} pUSD` : '— (fund wallet to trade)'}
+          <div className="stat-grid" style={{ marginTop: 10 }}>
+            <div className="stat-cell">
+              <div className="label">BALANCE (CASH)</div>
+              <div className="value">{me?.balance != null ? `$${me.balance.toFixed(2)}` : '—'}</div>
+            </div>
+            <div className="stat-cell">
+              <div className="label">IN POSITIONS</div>
+              <div className="value">{me?.positions_value != null ? `$${me.positions_value.toFixed(2)}` : '—'}</div>
+            </div>
+            <div className="stat-cell">
+              <div className="label" title="resolved wins not yet redeemed — claim on polymarket.com">CLAIMABLE</div>
+              <div className="value">{me?.claimable != null ? `$${me.claimable.toFixed(2)}` : '—'}</div>
+            </div>
+            <div className="stat-cell">
+              <div className="label">EQUITY (TOTAL)</div>
+              <div className="value">{me?.equity != null ? `$${me.equity.toFixed(2)}` : '—'}</div>
+            </div>
           </div>
+          {me?.balance == null && (
+            <div className="muted small" style={{ marginTop: 6 }}>fund wallet to trade</div>
+          )}
+          {me?.claimable > 0 && (
+            <div className="warn-box" style={{ marginTop: 8 }}>
+              ${me.claimable.toFixed(2)} in resolved winnings isn&apos;t auto-claimed yet —
+              redeem it on polymarket.com to turn it into spendable cash.
+            </div>
+          )}
         </div>
       </Folder>
 
@@ -109,14 +105,26 @@ export default function User({ onLogout }) {
 
       <Folder id="user-performance" title="PERFORMANCE" open>
         <StatGrid pnl={pnl} />
-        <div className="sort-row">
-          {['7d', '30d', 'all'].map((p) => (
-            <button key={p} className={`chip ${period === p ? 'active' : ''}`} onClick={() => setPeriod(p)}>
-              {p.toUpperCase()}
-            </button>
-          ))}
+        <div className="sort-row" style={{ justifyContent: 'space-between' }}>
+          <div className="sort-row" style={{ margin: 0 }}>
+            {['7d', '30d', 'all'].map((p) => (
+              <button key={p} className={`chip ${period === p ? 'active' : ''}`} onClick={() => setPeriod(p)}>
+                {p.toUpperCase()}
+              </button>
+            ))}
+          </div>
+          <div className="sort-row" style={{ margin: 0 }}>
+            {[['equity', 'EQUITY'], ['pnl', 'PNL']].map(([k, l]) => (
+              <button key={k} className={`chip ${metric === k ? 'active' : ''}`} onClick={() => setMetric(k)}>
+                {l}
+              </button>
+            ))}
+          </div>
         </div>
-        <PnLChart data={curve} />
+        <PnLChart
+          data={series.map((s) => ({ t: s.ts, y: metric === 'equity' ? s.equity : s.pnl }))}
+          kind={metric}
+        />
 
         <div className="section-header">DAILY PNL ({period.toUpperCase()})</div>
         <div className="card">
@@ -130,9 +138,13 @@ export default function User({ onLogout }) {
             byWallet.map((w) => (
               <div className="card" key={w.trader_address}>
                 <div className="tc-top">
-                  <span className="tc-name">{w.display_name || `${w.trader_address.slice(0, 6)}…${w.trader_address.slice(-4)}`}</span>
+                  <span className="tc-name">
+                    {w.trader_address === 'manual'
+                      ? 'MANUAL TRADES'
+                      : w.display_name || `${w.trader_address.slice(0, 6)}…${w.trader_address.slice(-4)}`}
+                  </span>
                   <span className={w.realized_pnl >= 0 ? 'pos' : 'neg'}>
-                    {w.realized_pnl >= 0 ? '+' : ''}${w.realized_pnl.toFixed(2)}
+                    {w.realized_pnl >= 0 ? '+' : '-'}${Math.abs(w.realized_pnl).toFixed(2)}
                   </span>
                 </div>
                 <div className="tc-stats">
@@ -148,17 +160,6 @@ export default function User({ onLogout }) {
       <Folder id="user-security" title="SECURITY">
         <div className="card">
           <button className="btn btn-danger" onClick={() => setExp(true)}>EXPORT PRIVATE KEY</button>
-        </div>
-      </Folder>
-
-      <Folder id="user-referral" title="REFERRAL">
-        <div className="card">
-          <div className="muted">YOUR CODE (click to copy)</div>
-          <CopyText value={ref?.code || ''} display={ref?.code || '—'} />
-          <button className="btn" style={{ marginTop: 10 }} onClick={shareReferral}>
-            {shared ? 'LINK COPIED ✓' : 'SHARE INVITE'}
-          </button>
-          <div className="muted" style={{ marginTop: 8 }}>REFERRED {ref?.referred_count || 0}</div>
         </div>
       </Folder>
 

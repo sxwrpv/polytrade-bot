@@ -18,11 +18,17 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from backend.core import auth, trader_stats
+from backend.config import ENCRYPTION_SECRET
+from backend.core import auth, equity, trader_stats, wallet
 from backend.core.copy_engine import CopyEngine
 from backend.core.polymarket import PolymarketClient
 from backend.db.database import Database
 from backend.api import routes_auth, routes_positions, routes_traders, routes_user
+
+logging.basicConfig(
+    level=os.environ.get("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s %(levelname)s %(name)s | %(message)s",
+)
 
 log = logging.getLogger("main")
 _FRONTEND_DIST = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")
@@ -55,6 +61,42 @@ async def _stats_refresh_loop(db, pm, stop: asyncio.Event) -> None:
             log.info("wallet screener: refreshed windowed stats for %d traders", n)
         except Exception:
             log.exception("wallet screener stats refresh pass failed (continuing)")
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=interval)
+        except asyncio.TimeoutError:
+            pass
+
+
+async def _equity_snapshot_loop(app, stop: asyncio.Event) -> None:
+    """Snapshot every user's equity on a fixed cadence (default 5 min) so the
+    Performance chart has a dense, market-moving time series. Reuses the API's
+    per-user CLOB client cache (app.state.clients) so it doesn't rebuild creds.
+    Runs once on boot so a fresh chart has a first point quickly."""
+    interval = float(os.environ.get("EQUITY_SNAPSHOT_SECONDS", "300"))
+    db, pm = app.state.db, app.state.pm
+
+    async def client_for(user):
+        cache = app.state.clients
+        cid = user["id"]
+        if cid not in cache:
+            pk = wallet.decrypt_private_key(user["private_key_enc"], ENCRYPTION_SECRET)
+            cache[cid] = await wallet.make_clob_client(pk, funder=cid)
+        return cache[cid]
+
+    while not stop.is_set():
+        try:
+            n = await equity.snapshot_all(db, pm, client_for)
+            log.info("equity snapshot: recorded %d users", n)
+        except Exception:
+            log.exception("equity snapshot pass failed (continuing)")
+        try:
+            # thin old snapshots to the resolution the charts render (keeps
+            # storage bounded; never changes a chart)
+            pruned = await equity.prune_snapshots(db)
+            if pruned:
+                log.info("equity snapshot: pruned %d redundant rows", pruned)
+        except Exception:
+            log.exception("equity snapshot prune failed (continuing)")
         try:
             await asyncio.wait_for(stop.wait(), timeout=interval)
         except asyncio.TimeoutError:
@@ -100,6 +142,9 @@ async def lifespan(app: FastAPI):
     if os.environ.get("STATS_REFRESH_AUTOSTART", "1") == "1":
         tasks.append(asyncio.create_task(_stats_refresh_loop(db, pm, stop)))
 
+    if os.environ.get("EQUITY_SNAPSHOT_AUTOSTART", "1") == "1":
+        tasks.append(asyncio.create_task(_equity_snapshot_loop(app, stop)))
+
     try:
         yield
     finally:
@@ -136,13 +181,6 @@ app.include_router(routes_positions.router, prefix="/api/positions", tags=["posi
 @app.get("/api/health")
 async def health():
     return {"status": "ok"}
-
-
-@app.get("/api/config")
-async def public_config():
-    """Non-secret config the frontend needs: the bot's username builds the
-    t.me referral/share deep link (empty = share the web URL instead)."""
-    return {"telegram_bot_username": os.environ.get("TELEGRAM_BOT_USERNAME", "").strip()}
 
 
 # SPA (built in phase 10) — mount last so it doesn't shadow /api.

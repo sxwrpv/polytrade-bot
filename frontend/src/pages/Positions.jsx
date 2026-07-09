@@ -1,6 +1,9 @@
 import { useEffect, useState, useCallback, useMemo } from 'react'
 import { api } from '../api'
 import PositionCard from '../components/PositionCard'
+import ActivityFeed from '../components/ActivityFeed'
+
+const signed = (v) => `${v >= 0 ? '+' : '-'}$${Math.abs(v).toFixed(2)}`
 
 function summarize(rows, closed) {
   if (closed) {
@@ -8,20 +11,22 @@ function summarize(rows, closed) {
     const total = realized.reduce((a, b) => a + b, 0)
     const wins = realized.filter((v) => v > 0).length
     return [
-      ['REALIZED PNL', `${total >= 0 ? '+' : ''}$${total.toFixed(2)}`, total >= 0 ? 'pos' : 'neg'],
+      ['REALIZED PNL', signed(total), total >= 0 ? 'pos' : 'neg'],
       ['WIN RATE', realized.length ? `${Math.round((wins / realized.length) * 100)}%` : '—', ''],
-      ['BEST', realized.length ? `+$${Math.max(...realized).toFixed(2)}` : '—', 'pos'],
-      ['WORST', realized.length ? `$${Math.min(...realized).toFixed(2)}` : '—', 'neg'],
+      ['BEST', realized.length ? signed(Math.max(...realized)) : '—', 'pos'],
+      ['WORST', realized.length ? signed(Math.min(...realized)) : '—', 'neg'],
     ]
   }
   const exposure = rows.reduce((a, r) => a + Number(r.notional_usd || 0), 0)
   const unrealized = rows.reduce((a, r) => a + Number(r.unrealized_pnl || 0), 0)
   return [
     ['OPEN EXPOSURE', `$${exposure.toFixed(2)}`, ''],
-    ['UNREALIZED PNL', `${unrealized >= 0 ? '+' : ''}$${unrealized.toFixed(2)}`, unrealized >= 0 ? 'pos' : 'neg'],
+    ['UNREALIZED PNL', signed(unrealized), unrealized >= 0 ? 'pos' : 'neg'],
     ['OPEN POSITIONS', rows.length, ''],
   ]
 }
+
+const TABS = [['open', 'OPEN'], ['closed', 'CLOSED'], ['activity', 'ACTIVITY']]
 
 export default function Positions() {
   const [tab, setTab] = useState('open')
@@ -29,6 +34,7 @@ export default function Positions() {
   const [loading, setLoading] = useState(true)
 
   const load = useCallback(() => {
+    if (tab === 'activity') return   // ActivityFeed fetches its own data
     setLoading(true)
     const fn = tab === 'open' ? api.openPositions : api.closedPositions
     fn()
@@ -55,33 +61,38 @@ export default function Positions() {
   return (
     <div>
       <div className="toggle-row">
-        <button className={`chip ${tab === 'open' ? 'active' : ''}`} onClick={() => setTab('open')}>
-          OPEN
-        </button>
-        <button className={`chip ${tab === 'closed' ? 'active' : ''}`} onClick={() => setTab('closed')}>
-          CLOSED
-        </button>
+        {TABS.map(([k, label]) => (
+          <button key={k} className={`chip ${tab === k ? 'active' : ''}`} onClick={() => setTab(k)}>
+            {label}
+          </button>
+        ))}
       </div>
 
-      {!loading && rows.length > 0 && (
-        <div className="stat-grid">
-          {cells.map(([label, value, c]) => (
-            <div className="stat-cell" key={label}>
-              <div className="label">{label}</div>
-              <div className={`value ${c}`}>{value}</div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {loading ? (
-        <div className="muted">loading…</div>
-      ) : rows.length === 0 ? (
-        <div className="muted">no {tab} positions</div>
+      {tab === 'activity' ? (
+        <ActivityFeed />
       ) : (
-        rows.map((r) => (
-          <PositionCard key={r.id || r.token_id} p={r} closed={tab === 'closed'} onClose={load} />
-        ))
+        <>
+          {!loading && rows.length > 0 && (
+            <div className="stat-grid">
+              {cells.map(([label, value, c]) => (
+                <div className="stat-cell" key={label}>
+                  <div className="label">{label}</div>
+                  <div className={`value ${c}`}>{value}</div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {loading ? (
+            <div className="muted">loading…</div>
+          ) : rows.length === 0 ? (
+            <div className="muted">no {tab} positions</div>
+          ) : (
+            rows.map((r) => (
+              <PositionCard key={r.id || r.token_id} p={r} closed={tab === 'closed'} onClose={load} />
+            ))
+          )}
+        </>
       )}
     </div>
   )

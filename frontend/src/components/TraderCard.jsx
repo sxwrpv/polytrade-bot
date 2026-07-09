@@ -35,8 +35,8 @@ function money(v) {
 export default function TraderCard({ t, period = '30d', onFollowed, balance }) {
   const [open, setOpen] = useState(false)
   const [expanded, setExpanded] = useState(false)
-  const [alloc, setAlloc] = useState(10)
-  const [maxPos, setMaxPos] = useState(50)
+  const [ratio, setRatio] = useState(1)
+  const [maxPos, setMaxPos] = useState(15)
   const [msg, setMsg] = useState('')
   const [copied, setCopied] = useState(false)
   // the screener's global period picks the default; each card can flip its own
@@ -61,7 +61,7 @@ export default function TraderCard({ t, period = '30d', onFollowed, balance }) {
     setMsg('')
     try {
       await api.follow(t.address, {
-        allocation_pct: Number(alloc),
+        copy_ratio_pct: Number(ratio),
         max_position_usd: Number(maxPos),
       })
       setMsg('COPYING ✓')
@@ -77,7 +77,11 @@ export default function TraderCard({ t, period = '30d', onFollowed, balance }) {
     <div className="card trader-card">
       <div className="tc-top">
         <div>
-          <span className="tc-name">{t.display_name || short(t.address)}</span>
+          {/* Polymarket auto-generates "0x…-<timestamp>" usernames for wallets
+              that never set one — show the short address instead of that blob */}
+          <span className="tc-name">
+            {t.display_name && !t.display_name.startsWith('0x') ? t.display_name : short(t.address)}
+          </span>
           <span className={`tier-badge tier-${tier}`}>{tier.toUpperCase()}</span>
         </div>
         <span className="muted addr-inline" onClick={copyAddress} title="click to copy">
@@ -105,51 +109,62 @@ export default function TraderCard({ t, period = '30d', onFollowed, balance }) {
         )}
       </div>
 
-      {hasPeriodStats && (
-        <div className="tc-period">
-          <table className="tc-table">
-            <thead>
-              <tr>
-                <th />
-                <th>WR</th>
-                <th>PNL</th>
-                <th>VOL</th>
-                <th title={EXIT_FILL_HELP}>EXIT/FILL</th>
-                <th title="days with positive vs negative realized pnl">G/R DAYS</th>
-              </tr>
-            </thead>
-            <tbody>
-              {PERIODS.map((p) => {
-                const ppnl = t[`pnl_${p}`] || 0
-                return (
-                  <tr key={p} className={p === chartPeriod ? 'active' : ''}>
-                    <td>
-                      <button className="tc-period-btn" onClick={() => setChartPeriod(p)}>
-                        {p.toUpperCase()}
-                      </button>
-                    </td>
-                    <td>{((t[`winrate_${p}`] || 0) * 100).toFixed(0)}%</td>
-                    <td className={ppnl >= 0 ? 'pos' : 'neg'}>{money(ppnl)}</td>
-                    <td>${Math.round(t[`volume_${p}`] || 0).toLocaleString()}</td>
-                    <td>{(t[`fill_exit_ratio_${p}`] ?? 0).toFixed(0)}%</td>
-                    <td>
-                      <span className="pos">{t[`green_days_${p}`] || 0}</span>
-                      {'/'}
-                      <span className="neg">{t[`red_days_${p}`] || 0}</span>
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-          <div
-            className="tc-chart"
-            title={`cumulative realized pnl, last ${chartPeriod} (from recent trade history)`}
-          >
-            <Sparkline daily={daily} />
+      {hasPeriodStats && (() => {
+        const p = chartPeriod
+        const days = { '7d': 7, '30d': 30, '90d': 90 }[p]
+        const ppnl = t[`pnl_${p}`] || 0
+        // history_days < the selected window = the trade feed didn't reach the
+        // whole period (hyper-active wallet) — label the stats as partial
+        const partial = t.history_days != null && t.history_days < days - 0.5
+        return (
+          <div className="tc-period">
+            <div className="sort-row">
+              {PERIODS.map((k) => (
+                <button
+                  key={k}
+                  className={`chip ${k === p ? 'active' : ''}`}
+                  onClick={() => setChartPeriod(k)}
+                >
+                  {k.toUpperCase()}
+                </button>
+              ))}
+              {partial && (
+                <span
+                  className="muted small"
+                  title="this wallet trades so much that only part of the period is covered by fetched history — stats below reflect that shorter span"
+                >
+                  DATA: LAST ~{Math.round(t.history_days)}D
+                </span>
+              )}
+            </div>
+            <div className="tc-stats">
+              <span title="closing-trade win rate in the period (sells + resolution wins/losses)">
+                WR {((t[`winrate_${p}`] || 0) * 100).toFixed(0)}%
+              </span>
+              <span className={ppnl >= 0 ? 'pos' : 'neg'} title="realized pnl in the period">
+                PNL {money(ppnl)}
+              </span>
+              <span title="traded volume in the period">
+                VOL ${Math.round(t[`volume_${p}`] || 0).toLocaleString()}
+              </span>
+              <span title={EXIT_FILL_HELP}>
+                EXIT/FILL {(t[`fill_exit_ratio_${p}`] ?? 0).toFixed(0)}%
+              </span>
+              <span title="days with positive vs negative realized pnl">
+                <span className="pos">{t[`green_days_${p}`] || 0}</span>
+                {'/'}
+                <span className="neg">{t[`red_days_${p}`] || 0}</span> DAYS
+              </span>
+            </div>
+            <div
+              className="tc-chart"
+              title={`cumulative realized pnl, last ${p} (sells + resolutions, avg-cost basis)`}
+            >
+              <Sparkline daily={daily} />
+            </div>
           </div>
-        </div>
-      )}
+        )
+      })()}
 
       <div className="tc-actions">
         <button className="btn" onClick={() => setOpen(true)}>COPY TRADER</button>
@@ -161,15 +176,19 @@ export default function TraderCard({ t, period = '30d', onFollowed, balance }) {
       {expanded && <TraderProfile address={t.address} />}
 
       {open && (
-        <Modal title="COPY ALLOCATION" accent="green" onClose={() => setOpen(false)}>
+        <Modal title="COPY SETTINGS" accent="green" onClose={() => setOpen(false)}>
           <label className="fld">
-            ALLOCATION %
-            <input value={alloc} onChange={(e) => setAlloc(e.target.value)} />
+            RATIO % (of leader&apos;s position size)
+            <input value={ratio} onChange={(e) => setRatio(e.target.value)} />
           </label>
           <label className="fld">
-            MAX / POSITION (pUSD)
+            MAX / TRADE (pUSD)
             <input value={maxPos} onChange={(e) => setMaxPos(e.target.value)} />
           </label>
+          <div className="muted small">
+            each copy = leader&apos;s position × {ratio || 0}%, capped at ${maxPos || 0}. Fine-tune
+            price/exposure/max-open filters after copying, under COPIED WALLETS.
+          </div>
           {balance != null && balance <= 0 && (
             <div className="warn-box">
               YOUR BALANCE IS $0 — COPYING WILL BE SET UP, BUT NO TRADES CAN

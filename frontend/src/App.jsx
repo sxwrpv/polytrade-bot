@@ -15,7 +15,9 @@ const tg = window.Telegram?.WebApp
 
 export default function App() {
   const [session, setSession] = useState(getSession())
-  const [tab, setTab] = useState(() => window.location.hash.replace('#', '') || 'home')
+  // Always launch on HOME — don't restore whatever tab the hash held from a
+  // previous session (owner request). Hash still tracks tab within a session.
+  const [tab, setTab] = useState('home')
   // Inside Telegram with no stored session: try initData login before showing
   // onboarding — a returning Telegram user signs straight back in.
   const [tgAuthing, setTgAuthing] = useState(Boolean(!getSession() && tg?.initData))

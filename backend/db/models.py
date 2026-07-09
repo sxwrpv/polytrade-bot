@@ -43,12 +43,19 @@ CREATE TABLE IF NOT EXISTS followed_traders (
     user_id          TEXT NOT NULL REFERENCES users(id),
     trader_address   TEXT NOT NULL,                    -- proxyWallet of the copied trader
     -- per-wallet risk settings (each copied trader is configured independently)
-    allocation_pct   REAL NOT NULL DEFAULT 10.0,       -- % of user capital to copy
-    max_position_usd REAL NOT NULL DEFAULT 50.0,       -- pUSD cap per position
-    paused           INTEGER NOT NULL DEFAULT 0,       -- pause copying this wallet
+    allocation_pct   REAL NOT NULL DEFAULT 10.0,       -- LEGACY (portfolio-weight model); superseded by copy_ratio_pct
+    max_position_usd REAL NOT NULL DEFAULT 50.0,       -- MAX/TRADE: pUSD cap per position
+    paused           INTEGER NOT NULL DEFAULT 0,       -- ENABLED (inverted): 1 = paused (no new buys)
     max_slippage_pct REAL,                              -- vs leader price (NULL = global)
-    max_total_exposure_usd REAL,                        -- cap total open notional for this trader
+    max_total_exposure_usd REAL,                        -- MAX EXPOSURE: cap total open notional for this trader
     daily_loss_limit_usd REAL,                          -- block opens after today's loss on this trader
+    -- sizing + entry filters (screenshot settings). NULL = use config default.
+    copy_ratio_pct   REAL,                              -- RATIO %: copy = leader position value × this %
+    min_leader_usd   REAL,                              -- MIN LEADER $: skip if leader's position value < this
+    ignore_below_usd REAL,                              -- IGNORE POSITIONS < $: skip if OUR copy notional < this
+    max_open_positions INTEGER,                         -- MAX OPEN: cap simultaneous open copies for this trader
+    min_price        REAL,                              -- MIN PRICE: skip leader positions priced below this
+    max_price        REAL,                              -- MAX PRICE: skip leader positions priced above this
     is_active        INTEGER NOT NULL DEFAULT 1,
     created_at       TEXT NOT NULL,
     UNIQUE(user_id, trader_address)
@@ -83,6 +90,24 @@ CREATE TABLE IF NOT EXISTS trade_events (
     pnl         REAL,
     ts          TEXT NOT NULL
 );
+
+-- Periodic point-in-time snapshots of each user's account, taken by the
+-- background loop in main.py (default every 5 min). Powers the Performance
+-- equity/PnL line chart: a dense time series that moves with the market,
+-- instead of the sparse one-point-per-closed-trade realized curve. Wider
+-- windows downsample this (30d -> 30-min buckets, all -> 4-hour buckets).
+CREATE TABLE IF NOT EXISTS equity_snapshots (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id         TEXT NOT NULL REFERENCES users(id),
+    ts              TEXT NOT NULL,                     -- ISO8601 UTC
+    equity          REAL,                              -- balance + positions_value (total account value)
+    balance         REAL,                              -- free cash collateral
+    positions_value REAL,                              -- market value of open positions
+    realized_pnl    REAL,                              -- cumulative realized to date
+    unrealized_pnl  REAL                               -- mark-to-market on open positions
+);
+CREATE INDEX IF NOT EXISTS idx_equity_snapshots_user_ts
+    ON equity_snapshots(user_id, ts);
 
 CREATE TABLE IF NOT EXISTS trader_cache (
     address           TEXT PRIMARY KEY,                -- proxyWallet
@@ -133,6 +158,7 @@ CREATE TABLE IF NOT EXISTS trader_cache (
     exits_90d               INTEGER,
     fill_exit_ratio_90d     REAL,
     daily_pnl_90d           TEXT,   -- JSON {"YYYY-MM-DD": realized_pnl} last 90d
+    history_days            REAL,   -- how far back fetched trade history reaches (90 = full window; less = page budget hit, windowed stats are partial)
     stats_refreshed_at      TEXT,   -- when windowed stats were last computed
     last_refreshed    TEXT NOT NULL
 );
@@ -178,6 +204,13 @@ MIGRATIONS = (
     "ALTER TABLE followed_traders ADD COLUMN max_slippage_pct REAL",
     "ALTER TABLE followed_traders ADD COLUMN max_total_exposure_usd REAL",
     "ALTER TABLE followed_traders ADD COLUMN daily_loss_limit_usd REAL",
+    # per-wallet sizing (ratio-of-leader) + entry filters — see followed_traders above
+    "ALTER TABLE followed_traders ADD COLUMN copy_ratio_pct REAL",
+    "ALTER TABLE followed_traders ADD COLUMN min_leader_usd REAL",
+    "ALTER TABLE followed_traders ADD COLUMN ignore_below_usd REAL",
+    "ALTER TABLE followed_traders ADD COLUMN max_open_positions INTEGER",
+    "ALTER TABLE followed_traders ADD COLUMN min_price REAL",
+    "ALTER TABLE followed_traders ADD COLUMN max_price REAL",
     # windowed wallet-screener metrics (7d/30d/90d) + pnl quality — see trader_cache above.
     "ALTER TABLE trader_cache ADD COLUMN unrealized_pnl REAL",
     "ALTER TABLE trader_cache ADD COLUMN pnl_quality REAL",
@@ -220,6 +253,9 @@ MIGRATIONS = (
     # per-day realized PnL for the last 90d as a JSON object {"YYYY-MM-DD": pnl}
     # — powers the per-card 7/30/90d equity sparkline without extra API calls.
     "ALTER TABLE trader_cache ADD COLUMN daily_pnl_90d TEXT",
+    # trade-history coverage in days (90 = the whole 90d window was fetched;
+    # less = pagination budget ran out — the UI marks wider periods as partial)
+    "ALTER TABLE trader_cache ADD COLUMN history_days REAL",
     # when the windowed screener stats were last computed (last_refreshed is
     # bumped by every upsert incl. cheap discovery, so it can't drive the
     # stale-first refresh rotation).

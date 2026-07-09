@@ -299,6 +299,21 @@ class PolymarketClient:
         )
         return [LeaderEntry.from_api(e) for e in d] if isinstance(d, list) else []
 
+    async def get_leaderboard_user(self, wallet_address: str,
+                                   period: str = "ALL") -> "LeaderEntry | None":
+        """Official lifetime (or windowed) pnl/vol for ONE wallet — the same
+        numbers polymarket.com shows on the profile page. The leaderboard
+        endpoint accepts a `user` filter (verified live 2026-07-05), so this is
+        the authoritative source for total_pnl/volume_usd regardless of rank."""
+        d = await self._get(
+            f"{DATA_API}/v1/leaderboard",
+            {"category": "OVERALL", "timePeriod": period, "orderBy": "PNL",
+             "user": wallet_address},
+        )
+        if isinstance(d, list) and d:
+            return LeaderEntry.from_api(d[0])
+        return None
+
     # --- geoblock ----------------------------------------------------------
     async def get_geoblock(self) -> dict:
         """Geo-restriction check for the caller's IP (call before placing orders).
@@ -335,13 +350,16 @@ class PolymarketClient:
         return {str(t.get("token_id")): (1.0 if t.get("winner") else 0.0)
                 for t in tokens}
 
-    async def get_redeems(self, wallet_address: str, limit: int = 50) -> list[dict]:
+    async def get_redeems(self, wallet_address: str, limit: int = 50,
+                          offset: int = 0) -> list[dict]:
         """REDEEM activity — how much a wallet was paid when resolved positions
         were redeemed (winners redeem $1/share; losers produce no payout).
-        Used to finalize copy positions whose market died before we could exit."""
+        Used to finalize copy positions whose market died before we could exit,
+        and by trader_stats to credit hold-to-resolution wins as realized PnL."""
         d = await self._get(
             f"{DATA_API}/activity",
-            {"user": wallet_address, "type": "REDEEM", "limit": limit},
+            {"user": wallet_address, "type": "REDEEM", "limit": limit,
+             "offset": offset},
         )
         return d if isinstance(d, list) else []
 

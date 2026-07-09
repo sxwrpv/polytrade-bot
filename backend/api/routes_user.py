@@ -1,6 +1,7 @@
-"""/api/user/* — wallet onboarding, profile, PnL, settings, referral, key export."""
+"""/api/user/* — wallet onboarding, profile, PnL, settings, key export."""
 from __future__ import annotations
 
+import datetime as dt
 import logging
 import time
 
@@ -9,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from backend.config import CREATE_WALLET_RATE_LIMIT, ENCRYPTION_SECRET, TELEGRAM_BOT_TOKEN
-from backend.core import auth, pnl as pnl_mod, wallet
+from backend.core import auth, equity as equity_mod, pnl as pnl_mod, wallet
 from backend.api.deps import get_current_user, get_db, get_pm, get_user_client
 from backend.db.database import now_iso
 
@@ -47,7 +48,6 @@ router = APIRouter()
 
 class CreateWallet(BaseModel):
     display_name: str | None = None
-    referred_by: str | None = None
     init_data: str | None = None      # Telegram initData — links the account
 
 
@@ -89,7 +89,6 @@ async def create_wallet(body: CreateWallet, request: Request, db=Depends(get_db)
                 "SELECT * FROM users WHERE telegram_user_id = ?", (int(tg_user["id"]),))
             if existing:
                 return {"address": existing["id"], "signer_address": existing["signer_address"],
-                        "referral_code": existing["referral_code"],
                         "api_token": existing["api_token"],
                         "gasless": existing["id"] != existing["signer_address"]}
 
@@ -117,7 +116,6 @@ async def create_wallet(body: CreateWallet, request: Request, db=Depends(get_db)
         await client.close()
 
     enc = wallet.encrypt_private_key(pk, ENCRYPTION_SECRET)
-    ref_code = "REF" + signer[2:8].upper()
     token = auth.new_api_token()
     display_name = body.display_name
     if not display_name and tg_user:
@@ -125,29 +123,48 @@ async def create_wallet(body: CreateWallet, request: Request, db=Depends(get_db)
     try:
         await db.execute(
             "INSERT INTO users(id, signer_address, api_token, telegram_user_id, "
-            "display_name, private_key_enc, referral_code, referred_by, created_at) "
-            "VALUES(?,?,?,?,?,?,?,?,?)",
+            "display_name, private_key_enc, created_at) "
+            "VALUES(?,?,?,?,?,?,?)",
             (funder, signer, token, int(tg_user["id"]) if tg_user else None,
-             display_name, enc, ref_code, body.referred_by, now_iso()))
+             display_name, enc, now_iso()))
     except aiosqlite.IntegrityError:
         raise HTTPException(409, "wallet already exists")
-    return {"address": funder, "signer_address": signer, "referral_code": ref_code,
+    return {"address": funder, "signer_address": signer,
             "api_token": token, "gasless": funder != signer}
 
 
 @router.get("/me")
-async def me(request: Request, balance: bool = False, user=Depends(get_current_user)):
-    bal = None
-    if balance:   # live balance is expensive (derives creds) — opt-in
+async def me(request: Request, balance: bool = False,
+             user=Depends(get_current_user), pmc=Depends(get_pm)):
+    """Profile. With ?balance=true it also computes the account's money split:
+      balance       = free cash collateral (spendable pUSD)
+      positions_val = live market value of open positions
+      claimable     = value of resolved-but-unredeemed winnings (redeem on
+                      polymarket.com to turn into cash; not auto-claimed)
+      equity        = balance + positions_val + claimable (total account value)
+    Splitting these is why the single 'balance' looked wrong: money sitting in
+    open positions or unclaimed wins was invisible."""
+    bal = positions_val = claimable = equity = None
+    if balance:   # live reads are expensive (derive creds) — opt-in
         try:
             client = await get_user_client(request, user)
             r = await client.get_balance_allowance(asset_type="COLLATERAL")
             bal = r.balance / 1e6
         except Exception:
             bal = None
+        try:
+            positions = await pmc.get_positions(user["id"], size_threshold=0)
+            positions_val = round(sum(p.current_value for p in positions
+                                      if p.size > 0 and not p.redeemable), 2)
+            claimable = round(sum(p.current_value for p in positions
+                                  if p.size > 0 and p.redeemable), 2)
+        except Exception:
+            positions_val = claimable = None
+        if bal is not None:
+            equity = round(bal + (positions_val or 0.0) + (claimable or 0.0), 2)
     return {"address": user["id"], "signer_address": user["signer_address"],
             "display_name": user["display_name"], "balance": bal,
-            "referral_code": user["referral_code"],
+            "positions_value": positions_val, "claimable": claimable, "equity": equity,
             # deposit wallet (gasless) vs EOA fallback — cheap DB-only check,
             # no client build needed: a deposit wallet's funder != its signer.
             "gasless": user["id"] != user["signer_address"]}
@@ -171,19 +188,27 @@ async def deposit_address(user=Depends(get_current_user), pmc=Depends(get_pm)):
     }
 
 
+ACTIVITY_WINDOW_HOURS = 12
+
+
 @router.get("/activity")
 async def activity(limit: int = 30, user=Depends(get_current_user), db=Depends(get_db)):
     """The engine's recent actions on this account — the 'it's alive' feed.
-    Every open/close/partial/resolve the copy engine (or a manual close)
-    records lands in trade_events; joined here with the position's market."""
+    Only the last 12h is shown (a live feed, not a full ledger — closed-position
+    history and PnL stats cover the long tail). Resolutions ('resolve') are
+    excluded: a market resolving isn't an action the bot took; its realized PnL
+    still lands in the PnL stats / closed positions."""
     limit = max(1, min(int(limit), 100))
+    cutoff = (dt.datetime.now(dt.timezone.utc)
+              - dt.timedelta(hours=ACTIVITY_WINDOW_HOURS)).isoformat()
     rows = await db.fetchall(
         "SELECT e.ts, e.event_type, e.amount_usd, e.pnl, "
         "p.market_title, p.market_slug, p.outcome, p.trader_address, "
         "p.entry_price, p.exit_price "
         "FROM trade_events e JOIN copy_positions p ON p.id = e.position_id "
-        "WHERE e.user_id = ? ORDER BY e.ts DESC LIMIT ?",
-        (user["id"], limit))
+        "WHERE e.user_id = ? AND e.event_type != 'resolve' AND e.ts >= ? "
+        "ORDER BY e.ts DESC LIMIT ?",
+        (user["id"], cutoff, limit))
     for r in rows:
         cached = await db.fetchone(
             "SELECT display_name FROM trader_cache WHERE address = ?",
@@ -198,6 +223,13 @@ async def pnl(period: str = "30d", user=Depends(get_current_user),
     stats = await pnl_mod.get_pnl_stats(user["id"], db, pmc)
     curve = await pnl_mod.get_equity_curve(user["id"], db, period)
     return {**stats, "equity_curve": curve}
+
+
+@router.get("/equity-series")
+async def equity_series(period: str = "7d", user=Depends(get_current_user), db=Depends(get_db)):
+    """Downsampled equity/PnL snapshots for the Performance line chart.
+    period=7d (5-min points) | 30d (30-min) | all (4-hour)."""
+    return await equity_mod.get_series(db, user["id"], period)
 
 
 @router.get("/pnl/by-wallet")
@@ -228,13 +260,6 @@ async def update_settings(body: SettingsBody, user=Depends(get_current_user), db
         await db.execute(f"UPDATE users SET {cols} WHERE id = ?",
                          [*updates.values(), user["id"]])
     return {"ok": True, "updated": list(updates)}
-
-
-@router.get("/referral")
-async def referral(user=Depends(get_current_user), db=Depends(get_db)):
-    cnt = await db.fetchval("SELECT COUNT(*) FROM users WHERE referred_by = ?",
-                            (user["referral_code"],))
-    return {"code": user["referral_code"], "referred_count": cnt or 0, "total_earned": 0.0}
 
 
 @router.post("/export-key")

@@ -6,9 +6,11 @@ and current positions.
 
 Consistency is a quality signal that rewards steady positive days and penalizes
 volatility — so a flashy one-day whale ranks below a grinder. Daily realized PnL
-is approximated from trades via average-cost accounting (positions held to
-on-chain resolution aren't in the TRADE feed, so this is a proxy, not the
-authoritative total — the leaderboard's pnl is authoritative for total).
+uses average-cost accounting over the merged TRADE + REDEEM streams, with
+expired (resolved-and-lost) holdings realized as losses — see
+`realized_closings`. Still an approximation (basis older than the fetched
+window is skipped); the leaderboard's pnl stays authoritative for lifetime
+totals.
 
 Wallet screener (see UX_AND_WALLET_SCREENER_PLAN.md): win rate / pnl / volume /
 consistency (green vs red days) / fill-exit ratio are all precomputed per trader
@@ -58,37 +60,107 @@ def assign_tier(score: float) -> str:
     return "bronze"
 
 
-def _avg_cost_walk(trades):
-    """Yield (day, realized_pnl, is_win) per closing SELL via average-cost basis."""
-    books: dict[str, list[float]] = {}   # asset -> [shares, cost_total]
-    for t in sorted(trades, key=lambda x: x.timestamp):
-        day = dt.datetime.utcfromtimestamp(t.timestamp).strftime("%Y-%m-%d")
-        b = books.setdefault(t.asset, [0.0, 0.0])
-        if t.side == "BUY":
-            b[0] += t.size
-            b[1] += t.size * t.price
-        elif t.side == "SELL" and b[0] > 0:
-            avg = b[1] / b[0]
-            sold = min(t.size, b[0])
-            realized = (t.price - avg) * sold
-            b[1] -= avg * sold
-            b[0] -= sold
-            yield day, realized, t.price > avg
+def _day(ts: float) -> str:
+    return dt.datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d")
 
 
-def daily_realized_pnl(trades) -> dict[str, float]:
+def realized_closings(trades, redeems=(), positions=(), *,
+                      positions_truncated: bool = False):
+    """All realized outcomes as [(day, realized_pnl, is_win)], avg-cost basis.
+
+    Four ways a position realizes, and ALL must count or the stats lie. The
+    failure that motivated this (seen live 2026-07-05, wallet 0xe221…06f6):
+    a hold-to-resolution trader showed 94% WR / zero red days / +$907k because
+    only wins were visible — its 18 resolved LOSING positions (−$622k) sit in
+    the wallet as `redeemable` leftovers with cur_price 0: no SELL, no REDEEM
+    record (losers have nothing to claim), so they were invisible. Official
+    lifetime pnl was +$286k, not +$907k.
+
+      1. SELL             — realized vs. avg cost (the classic walk).
+      2. REDEEM           — resolved & claimed (a win): payout − cost basis of
+                            the condition's tokens (per-condition netting is
+                            exact even for both-sides holders).
+      3. resolved holding — a `redeemable` position still in the wallet
+                            (resolved, not yet claimed). WIN or LOSS. Uses the
+                            API's own cash_pnl (current_value − initial_value),
+                            which is authoritative even when the cost basis
+                            predates the fetched trade window. This is the leg
+                            that was missing.
+      4. expired-away     — bought, resolved, and no longer in the wallet at
+                            all (not sold, not redeemed, not a current
+                            position): residual cost basis realized as a loss,
+                            dated to the last trade. Skipped when the positions
+                            list was truncated (absence then proves nothing).
+    """
+    books: dict[str, list[float]] = {}          # asset -> [shares, cost_total]
+    cond_assets: dict[str, set] = defaultdict(set)   # condition -> assets traded
+    last_ts: dict[str, float] = {}
+    events = [(t.timestamp, 0, t) for t in trades]
+    for r in redeems:
+        events.append((int(r.get("timestamp") or 0), 1, r))
+    events.sort(key=lambda e: (e[0], e[1]))      # redeem after same-second trades
+    out: list[tuple[str, float, bool]] = []
+    for ts, kind, obj in events:
+        if kind == 0:                            # TRADE
+            b = books.setdefault(obj.asset, [0.0, 0.0])
+            cond_assets[obj.condition_id].add(obj.asset)
+            last_ts[obj.asset] = ts
+            if obj.side == "BUY":
+                b[0] += obj.size
+                b[1] += obj.size * obj.price
+            elif obj.side == "SELL" and b[0] > 0:
+                avg = b[1] / b[0]
+                sold = min(obj.size, b[0])
+                b[1] -= avg * sold
+                b[0] -= sold
+                out.append((_day(ts), (obj.price - avg) * sold, obj.price > avg))
+        else:                                    # REDEEM
+            cid = str(obj.get("conditionId", ""))
+            payout = float(obj.get("usdcSize") or 0.0)
+            cost = 0.0
+            for a in cond_assets.get(cid, ()):
+                sh, c = books.get(a, (0.0, 0.0))
+                cost += c
+                books[a] = [0.0, 0.0]
+            if cost > 0:                         # basis known -> realize
+                out.append((_day(ts), payout - cost, payout > cost))
+
+    # 3. resolved-but-held positions (the missing loss leg). cash_pnl from the
+    #    API is authoritative; date to the last trade on the token (proxy for
+    #    the resolution date — these are fast markets that resolve near the last
+    #    buy) or now if the buys predate the fetched window.
+    held_assets: set = set()
+    for p in positions:
+        if getattr(p, "size", 0) <= 0.01:
+            continue
+        if p.redeemable:
+            books[p.asset] = [0.0, 0.0]          # consumed -> no expired double-count
+            ts = last_ts.get(p.asset, time.time())
+            out.append((_day(ts), p.cash_pnl, p.cur_price >= 0.5))
+        else:
+            held_assets.add(p.asset)             # genuinely open -> leave basis
+
+    # 4. expired-away: cost basis on a token that is neither still held nor
+    #    resolved-in-wallet -> realize the loss (unless the list was truncated).
+    if not positions_truncated:
+        for a, (sh, c) in books.items():
+            if sh > 0.01 and c > 0.005 and a not in held_assets:
+                out.append((_day(last_ts.get(a, 0)), -c, False))
+
+    out.sort(key=lambda e: e[0])
+    return out
+
+
+def daily_realized_pnl(closings) -> dict[str, float]:
     daily: dict[str, float] = defaultdict(float)
-    for day, realized, _ in _avg_cost_walk(trades):
+    for day, realized, _ in closings:
         daily[day] += realized
     return dict(daily)
 
 
-def trade_win_rate(trades) -> float:
-    wins = total = 0
-    for _, _, is_win in _avg_cost_walk(trades):
-        total += 1
-        wins += 1 if is_win else 0
-    return wins / total if total else 0.0
+def win_rate_of(closings) -> float:
+    wins = sum(1 for _, _, is_win in closings if is_win)
+    return wins / len(closings) if closings else 0.0
 
 
 def _period_metrics(closings: list[tuple], trades: list, days: int) -> dict:
@@ -137,7 +209,18 @@ def _period_metrics(closings: list[tuple], trades: list, days: int) -> dict:
     }
 
 
+def clean_display_name(name: str | None) -> str | None:
+    """Polymarket auto-generates '0x<signer>-<timestamp>' userNames for wallets
+    that never set one — treat those as no name so every UI surface falls back
+    to the short address instead of a 60-char blob."""
+    if not name or name.startswith("0x"):
+        return None
+    return name
+
+
 async def _upsert(db, address: str, fields: dict) -> None:
+    if "display_name" in fields:
+        fields = {**fields, "display_name": clean_display_name(fields["display_name"])}
     fields = {**fields, "last_refreshed": now_iso()}
     cols = ["address", *fields]
     placeholders = ",".join("?" * len(cols))
@@ -221,33 +304,77 @@ async def discover_active_wallets(db, pm, *, target: int = 2000) -> int:
     return len(seen)
 
 
+_PAGE_SIZE = 1000        # activity endpoint's verified single-call max
+_MAX_TRADE_PAGES = 4     # up to 4000 trades — covers 90d for all but extreme whales
+_MAX_REDEEM_PAGES = 2
+_POSITIONS_LIMIT = 500
+
+
+async def _fetch_activity_window(fetch, days: int, max_pages: int) -> tuple[list, bool]:
+    """Page through a most-recent-first activity fetcher until the window is
+    covered or the page budget runs out. Returns (rows, covered): covered=False
+    means the wallet is so active the oldest fetched row is still inside the
+    window — stats then honestly reflect partial coverage (surfaced to the UI
+    via history_days)."""
+    cutoff = time.time() - days * 86400
+    rows: list = []
+    for page in range(max_pages):
+        batch = await fetch(limit=_PAGE_SIZE, offset=page * _PAGE_SIZE)
+        rows.extend(batch)
+        if len(batch) < _PAGE_SIZE:
+            return rows, True                    # feed exhausted — full coverage
+        oldest = batch[-1] if not isinstance(batch[-1], dict) else None
+        oldest_ts = (oldest.timestamp if oldest is not None
+                     else int(batch[-1].get("timestamp") or 0))
+        if oldest_ts < cutoff:
+            return rows, True
+    return rows, False
+
+
 async def refresh_trader_stats(address: str, db, pm) -> dict:
     """Enrich one trader: consistency, win rate, trade count, open positions, and
     the windowed screener metrics (winrate/pnl/volume/consistency/fill-exit ratio
-    at 7d/30d/90d) + pnl_quality. Two API calls (trades + positions) — run for
-    the traders shown on the board, and periodically for the whole cache (see
-    `refresh_all`).
+    at 7d/30d/90d) + pnl_quality. 3-8 API calls (paginated trades + redeems +
+    positions) — run for the traders shown on the board, and periodically for
+    the whole cache (see `refresh_all`).
 
-    total_pnl/volume_usd from the official leaderboard are authoritative (see
-    module docstring) and are only filled in here if still unset — e.g. a
-    manually-followed trader outside the seeded top-N. Never overwritten with
-    this trade-window approximation, which would otherwise silently replace a
-    whale's real lifetime PnL with whatever their last 500 trades sum to.
+    total_pnl/volume_usd come from the leaderboard's per-user filter — the
+    official lifetime numbers polymarket.com shows, fetched fresh on every
+    refresh. The trade-walk approximation is only the fallback for wallets the
+    leaderboard endpoint doesn't know at all.
     """
-    # 1000 = the endpoint's verified single-call max — for hyper-active whales
-    # this may still cover fewer than 90 days; the windowed stats and daily
-    # series honestly reflect whatever the window covers.
-    trades = await pm.get_trade_history(address, limit=1000)
-    positions = await pm.get_positions(address, size_threshold=0)
+    trades, trades_covered = await _fetch_activity_window(
+        lambda limit, offset: pm.get_trade_history(address, limit=limit, offset=offset),
+        days=90, max_pages=_MAX_TRADE_PAGES)
+    redeems, _ = await _fetch_activity_window(
+        lambda limit, offset: pm.get_redeems(address, limit=limit, offset=offset),
+        days=90, max_pages=_MAX_REDEEM_PAGES)
+    positions = await pm.get_positions(address, size_threshold=0,
+                                       limit=_POSITIONS_LIMIT)
     open_positions = sum(1 for p in positions if p.size > 0 and not p.redeemable)
-    unrealized = sum(p.cash_pnl for p in positions)
+    # unrealized = OPEN positions only. Resolved-but-held (`redeemable`)
+    # positions are realized outcomes, not paper — counting their cash_pnl here
+    # would double-book them against the realized closings below.
+    unrealized = sum(p.cash_pnl for p in positions
+                     if p.size > 0 and not p.redeemable)
+    # truncated list -> can't prove a token is "gone", so skip expired-away
+    positions_truncated = len(positions) >= _POSITIONS_LIMIT
 
-    closings = list(_avg_cost_walk(trades))
-    series = [v for _, v in sorted(daily_realized_pnl(trades).items())]
+    closings = realized_closings(trades, redeems, positions,
+                                 positions_truncated=positions_truncated)
+    daily_all = daily_realized_pnl(closings)
+    series = [v for _, v in sorted(daily_all.items())]
     score = consistency_score(series)
     total_realized = sum(series)
 
-    daily_all = daily_realized_pnl(trades)
+    # how far back the fetched history actually reaches: 90 = the whole window
+    # is covered; less = the page budget ran out first (hyper-active wallet),
+    # and the UI flags any period wider than this as partial data
+    if trades_covered:
+        history_days = 90.0
+    else:
+        oldest_ts = min((t.timestamp for t in trades), default=time.time())
+        history_days = round((time.time() - oldest_ts) / 86400, 1)
     cutoff_90d = (dt.datetime.now(dt.timezone.utc)
                   - dt.timedelta(days=90)).strftime("%Y-%m-%d")
     daily_90d = {day: round(v, 2) for day, v in sorted(daily_all.items())
@@ -255,7 +382,7 @@ async def refresh_trader_stats(address: str, db, pm) -> dict:
 
     stats = {
         "consistency_score": score,
-        "win_rate": round(trade_win_rate(trades), 4),
+        "win_rate": round(win_rate_of(closings), 4),
         "total_trades": len(trades),
         "open_positions": open_positions,
         "unrealized_pnl": round(unrealized, 2),
@@ -265,14 +392,32 @@ async def refresh_trader_stats(address: str, db, pm) -> dict:
         "pnl_quality": round(total_realized - unrealized, 2),
         # per-day realized pnl for the per-card equity sparkline
         "daily_pnl_90d": json.dumps(daily_90d, separators=(",", ":")),
+        "history_days": history_days,
         "stats_refreshed_at": now_iso(),
     }
-    existing = await db.fetchone(
-        "SELECT total_pnl, volume_usd FROM trader_cache WHERE address = ?", (address,))
-    if existing is None or existing["total_pnl"] is None:
-        stats["total_pnl"] = round(total_realized + unrealized, 2)
-    if existing is None or existing["volume_usd"] is None:
-        stats["volume_usd"] = round(sum(t.usd_size for t in trades), 2)
+    # lifetime pnl/vol: the leaderboard's per-user filter returns the official
+    # numbers (what polymarket.com shows) for ANY wallet, ranked or not — use
+    # them whenever available; fall back to our walk approximation only when
+    # the endpoint doesn't know the wallet.
+    try:
+        official = await pm.get_leaderboard_user(address)
+    except Exception:
+        log.exception("official pnl lookup failed for %s (using approximation)", address)
+        official = None
+    if official is not None:
+        stats["total_pnl"] = official.pnl
+        stats["volume_usd"] = official.vol
+        if official.user_name:
+            stats["display_name"] = official.user_name
+        if official.x_username:
+            stats["x_username"] = official.x_username
+    else:
+        existing = await db.fetchone(
+            "SELECT total_pnl, volume_usd FROM trader_cache WHERE address = ?", (address,))
+        if existing is None or existing["total_pnl"] is None:
+            stats["total_pnl"] = round(total_realized + unrealized, 2)
+        if existing is None or existing["volume_usd"] is None:
+            stats["volume_usd"] = round(sum(t.usd_size for t in trades), 2)
     for period_key, days in _PERIODS.items():
         m = _period_metrics(closings, trades, days)
         stats[f"winrate_{period_key}"] = m["winrate"]
@@ -296,8 +441,8 @@ async def refresh_all(db, pm, *, limit: int = 200, concurrency: int = 8) -> int:
     refresh loop ROTATES through the whole discovered population instead of
     re-polishing the same top-N forever (the bug that kept every wallet
     outside the top 100 permanently statless). Batches run concurrently
-    (bounded); 2 API calls per wallet. Meant for the background loop in
-    main.py, not per-request."""
+    (bounded); 3-8 API calls per wallet (paginated trades + redeems +
+    positions). Meant for the background loop in main.py, not per-request."""
     rows = await db.fetchall(
         "SELECT address FROM trader_cache "
         "ORDER BY (stats_refreshed_at IS NULL) DESC, stats_refreshed_at ASC "

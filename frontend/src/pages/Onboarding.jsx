@@ -13,15 +13,9 @@ export default function Onboarding({ onDone }) {
     setErr('')
     try {
       // Inside Telegram, initData links the account — a returning Telegram
-      // user gets their existing wallet back instead of a duplicate. The
-      // referral code rides in via the t.me deep link's start_param (or ?ref=
-      // on the web).
+      // user gets their existing wallet back instead of a duplicate.
       const initData = window.Telegram?.WebApp?.initData || null
-      const referredBy =
-        window.Telegram?.WebApp?.initDataUnsafe?.start_param ||
-        new URLSearchParams(window.location.search).get('ref') ||
-        null
-      const r = await api.createWallet({ init_data: initData, referred_by: referredBy })
+      const r = await api.createWallet({ init_data: initData })
       saveSession({ address: r.address, token: r.api_token })
       haptic('success')
       setResult(r)

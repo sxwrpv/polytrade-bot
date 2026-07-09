@@ -365,6 +365,16 @@ input:focus, select:focus {
 }
 .slider-num { width: 64px; flex: none; text-align: right; font-family: var(--mono); }
 
+/* per-wallet settings (2-up grid of sliders, screenshot layout) */
+.settings-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 4px 16px; margin-top: 8px;
+}
+.settings-grid .fld { margin: 6px 0; }
+.setting-head { display: flex; justify-content: space-between; align-items: center; }
+.setting-val { font-family: var(--mono); color: var(--green-fill); font-size: 12px; letter-spacing: 0; }
+.setting-hint { text-transform: none; letter-spacing: 0; margin-top: 2px; }
+
 /* wallet search */
 .search-box {
   width: 100%; margin-bottom: 12px; padding: 11px 14px;

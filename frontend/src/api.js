@@ -37,8 +37,6 @@ export function haptic(type = 'success') {
 }
 
 export const api = {
-  // public
-  config: () => req('/config'),
   // auth
   telegramAuth: (initData) =>
     req('/auth/telegram', { method: 'POST', body: JSON.stringify({ init_data: initData }) }),
@@ -46,12 +44,12 @@ export const api = {
   createWallet: (body) => req('/user/create-wallet', { method: 'POST', body: JSON.stringify(body) }),
   me: (balance = false) => req(`/user/me${balance ? '?balance=true' : ''}`),
   pnl: (period = '30d') => req(`/user/pnl?period=${period}`),
+  equitySeries: (period = '7d') => req(`/user/equity-series?period=${period}`),
   pnlByWallet: () => req('/user/pnl/by-wallet'),
   getSettings: () => req('/user/settings'),
   activity: (limit = 30) => req(`/user/activity?limit=${limit}`),
   depositAddress: () => req('/user/deposit-address'),
   settings: (body) => req('/user/settings', { method: 'POST', body: JSON.stringify(body) }),
-  referral: () => req('/user/referral'),
   exportKey: () => req('/user/export-key', { method: 'POST' }),
   // traders — leaderboard doubles as the wallet screener: pass sort/limit/offset
   // plus any number of `<column>_min` / `<column>_max` filter keys (see
@@ -72,4 +70,7 @@ export const api = {
   openPositions: () => req('/positions/open'),
   closedPositions: () => req('/positions/closed'),
   closePosition: (id) => req(`/positions/${id}/close`, { method: 'POST' }),
+  // sell a wallet holding the bot didn't open (marked MANUAL on the card)
+  closeExternal: (tokenId) =>
+    req('/positions/close-external', { method: 'POST', body: JSON.stringify({ token_id: tokenId }) }),
 }

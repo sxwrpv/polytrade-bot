@@ -29,6 +29,13 @@ export default function WalletScreener({ onFollowed, balance }) {
   const [search, setSearch] = useState('')
   const [traders, setTraders] = useState([])
   const [loading, setLoading] = useState(true)
+  // paste-any-wallet stats checker: a full 0x address that isn't cached yet is
+  // fetched live via GET /traders/{address} (2 Polymarket calls, ~seconds) and
+  // rendered as a normal TraderCard; the backend caches it for next time.
+  const [checked, setChecked] = useState(null)
+  const [checking, setChecking] = useState(false)
+  const [checkErr, setCheckErr] = useState('')
+  const searchAddr = /^0x[0-9a-fA-F]{40}$/.test(search.trim()) ? search.trim().toLowerCase() : null
 
   const clearField = (k) => setF((p) => ({ ...p, [k]: '' }))
   const clearAll = () => setF(EMPTY)
@@ -63,6 +70,24 @@ export default function WalletScreener({ onFollowed, balance }) {
     }
   }, [params])
 
+  // live wallet check — fires once the cache search settles empty for a pasted address
+  useEffect(() => {
+    setChecked(null)
+    setCheckErr('')
+    if (!searchAddr || loading) return
+    if (traders.some((t) => t.address?.toLowerCase() === searchAddr)) return
+    let alive = true
+    setChecking(true)
+    api
+      .trader(searchAddr)
+      .then((t) => alive && setChecked(t))
+      .catch((e) => alive && setCheckErr(String(e.message || e)))
+      .finally(() => alive && setChecking(false))
+    return () => {
+      alive = false
+    }
+  }, [searchAddr, loading, traders])
+
   const chips = useMemo(() => {
     const P = period.toUpperCase()
     const out = []
@@ -82,7 +107,7 @@ export default function WalletScreener({ onFollowed, balance }) {
         className="search-box"
         value={search}
         onChange={(e) => setSearch(e.target.value)}
-        placeholder="&gt; search wallet address / name / x handle…"
+        placeholder="&gt; search name / x handle, or paste any 0x address to check it…"
       />
 
       <Folder id="screener-filters" title="FILTERS" open>
@@ -159,9 +184,22 @@ export default function WalletScreener({ onFollowed, balance }) {
           <div className="card skeleton" />
         </>
       ) : traders.length === 0 ? (
-        <div className="muted">
-          {search.trim() ? `no cached wallet matches "${search.trim()}"` : 'no wallets match these filters'}
-        </div>
+        checking ? (
+          <>
+            <div className="muted">checking wallet stats live (computing win rate / pnl / consistency)…</div>
+            <div className="card skeleton" />
+          </>
+        ) : checked ? (
+          <TraderCard t={checked} period={period} onFollowed={onFollowed} balance={balance} />
+        ) : checkErr ? (
+          <div className="warn-box">wallet check failed: {checkErr}</div>
+        ) : (
+          <div className="muted">
+            {search.trim()
+              ? `no cached wallet matches "${search.trim()}" — paste a full 0x address to check any wallet live`
+              : 'no wallets match these filters'}
+          </div>
+        )
       ) : (
         traders.map((t) => (
           <TraderCard key={t.address} t={t} period={period} onFollowed={onFollowed} balance={balance} />
