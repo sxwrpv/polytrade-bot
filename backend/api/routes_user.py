@@ -7,7 +7,7 @@ import time
 
 import aiosqlite
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from backend.config import CREATE_WALLET_RATE_LIMIT, ENCRYPTION_SECRET, TELEGRAM_BOT_TOKEN
 from backend.core import auth, equity as equity_mod, pnl as pnl_mod, wallet
@@ -52,14 +52,14 @@ class CreateWallet(BaseModel):
 
 
 class SettingsBody(BaseModel):
-    display_name: str | None = None
+    display_name: str | None = Field(None, max_length=80)
     paused: bool | None = None
-    copy_multiplier: float | None = None
-    max_slippage_pct: float | None = None
-    max_total_exposure_usd: float | None = None
-    daily_loss_limit_usd: float | None = None
-    default_allocation_pct: float | None = None
-    default_max_position_usd: float | None = None
+    copy_multiplier: float | None = Field(None, ge=0.1, le=5)
+    max_slippage_pct: float | None = Field(None, ge=0, le=10)
+    max_total_exposure_usd: float | None = Field(None, ge=0, le=100000)
+    daily_loss_limit_usd: float | None = Field(None, ge=0, le=100000)
+    default_allocation_pct: float | None = Field(None, ge=0, le=100)
+    default_max_position_usd: float | None = Field(None, ge=1, le=500)
 
 
 _SETTINGS_KEYS = (
@@ -251,14 +251,39 @@ async def get_settings(user=Depends(get_current_user)):
 
 
 @router.post("/settings")
-async def update_settings(body: SettingsBody, user=Depends(get_current_user), db=Depends(get_db)):
+async def update_settings(body: SettingsBody, request: Request,
+                          user=Depends(get_current_user), db=Depends(get_db)):
     updates = {k: v for k, v in body.model_dump(exclude_unset=True).items() if k in _SETTINGS_KEYS}
     if "paused" in updates:
         updates["paused"] = int(bool(updates["paused"]))
+    for key in ("max_total_exposure_usd", "daily_loss_limit_usd"):
+        if updates.get(key) == 0:
+            updates[key] = None
     if updates:
         cols = ", ".join(f"{k} = ?" for k in updates)
-        await db.execute(f"UPDATE users SET {cols} WHERE id = ?",
-                         [*updates.values(), user["id"]])
+        lock = getattr(request.app.state, "copy_risk_lock", None)
+        async def apply_update():
+            async with db.transaction(write=True) as tx:
+                user_sql = "SELECT id FROM users WHERE id=?" + (" FOR UPDATE" if db.is_pg else "")
+                await tx.fetchone(user_sql, (user["id"],))
+                await tx.execute("UPDATE users SET risk_revision=risk_revision+1 WHERE id=?", (user["id"],))
+                await tx.execute(f"UPDATE users SET {cols} WHERE id=?", [*updates.values(), user["id"]])
+        if lock is None:
+            await apply_update()
+        else:
+            async with lock:
+                await apply_update()
+    if updates:
+        import asyncio
+        for _ in range(50):
+            pending = await db.fetchval(
+                "SELECT COUNT(*) FROM copy_open_claims WHERE user_id=? AND state='submitting'",
+                (user["id"],))
+            if not pending:
+                break
+            await asyncio.sleep(0.1)
+        else:
+            raise HTTPException(503, "pause persisted; an in-flight order needs reconciliation")
     return {"ok": True, "updated": list(updates)}
 
 

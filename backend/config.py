@@ -4,11 +4,20 @@ Values come from the environment (.env loaded via python-dotenv). See .env.examp
 """
 from __future__ import annotations
 
+import math
 import os
 
 from dotenv import load_dotenv
 
 load_dotenv()
+
+
+def validate_slippage_pct(value: float | str, name: str = "slippage") -> float:
+    """Validate every slippage source, including env/DB values that bypass API models."""
+    value = float(value)
+    if not math.isfinite(value) or not 0 <= value <= 10:
+        raise ValueError(f"{name} must be a finite number from 0 to 10")
+    return value
 
 # --- Polymarket hosts ---
 CLOB_API = "https://clob.polymarket.com"
@@ -49,7 +58,7 @@ DETECTION_POLL_SECONDS = float(os.environ.get("DETECTION_POLL_SECONDS", "2"))
 # Slow reconciliation diff — catches missed trades, drift, and resolutions.
 COPY_ENGINE_POLL_SECONDS = float(os.environ.get("COPY_ENGINE_POLL_SECONDS", "30"))
 DEFAULT_ALLOCATION_PCT = float(os.environ.get("DEFAULT_ALLOCATION_PCT", "10.0"))
-DEFAULT_MAX_POSITION_USD = float(os.environ.get("DEFAULT_MAX_POSITION_USD", "50.0"))
+DEFAULT_MAX_POSITION_USD = float(os.environ.get("DEFAULT_MAX_POSITION_USD", "15.0"))
 # Per-wallet sizing model: each copy = the LEADER's position value × this %,
 # then capped by MAX/TRADE (max_position_usd), available collateral, and the
 # per-trader exposure cap. 1.0 = copy 1% of the leader's dollar position.
@@ -68,7 +77,8 @@ DEFAULT_IGNORE_BELOW_USD = float(os.environ.get("DEFAULT_IGNORE_BELOW_USD", "2.0
 # pre-flight quote is still checked against leader_price*(1+this) and the copy
 # is skipped if the market ran further than that. Per-wallet override exists
 # (followed_traders.max_slippage_pct).
-MAX_COPY_SLIPPAGE_PCT = float(os.environ.get("MAX_COPY_SLIPPAGE_PCT", "2.0"))
+MAX_COPY_SLIPPAGE_PCT = validate_slippage_pct(
+    os.environ.get("MAX_COPY_SLIPPAGE_PCT", "2.0"), "MAX_COPY_SLIPPAGE_PCT")
 
 # --- Server ---
 HOST = os.environ.get("HOST", "0.0.0.0")

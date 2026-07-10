@@ -29,12 +29,13 @@ CREATE TABLE IF NOT EXISTS users (
     referred_by             TEXT,
     -- risk settings (engine-enforced; NULL = use global default)
     paused                  INTEGER NOT NULL DEFAULT 0,   -- master kill-switch
+    risk_revision           INTEGER NOT NULL DEFAULT 0,   -- invalidates reserved BUYs on settings changes
     copy_multiplier         REAL NOT NULL DEFAULT 1.0,    -- 0.1x..5x scaling of every copy
     max_slippage_pct        REAL,                          -- per-user cap vs leader price
     max_total_exposure_usd  REAL,                          -- cap on total open notional
     daily_loss_limit_usd    REAL,                          -- block opens after today's loss hits this
     default_allocation_pct  REAL NOT NULL DEFAULT 10.0,    -- prefill for follow modal
-    default_max_position_usd REAL NOT NULL DEFAULT 50.0,
+    default_max_position_usd REAL NOT NULL DEFAULT 15.0,
     created_at              TEXT NOT NULL
 );
 
@@ -44,7 +45,7 @@ CREATE TABLE IF NOT EXISTS followed_traders (
     trader_address   TEXT NOT NULL,                    -- proxyWallet of the copied trader
     -- per-wallet risk settings (each copied trader is configured independently)
     allocation_pct   REAL NOT NULL DEFAULT 10.0,       -- LEGACY (portfolio-weight model); superseded by copy_ratio_pct
-    max_position_usd REAL NOT NULL DEFAULT 50.0,       -- MAX/TRADE: pUSD cap per position
+    max_position_usd REAL NOT NULL DEFAULT 15.0,       -- MAX/TRADE: pUSD cap per position
     paused           INTEGER NOT NULL DEFAULT 0,       -- ENABLED (inverted): 1 = paused (no new buys)
     max_slippage_pct REAL,                              -- vs leader price (NULL = global)
     max_total_exposure_usd REAL,                        -- MAX EXPOSURE: cap total open notional for this trader
@@ -79,6 +80,23 @@ CREATE TABLE IF NOT EXISTS copy_positions (
     realized_pnl  REAL,
     opened_at     TEXT NOT NULL,
     closed_at     TEXT
+);
+
+-- Reservation acquired before any BUY reaches the exchange. A crash between
+-- fill and persistence deliberately leaves the claim behind (fail closed).
+CREATE TABLE IF NOT EXISTS copy_open_claims (
+    user_id        TEXT NOT NULL REFERENCES users(id),
+    token_id       TEXT NOT NULL,
+    trader_address TEXT NOT NULL,
+    claim_id       TEXT NOT NULL,
+    action         TEXT NOT NULL DEFAULT 'open',
+    state          TEXT NOT NULL DEFAULT 'reserved',
+    reserved_usd   DOUBLE PRECISION NOT NULL DEFAULT 0,
+    risk_revision  INTEGER NOT NULL DEFAULT 0,
+    claimed_at     TEXT NOT NULL,
+    updated_at     TEXT NOT NULL,
+    last_error     TEXT,
+    PRIMARY KEY(user_id, token_id)
 );
 
 CREATE TABLE IF NOT EXISTS trade_events (
@@ -165,10 +183,7 @@ CREATE TABLE IF NOT EXISTS trader_cache (
 
 CREATE INDEX IF NOT EXISTS idx_copy_positions_user_status
     ON copy_positions(user_id, status);
--- at most one OPEN position per (user, token): lets the fast detection path and
--- the slow reconciler both attempt an open; the loser hits this and is skipped.
-CREATE UNIQUE INDEX IF NOT EXISTS uq_open_position_per_token
-    ON copy_positions(user_id, token_id) WHERE status = 'open';
+-- Active/open fences are installed by MIGRATIONS after legacy duplicates are reconciled.
 CREATE INDEX IF NOT EXISTS idx_copy_positions_user_trader
     ON copy_positions(user_id, trader_address);
 CREATE INDEX IF NOT EXISTS idx_followed_active
@@ -184,20 +199,30 @@ CREATE INDEX IF NOT EXISTS idx_trader_cache_consistency_ratio_30d ON trader_cach
 CREATE INDEX IF NOT EXISTS idx_trader_cache_fill_exit_ratio_30d ON trader_cache(fill_exit_ratio_30d);
 """
 
-TABLES = ("users", "followed_traders", "copy_positions", "trade_events", "trader_cache")
+TABLES = ("users", "followed_traders", "copy_positions", "copy_open_claims", "trade_events", "trader_cache")
 
 # Idempotent ALTERs for DBs created before a column existed (CREATE TABLE IF NOT
 # EXISTS won't add columns to an existing table). Applied at startup; "duplicate
 # column" errors are ignored.
 MIGRATIONS = (
     "ALTER TABLE users ADD COLUMN paused INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE users ADD COLUMN risk_revision INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE users ADD COLUMN copy_multiplier REAL NOT NULL DEFAULT 1.0",
     "ALTER TABLE users ADD COLUMN max_slippage_pct REAL",
     "ALTER TABLE users ADD COLUMN max_total_exposure_usd REAL",
     "ALTER TABLE users ADD COLUMN daily_loss_limit_usd REAL",
     "ALTER TABLE users ADD COLUMN default_allocation_pct REAL NOT NULL DEFAULT 10.0",
-    "ALTER TABLE users ADD COLUMN default_max_position_usd REAL NOT NULL DEFAULT 50.0",
+    "ALTER TABLE users ADD COLUMN default_max_position_usd REAL NOT NULL DEFAULT 15.0",
     "ALTER TABLE copy_positions ADD COLUMN trader_shares REAL",
+    "ALTER TABLE copy_open_claims ADD COLUMN claim_id TEXT",
+    "ALTER TABLE copy_open_claims ADD COLUMN action TEXT NOT NULL DEFAULT 'open'",
+    "ALTER TABLE copy_open_claims ADD COLUMN state TEXT NOT NULL DEFAULT 'reserved'",
+    "ALTER TABLE copy_open_claims ADD COLUMN reserved_usd REAL NOT NULL DEFAULT 0",
+    "ALTER TABLE copy_open_claims ADD COLUMN risk_revision INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE copy_open_claims ADD COLUMN updated_at TEXT",
+    "ALTER TABLE copy_open_claims ADD COLUMN last_error TEXT",
+    "UPDATE copy_open_claims SET claim_id = COALESCE(claim_id, user_id || ':' || token_id)",
+    "UPDATE copy_open_claims SET updated_at = COALESCE(updated_at, claimed_at)",
     "ALTER TABLE users ADD COLUMN export_blob TEXT",
     "ALTER TABLE users ADD COLUMN signer_address TEXT",
     "ALTER TABLE followed_traders ADD COLUMN paused INTEGER NOT NULL DEFAULT 0",
@@ -262,6 +287,18 @@ MIGRATIONS = (
     "ALTER TABLE trader_cache ADD COLUMN stats_refreshed_at TEXT",
     "CREATE INDEX IF NOT EXISTS idx_trader_cache_stats_refreshed "
     "ON trader_cache(stats_refreshed_at)",
+    # Preserve every legacy row while reducing active duplicates before the
+    # partial unique fence is installed. Closing wins over open, then newest.
+    "WITH ranked AS (SELECT id, ROW_NUMBER() OVER ("
+    "PARTITION BY user_id,token_id ORDER BY CASE status WHEN 'closing' THEN 0 ELSE 1 END, "
+    "opened_at DESC,id DESC) AS rn FROM copy_positions "
+    "WHERE status IN ('open','closing')) "
+    "UPDATE copy_positions SET status='reconciliation_required' "
+    "WHERE id IN (SELECT id FROM ranked WHERE rn > 1)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_open_position_per_token "
+    "ON copy_positions(user_id,token_id) WHERE status='open'",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_active_position_per_token "
+    "ON copy_positions(user_id,token_id) WHERE status IN ('open','closing')",
 )
 
 
@@ -293,12 +330,13 @@ CREATE TABLE IF NOT EXISTS users (
     referral_code            TEXT UNIQUE,
     referred_by              TEXT,
     paused                   INTEGER NOT NULL DEFAULT 0,
+    risk_revision            INTEGER NOT NULL DEFAULT 0,
     copy_multiplier          DOUBLE PRECISION NOT NULL DEFAULT 1.0,
     max_slippage_pct         DOUBLE PRECISION,
     max_total_exposure_usd   DOUBLE PRECISION,
     daily_loss_limit_usd     DOUBLE PRECISION,
     default_allocation_pct   DOUBLE PRECISION NOT NULL DEFAULT 10.0,
-    default_max_position_usd DOUBLE PRECISION NOT NULL DEFAULT 50.0,
+    default_max_position_usd DOUBLE PRECISION NOT NULL DEFAULT 15.0,
     created_at               TEXT NOT NULL
 );
 
@@ -307,7 +345,7 @@ CREATE TABLE IF NOT EXISTS followed_traders (
     user_id                TEXT NOT NULL REFERENCES users(id),
     trader_address         TEXT NOT NULL,
     allocation_pct         DOUBLE PRECISION NOT NULL DEFAULT 10.0,
-    max_position_usd       DOUBLE PRECISION NOT NULL DEFAULT 50.0,
+    max_position_usd       DOUBLE PRECISION NOT NULL DEFAULT 15.0,
     paused                 INTEGER NOT NULL DEFAULT 0,
     max_slippage_pct       DOUBLE PRECISION,
     max_total_exposure_usd DOUBLE PRECISION,
@@ -340,7 +378,22 @@ CREATE TABLE IF NOT EXISTS copy_positions (
     exit_price     DOUBLE PRECISION,
     realized_pnl   DOUBLE PRECISION,
     opened_at      TEXT NOT NULL,
-    closed_at      TEXT
+    closed_at       TEXT
+);
+
+CREATE TABLE IF NOT EXISTS copy_open_claims (
+    user_id        TEXT NOT NULL REFERENCES users(id),
+    token_id       TEXT NOT NULL,
+    trader_address TEXT NOT NULL,
+    claim_id       TEXT NOT NULL,
+    action         TEXT NOT NULL DEFAULT 'open',
+    state          TEXT NOT NULL DEFAULT 'reserved',
+    reserved_usd   DOUBLE PRECISION NOT NULL DEFAULT 0,
+    risk_revision  INTEGER NOT NULL DEFAULT 0,
+    claimed_at     TEXT NOT NULL,
+    updated_at     TEXT NOT NULL,
+    last_error     TEXT,
+    PRIMARY KEY(user_id, token_id)
 );
 
 CREATE TABLE IF NOT EXISTS trade_events (
@@ -412,8 +465,20 @@ CREATE TABLE IF NOT EXISTS trader_cache (
 );
 
 CREATE INDEX IF NOT EXISTS idx_copy_positions_user_status ON copy_positions(user_id, status);
+-- Preserve every legacy row, preferring a closing fence and then the newest row.
+WITH ranked AS (
+    SELECT id, ROW_NUMBER() OVER (
+        PARTITION BY user_id, token_id
+        ORDER BY CASE status WHEN 'closing' THEN 0 ELSE 1 END, opened_at DESC, id DESC
+    ) AS rn
+    FROM copy_positions WHERE status IN ('open', 'closing')
+)
+UPDATE copy_positions AS p SET status = 'reconciliation_required'
+FROM ranked WHERE p.id = ranked.id AND ranked.rn > 1;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_open_position_per_token
     ON copy_positions(user_id, token_id) WHERE status = 'open';
+CREATE UNIQUE INDEX IF NOT EXISTS uq_active_position_per_token
+    ON copy_positions(user_id, token_id) WHERE status IN ('open', 'closing');
 CREATE INDEX IF NOT EXISTS idx_copy_positions_user_trader ON copy_positions(user_id, trader_address);
 CREATE INDEX IF NOT EXISTS idx_followed_active ON followed_traders(is_active);
 CREATE INDEX IF NOT EXISTS idx_trade_events_user_ts ON trade_events(user_id, ts);
@@ -428,6 +493,19 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_users_telegram
     ON users(telegram_user_id) WHERE telegram_user_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_trader_cache_stats_refreshed ON trader_cache(stats_refreshed_at);
 
+-- Forward upgrades for databases created before the claim protocol.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS risk_revision INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE copy_open_claims ADD COLUMN IF NOT EXISTS claim_id TEXT;
+ALTER TABLE copy_open_claims ADD COLUMN IF NOT EXISTS action TEXT NOT NULL DEFAULT 'open';
+ALTER TABLE copy_open_claims ADD COLUMN IF NOT EXISTS state TEXT NOT NULL DEFAULT 'reserved';
+ALTER TABLE copy_open_claims ADD COLUMN IF NOT EXISTS reserved_usd DOUBLE PRECISION NOT NULL DEFAULT 0;
+ALTER TABLE copy_open_claims ADD COLUMN IF NOT EXISTS risk_revision INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE copy_open_claims ADD COLUMN IF NOT EXISTS updated_at TEXT;
+ALTER TABLE copy_open_claims ADD COLUMN IF NOT EXISTS last_error TEXT;
+UPDATE copy_open_claims SET claim_id = COALESCE(claim_id, md5(user_id || ':' || token_id)), updated_at = COALESCE(updated_at, claimed_at);
+ALTER TABLE copy_open_claims ALTER COLUMN claim_id SET NOT NULL;
+ALTER TABLE copy_open_claims ALTER COLUMN updated_at SET NOT NULL;
+
 -- Deny-by-default: enable RLS on every table so a fresh Supabase deploy never
 -- exposes rows through the auto-generated REST/GraphQL API. The bot connects as
 -- the table owner (BYPASSRLS), so it is unaffected; no browser client ever
@@ -438,6 +516,7 @@ CREATE INDEX IF NOT EXISTS idx_trader_cache_stats_refreshed ON trader_cache(stat
 ALTER TABLE users            ENABLE ROW LEVEL SECURITY;
 ALTER TABLE followed_traders ENABLE ROW LEVEL SECURITY;
 ALTER TABLE copy_positions   ENABLE ROW LEVEL SECURITY;
+ALTER TABLE copy_open_claims ENABLE ROW LEVEL SECURITY;
 ALTER TABLE trade_events     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE trader_cache     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE equity_snapshots ENABLE ROW LEVEL SECURITY;

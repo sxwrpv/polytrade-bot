@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
 
 from backend.config import MAX_COPY_SLIPPAGE_PCT, POLYMARKET_BUILDER_CODE
 from backend.core.polymarket import Level, PolymarketClient
@@ -100,6 +101,7 @@ class OrderResult:
     avg_price: float = 0.0
     amount_usd: float = 0.0
     limit_price: float = 0.0
+    submission_uncertain: bool = False
     raw: dict = field(default_factory=dict)
 
 
@@ -113,6 +115,20 @@ def round_to_tick(price: float, tick: float, mode: str) -> float:
     if mode == "ceil":
         return round(math.ceil(steps) * tick, 6)
     return round(round(steps) * tick, 6)
+
+
+def floor_decimal_to_tick(value: Decimal, tick: Decimal) -> Decimal:
+    """Floor a BUY cap to an exact exchange tick without weakening the cap."""
+    if tick <= 0:
+        return value
+    return (value / tick).to_integral_value(rounding=ROUND_FLOOR) * tick
+
+
+def ceil_decimal_to_tick(value: Decimal, tick: Decimal) -> Decimal:
+    """Round a SELL floor upward without weakening the user's price limit."""
+    if tick <= 0:
+        return value
+    return (value / tick).to_integral_value(rounding=ROUND_CEILING) * tick
 
 
 def _finalize(res: "OrderResult", resp, side: str) -> None:
@@ -194,6 +210,8 @@ async def place_market_order(
     *,
     reference_price: float | None = None,
     max_slippage_pct: float = MAX_COPY_SLIPPAGE_PCT,
+    min_price: float | None = None,
+    max_price: float | None = None,
     check_geoblock: bool = True,
 ) -> OrderResult:
     """Market order (FOK — all-or-nothing). Used for ALL engine trades (owner
@@ -225,23 +243,66 @@ async def place_market_order(
     if fill.shares < book.min_order_size - _EPS:
         res.reason = f"below_min_size ({book.min_order_size})"
         return res
+    # Enforce the configured absolute entry bracket against the actual
+    # pre-flight fill, not only an earlier leader-price snapshot.
+    if side == "BUY" and (
+        (min_price is not None and fill.avg_price < min_price - _EPS)
+        or (max_price is not None and fill.avg_price > max_price + _EPS)
+    ):
+        lower = min_price if min_price is not None else 0.0
+        upper = max_price if max_price is not None else 1.0
+        res.reason = f"price_out_of_band (avg={fill.avg_price:.4f} band={lower:.4f}-{upper:.4f})"
+        return res
     if not slippage_ok(side, fill.avg_price, ref, max_slippage_pct):
         res.reason = f"slippage_exceeded (avg={fill.avg_price:.4f} ref={ref:.4f})"
         return res
     res.filled_shares = fill.shares
     res.avg_price = fill.avg_price
 
+    # Encode the strictest BUY ceiling into the signed FOK order itself. This
+    # closes the race where the book moves after our quote but before matching.
+    exchange_cap: Decimal | None = None
+    exchange_floor: Decimal | None = None
+    if side == "BUY":
+        tick = Decimal(str(book.tick_size))
+        caps: list[Decimal] = []
+        if max_price is not None:
+            caps.append(Decimal(str(max_price)))
+        if ref > 0:
+            caps.append(Decimal(str(ref)) *
+                        (Decimal("1") + Decimal(str(max_slippage_pct)) / Decimal("100")))
+        raw_cap = min(caps) if caps else Decimal("1") - tick
+        raw_cap = min(raw_cap, Decimal("1") - tick)
+        exchange_cap = floor_decimal_to_tick(raw_cap, tick)
+        if exchange_cap < tick:
+            res.reason = f"invalid_exchange_price_cap ({exchange_cap})"
+            return res
+        res.limit_price = float(exchange_cap)
+    else:
+        # Protect the close against a book move after preflight by carrying the
+        # user's slippage floor in the signed FOK order sent to the exchange.
+        tick = Decimal(str(book.tick_size))
+        raw_floor = Decimal(str(ref)) * (
+            Decimal("1") - Decimal(str(max_slippage_pct)) / Decimal("100"))
+        exchange_floor = ceil_decimal_to_tick(max(raw_floor, tick), tick)
+        res.limit_price = float(exchange_floor)
+
     try:
         if side == "BUY":
             resp = await client.place_market_order(
-                token_id=token_id, side="BUY", amount=amount, order_type="FOK",
+                token_id=token_id, side="BUY", amount=Decimal(str(amount)),
+                max_price=exchange_cap, order_type="FOK",
                 builder_code=_BUILDER_CODE)
         else:
             resp = await client.place_market_order(
                 token_id=token_id, side="SELL", shares=amount, order_type="FOK",
+                min_price=exchange_floor,
                 builder_code=_BUILDER_CODE)
     except Exception as e:
         res.reason = f"api_error: {e}"
+        # A transport error can occur after the exchange accepted the order.
+        # Callers must reconcile rather than retry blindly.
+        res.submission_uncertain = True
         return res
 
     _finalize(res, resp, side)
@@ -333,6 +394,9 @@ async def place_capped_order(
                 builder_code=_BUILDER_CODE)
     except Exception as e:
         res.reason = f"api_error: {e}"
+        # A transport error can occur after the exchange accepted the order.
+        # Callers must reconcile rather than retry blindly.
+        res.submission_uncertain = True
         return res
 
     _finalize(res, resp, side)

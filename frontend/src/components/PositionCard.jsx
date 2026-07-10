@@ -9,21 +9,25 @@ export default function PositionCard({ p, closed, onClose }) {
   const [confirm, setConfirm] = useState(false)
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
+  const [closeSlippage, setCloseSlippage] = useState(2)
   const value = closed ? p.realized_pnl || 0 : p.unrealized_pnl
   const refPrice = closed ? p.exit_price : p.current_price
   const movePct = p.entry_price && refPrice != null
     ? ((refPrice - p.entry_price) / p.entry_price) * 100
     : null
 
-  // manual = held in the wallet but not opened by the bot: live rows carry
-  // `external`; closed history rows carry the 'manual' sentinel trader_address
-  const manual = p.external || p.trader_address === 'manual'
+  const manual = p.trader_address === 'manual'
+  const needsReconciliation = p.reconciliation_required
+    || p.status === 'closing'
+    || p.status === 'reconciliation_required'
 
   async function doClose() {
     setBusy(true)
     setMsg('')
     try {
-      const r = p.external ? await api.closeExternal(p.token_id) : await api.closePosition(p.id)
+      const r = p.external
+        ? await api.closeExternal(p.token_id, closeSlippage)
+        : await api.closePosition(p.id, closeSlippage)
       setMsg(r.ok ? 'CLOSED ✓' : r.reason || 'failed')
       if (r.ok) {
         haptic('success')
@@ -52,9 +56,24 @@ export default function PositionCard({ p, closed, onClose }) {
           p.market_title || `token ${(p.token_id || '').slice(0, 16)}…`
         )}
       </div>
-      {manual ? (
+      {needsReconciliation ? (
         <div className="muted">
-          {closed ? 'closed by you' : 'opened outside the bot — exits are yours to manage'}
+          <strong>claim {String(p.claim_state || p.status).toUpperCase()}</strong>
+          {p.claim_action ? ` · ${p.claim_action} BUY` : ''}
+          {p.reserved_usd != null ? ` · $${Number(p.reserved_usd).toFixed(2)} reserved` : ''}
+          {p.claim_id ? ` · ${short(p.claim_id)}` : ''}
+          <div>reconciliation required — close and retry are disabled</div>
+          {p.claim_error && <div className="neg">{p.claim_error}</div>}
+        </div>
+      ) : manual ? (
+        <div className="muted">
+          closed by you
+        </div>
+      ) : p.external ? (
+        <div className="muted">
+          {p.origin === 'bot_history'
+            ? `bot history links this token to ${short(p.trader_address)} — current shares need reconciliation`
+            : 'untracked wallet position — origin not confirmed'}
         </div>
       ) : (
         <div className="muted">copying {short(p.trader_address)}</div>
@@ -74,7 +93,11 @@ export default function PositionCard({ p, closed, onClose }) {
         </span>
       </div>
       <div className="muted">{(p.shares || 0).toFixed(0)} shares</div>
-      {!closed && (p.redeemable ? (
+      {!closed && (needsReconciliation ? (
+        <div className="muted" style={{ marginTop: 8 }}>
+          <span className="badge neg">RECONCILIATION REQUIRED</span>
+        </div>
+      ) : p.redeemable ? (
         <div className="muted" style={{ marginTop: 8 }}>
           <span className="badge pos">RESOLVED</span> winnings redeem automatically — nothing to sell
         </div>
@@ -90,6 +113,24 @@ export default function PositionCard({ p, closed, onClose }) {
             Sell {(p.shares || 0).toFixed(0)} shares at market
             {p.current_price != null ? ` (~$${((p.shares || 0) * p.current_price).toFixed(2)} at ${cents(p.current_price)})` : ''}?
           </p>
+          <label className="fld">
+            Acceptable slippage: <strong>{closeSlippage.toFixed(1)}%</strong>
+            <div className="slider-row">
+              <input
+                type="range"
+                min="0"
+                max="10"
+                step="0.5"
+                value={closeSlippage}
+                onChange={(e) => setCloseSlippage(Number(e.target.value))}
+                disabled={busy}
+                aria-label="Acceptable close slippage percentage"
+              />
+            </div>
+          </label>
+          <div className="muted" style={{ marginBottom: 10 }}>
+            The order will not fill below the selected price tolerance.
+          </div>
           {msg && <div className="muted">{msg}</div>}
           <button className="btn btn-danger" disabled={busy} onClick={doClose}>
             {busy ? 'CLOSING…' : 'CONFIRM CLOSE'}

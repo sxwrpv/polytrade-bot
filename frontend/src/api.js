@@ -69,8 +69,17 @@ export const api = {
   // positions
   openPositions: () => req('/positions/open'),
   closedPositions: () => req('/positions/closed'),
-  closePosition: (id) => req(`/positions/${id}/close`, { method: 'POST' }),
-  // sell a wallet holding the bot didn't open (marked MANUAL on the card)
-  closeExternal: (tokenId) =>
-    req('/positions/close-external', { method: 'POST', body: JSON.stringify({ token_id: tokenId }) }),
+  closePosition: (id, acceptableSlippagePct) => req(`/positions/${id}/close`, {
+    method: 'POST',
+    body: JSON.stringify({ acceptable_slippage_pct: acceptableSlippagePct }),
+  }),
+  // Sell a live wallet holding that has no active bot tracking row.
+  closeExternal: (tokenId, acceptableSlippagePct) =>
+    req('/positions/close-external', {
+      method: 'POST',
+      body: JSON.stringify({
+        token_id: tokenId,
+        acceptable_slippage_pct: acceptableSlippagePct,
+      }),
+    }),
 }

@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api } from '../api'
 import Folder from './Folder'
 import SettingSlider from './SettingSlider'
@@ -51,13 +51,20 @@ export default function WalletRiskCard({ w, onChange }) {
   const [saved, setSaved] = useState('')
   const timers = useRef({})
 
+  // Parent reloads are authoritative. Without this, a failed optimistic pause
+  // could leave the card showing OFF even though the DB still said ON.
+  useEffect(() => setS(withDefaults(w)), [w])
+
   async function persist(patch) {
     try {
       await api.followSettings(w.trader_address, patch)
       setSaved('SAVED ✓')
       setTimeout(() => setSaved(''), 900)
+      return true
     } catch (e) {
       setSaved(String(e.message || e))
+      onChange?.()
+      return false
     }
   }
 
@@ -75,10 +82,12 @@ export default function WalletRiskCard({ w, onChange }) {
   }
 
   async function toggleEnabled() {
-    const nextPaused = s.paused ? 0 : 1
+    const previous = s.paused
+    const nextPaused = previous ? 0 : 1
     setS((p) => ({ ...p, paused: nextPaused }))
-    await persist({ paused: !!nextPaused })
-    onChange?.()
+    const ok = await persist({ paused: !!nextPaused })
+    if (!ok) setS((p) => ({ ...p, paused: previous }))
+    else onChange?.()
   }
 
   async function remove() {

@@ -1,12 +1,14 @@
 """/api/traders/* — leaderboard, trader profile, follow/unfollow."""
 from __future__ import annotations
 
+import asyncio
 import re
 import uuid
+from contextlib import asynccontextmanager
 from dataclasses import asdict
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, model_validator
 
 from backend.config import (
     DEFAULT_ALLOCATION_PCT, DEFAULT_COPY_RATIO_PCT, DEFAULT_MAX_POSITION_USD,
@@ -23,24 +25,31 @@ _ADDR_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
 
 class FollowBody(BaseModel):
     # RATIO %: copy = leader position value × this %. max_position_usd = MAX/TRADE.
-    copy_ratio_pct: float = DEFAULT_COPY_RATIO_PCT
-    max_position_usd: float = DEFAULT_MAX_POSITION_USD
-    allocation_pct: float = DEFAULT_ALLOCATION_PCT   # legacy; kept for back-compat
+    copy_ratio_pct: float = Field(DEFAULT_COPY_RATIO_PCT, ge=0, le=20)
+    max_position_usd: float = Field(DEFAULT_MAX_POSITION_USD, ge=1, le=500)
+    allocation_pct: float = Field(DEFAULT_ALLOCATION_PCT, ge=0, le=100)
 
 
 class FollowSettings(BaseModel):
     paused: bool | None = None
-    copy_ratio_pct: float | None = None          # RATIO %
-    max_position_usd: float | None = None        # MAX / TRADE $
-    min_leader_usd: float | None = None          # MIN LEADER $
-    ignore_below_usd: float | None = None        # IGNORE POSITIONS < $
-    max_open_positions: int | None = None        # MAX OPEN
-    max_total_exposure_usd: float | None = None  # MAX EXPOSURE $
-    min_price: float | None = None               # MIN PRICE
-    max_price: float | None = None               # MAX PRICE
-    max_slippage_pct: float | None = None
-    daily_loss_limit_usd: float | None = None
-    allocation_pct: float | None = None          # legacy
+    copy_ratio_pct: float | None = Field(None, ge=0, le=20)
+    max_position_usd: float | None = Field(None, ge=0, le=500)
+    min_leader_usd: float | None = Field(None, ge=0, le=10000)
+    ignore_below_usd: float | None = Field(None, ge=0, le=50)
+    max_open_positions: int | None = Field(None, ge=0, le=50)
+    max_total_exposure_usd: float | None = Field(None, ge=0, le=5000)
+    min_price: float | None = Field(None, ge=0, le=1)
+    max_price: float | None = Field(None, ge=0, le=1)
+    max_slippage_pct: float | None = Field(None, ge=0, le=10)
+    daily_loss_limit_usd: float | None = Field(None, ge=0, le=1000)
+    allocation_pct: float | None = Field(None, ge=0, le=100)
+
+    @model_validator(mode="after")
+    def valid_price_bracket(self):
+        if (self.min_price is not None and self.max_price is not None
+                and self.min_price > self.max_price):
+            raise ValueError("min_price must not exceed max_price")
+        return self
 
 
 _FOLLOW_KEYS = (
@@ -49,6 +58,27 @@ _FOLLOW_KEYS = (
     "min_price", "max_price", "max_slippage_pct", "daily_loss_limit_usd",
     "allocation_pct",
 )
+
+
+@asynccontextmanager
+async def _risk_write_guard(request: Request):
+    lock = getattr(request.app.state, "copy_risk_lock", None)
+    if lock is None:
+        yield
+    else:
+        async with lock:
+            yield
+
+
+async def _wait_for_trader_submissions(db, user_id: str, address: str) -> None:
+    for _ in range(50):
+        pending = await db.fetchval(
+            "SELECT COUNT(*) FROM copy_open_claims WHERE user_id=? AND trader_address=? "
+            "AND state='submitting'", (user_id, address))
+        if not pending:
+            return
+        await asyncio.sleep(0.1)
+    raise HTTPException(503, "settings persisted; an in-flight order needs reconciliation")
 
 
 # Literal routes must precede /{address} (single-segment) to avoid capture.
@@ -98,49 +128,91 @@ async def trader_profile(address: str, db=Depends(get_db), pmc=Depends(get_pm)):
 
 
 @router.post("/{address}/follow")
-async def follow(address: str, body: FollowBody,
+async def follow(address: str, body: FollowBody, request: Request,
                  user=Depends(get_current_user), db=Depends(get_db)):
-    address = address.lower()                       # match data-api/leaderboard casing
+    address = address.lower()
     if not _ADDR_RE.match(address):
         raise HTTPException(400, "invalid wallet address (expected 0x + 40 hex)")
-    existing = await db.fetchone(
-        "SELECT id FROM followed_traders WHERE user_id = ? AND trader_address = ?",
-        (user["id"], address))
-    if existing:
-        await db.execute(
-            "UPDATE followed_traders SET copy_ratio_pct = ?, max_position_usd = ?, "
-            "allocation_pct = ?, paused = 0, is_active = 1 WHERE id = ?",
-            (body.copy_ratio_pct, body.max_position_usd, body.allocation_pct,
-             existing["id"]))
-    else:
-        await db.execute(
-            "INSERT INTO followed_traders(id, user_id, trader_address, copy_ratio_pct, "
-            "max_position_usd, allocation_pct, created_at) VALUES(?,?,?,?,?,?,?)",
-            (uuid.uuid4().hex, user["id"], address, body.copy_ratio_pct,
-             body.max_position_usd, body.allocation_pct, now_iso()))
+    async with _risk_write_guard(request):
+        async with db.transaction(write=True) as tx:
+            user_sql = "SELECT id FROM users WHERE id=?" + (" FOR UPDATE" if db.is_pg else "")
+            await tx.fetchone(user_sql, (user["id"],))
+            await tx.execute("UPDATE users SET risk_revision=risk_revision+1 WHERE id=?", (user["id"],))
+            existing = await tx.fetchone(
+                "SELECT id,is_active,paused FROM followed_traders WHERE user_id=? AND trader_address=?",
+                (user["id"], address))
+            if existing:
+                paused = 0 if not existing["is_active"] else existing["paused"]
+                await tx.execute(
+                    "UPDATE followed_traders SET copy_ratio_pct=?,max_position_usd=?,"
+                    "allocation_pct=?,paused=?,is_active=1 WHERE id=?",
+                    (body.copy_ratio_pct, body.max_position_usd, body.allocation_pct,
+                     paused, existing["id"]))
+            else:
+                await tx.execute(
+                    "INSERT INTO followed_traders(id,user_id,trader_address,copy_ratio_pct,"
+                    "max_position_usd,allocation_pct,created_at) VALUES(?,?,?,?,?,?,?)",
+                    (uuid.uuid4().hex, user["id"], address, body.copy_ratio_pct,
+                     body.max_position_usd, body.allocation_pct, now_iso()))
+    await _wait_for_trader_submissions(db, user["id"], address)
     return {"ok": True, "following": address,
             "copy_ratio_pct": body.copy_ratio_pct, "max_position_usd": body.max_position_usd}
 
 
 @router.post("/{address}/settings")
-async def update_follow_settings(address: str, body: FollowSettings,
+async def update_follow_settings(address: str, body: FollowSettings, request: Request,
                                  user=Depends(get_current_user), db=Depends(get_db)):
     """Edit one copied wallet's risk settings (only provided fields)."""
     address = address.lower()
-    updates = {k: v for k, v in body.model_dump(exclude_unset=True).items() if k in _FOLLOW_KEYS}
+    if not _ADDR_RE.match(address):
+        raise HTTPException(400, "invalid wallet address (expected 0x + 40 hex)")
+    updates = {k: v for k, v in body.model_dump(exclude_unset=True).items()
+               if k in _FOLLOW_KEYS}
     if "paused" in updates:
         updates["paused"] = int(bool(updates["paused"]))
+    # Canonical API semantics: zero means no limit for these three controls.
+    for key in ("max_open_positions", "max_total_exposure_usd", "daily_loss_limit_usd"):
+        if updates.get(key) == 0:
+            updates[key] = None
+
+    async with _risk_write_guard(request):
+        async with db.transaction(write=True) as tx:
+            user_sql = "SELECT id FROM users WHERE id=?" + (" FOR UPDATE" if db.is_pg else "")
+            await tx.fetchone(user_sql, (user["id"],))
+            current = await tx.fetchone(
+                "SELECT * FROM followed_traders WHERE user_id=? AND trader_address=?",
+                (user["id"], address))
+            if not current:
+                raise HTTPException(404, "followed wallet not found")
+            effective_min = updates.get("min_price", current.get("min_price"))
+            effective_max = updates.get("max_price", current.get("max_price"))
+            effective_min = DEFAULT_MIN_PRICE if effective_min is None else float(effective_min)
+            effective_max = DEFAULT_MAX_PRICE if effective_max is None else float(effective_max)
+            if effective_min > effective_max:
+                raise HTTPException(422, "min_price must not exceed max_price")
+            if updates:
+                # Increment first in the same transaction: every reserved BUY is
+                # fenced before any stricter setting becomes visible.
+                await tx.execute("UPDATE users SET risk_revision=risk_revision+1 WHERE id=?", (user["id"],))
+                cols = ", ".join(f"{k} = ?" for k in updates)
+                await tx.execute(
+                    f"UPDATE followed_traders SET {cols} WHERE user_id=? AND trader_address=?",
+                    [*updates.values(), user["id"], address])
     if updates:
-        cols = ", ".join(f"{k} = ?" for k in updates)
-        await db.execute(
-            f"UPDATE followed_traders SET {cols} WHERE user_id = ? AND trader_address = ?",
-            [*updates.values(), user["id"], address])
+        await _wait_for_trader_submissions(db, user["id"], address)
     return {"ok": True, "updated": list(updates)}
 
 
 @router.delete("/{address}/follow")
-async def unfollow(address: str, user=Depends(get_current_user), db=Depends(get_db)):
-    await db.execute(
-        "UPDATE followed_traders SET is_active = 0 WHERE user_id = ? AND trader_address = ?",
-        (user["id"], address.lower()))
+async def unfollow(address: str, request: Request,
+                   user=Depends(get_current_user), db=Depends(get_db)):
+    async with _risk_write_guard(request):
+        async with db.transaction(write=True) as tx:
+            user_sql = "SELECT id FROM users WHERE id=?" + (" FOR UPDATE" if db.is_pg else "")
+            await tx.fetchone(user_sql, (user["id"],))
+            await tx.execute("UPDATE users SET risk_revision=risk_revision+1 WHERE id=?", (user["id"],))
+            await tx.execute(
+                "UPDATE followed_traders SET is_active=0 WHERE user_id=? AND trader_address=?",
+                (user["id"], address.lower()))
+    await _wait_for_trader_submissions(db, user["id"], address.lower())
     return {"ok": True}

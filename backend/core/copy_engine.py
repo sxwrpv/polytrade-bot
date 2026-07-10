@@ -24,7 +24,8 @@ import logging
 import time
 import uuid
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from types import SimpleNamespace
 
 import aiosqlite
 import httpx
@@ -39,6 +40,7 @@ from backend.config import (
     DETECTION_POLL_SECONDS,
     ENCRYPTION_SECRET,
     MAX_COPY_SLIPPAGE_PCT,
+    validate_slippage_pct,
 )
 from backend.core import detection, execution, wallet
 from backend.core.polymarket import Position
@@ -66,8 +68,10 @@ class Action:
     reference_price: float | None = None
     subkind: str = ""         # 'increase' | 'decrease' for resize
     trader_shares: float = 0.0           # trader's share count we are mirroring
-    position: Position | None = None     # trader position snapshot
+    position: object | None = None       # trader position snapshot
     row: dict | None = None              # existing copy_positions row
+    trader_address: str = ""             # configured followed wallet (lower-case)
+    claim_id: str = ""                   # durable BUY reservation/fencing token
 
 
 def plan_actions(
@@ -179,7 +183,8 @@ class CopyEngine:
     def __init__(self, db, pm, *, client_factory=None, place_order=None,
                  collateral_fn=None, detector=None,
                  poll_interval: float | None = None,
-                 detection_interval: float | None = None) -> None:
+                 detection_interval: float | None = None,
+                 risk_lock: asyncio.Lock | None = None) -> None:
         self.db = db
         self.pm = pm
         self.poll_interval = poll_interval or COPY_ENGINE_POLL_SECONDS
@@ -193,6 +198,10 @@ class CopyEngine:
         # so "market buy" here means "fill at market unless it's gone N% away".
         self._place_order = place_order or execution.place_market_order
         self._collateral_fn = collateral_fn or self._default_collateral
+        # Shared with risk-setting API writes in the running app. A pause or
+        # stricter limit either wins before a BUY, or is acknowledged only after
+        # an already-submitted BUY completes.
+        self._risk_lock = risk_lock or asyncio.Lock()
         self._clients: dict[str, object] = {}
         # fast-detection cursors / dedupe, per (user_id, trader_address).
         # _seen values are insertion-ordered dicts used as bounded sets.
@@ -201,12 +210,27 @@ class CopyEngine:
 
     # --- lifecycle ---------------------------------------------------------
     async def run(self, stop_event: asyncio.Event) -> None:
+        # A reserved claim is provably pre-submission and can be reclaimed after
+        # a crash. A stale submitting claim is never retried automatically.
+        await self._recover_stale_claims()
         # Two cadences: fast trade detection (entry latency) + slow reconciliation
         # (missed trades, drift, resolutions).
         await asyncio.gather(
             self._loop(self._detect_tick, self.detection_interval, stop_event),
             self._loop(self._reconcile_tick, self.poll_interval, stop_event),
         )
+
+    async def _recover_stale_claims(self) -> None:
+        cutoff = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=2)).isoformat()
+        released = await self.db.execute(
+            "DELETE FROM copy_open_claims WHERE state='reserved' AND updated_at < ?", (cutoff,))
+        uncertain = await self.db.execute(
+            "UPDATE copy_open_claims SET state='uncertain',last_error=?,updated_at=? "
+            "WHERE state='submitting' AND updated_at < ?",
+            ("stale submission requires reconciliation", now_iso(), cutoff))
+        if released or uncertain:
+            log.warning("claim recovery: released_reserved=%d marked_uncertain=%d",
+                        released, uncertain)
 
     async def aclose(self) -> None:
         """Close every cached per-user CLOB client (network sessions)."""
@@ -359,26 +383,26 @@ class CopyEngine:
                     token, leader_age, notional, trader[:10])
                 return
             log.info(
-                "fast-open submit %s age=%.1fs side=%s notional=%.2f ref=%.4f trader=%s",
+                "fast-open candidate %s age=%.1fs side=%s notional=%.2f ref=%.4f trader=%s",
                 token, leader_age, trade.side.upper(), notional, float(trade.price or 0), trader[:10])
-            result = await self._place_order(
-                client, self.pm, token, "BUY", notional,
-                reference_price=trade.price, max_slippage_pct=frisk["slippage"])
-            if result.ok:
-                await self._insert_open(
-                    user_id, trade.proxy_wallet, trade.condition_id, token,
-                    trade.slug, trade.title, trade.outcome.upper(),
-                    result.filled_shares, trader_total, result.avg_price,
-                    round(result.filled_shares * result.avg_price, 2))
+            action = Action(
+                kind="open", token_id=token, condition_id=trade.condition_id,
+                outcome=trade.outcome.upper(), side="BUY", amount=notional,
+                notional_usd=notional, reference_price=trade.price,
+                trader_shares=trader_total,
+                position=SimpleNamespace(
+                    proxy_wallet=trader, asset=token, condition_id=trade.condition_id,
+                    size=trader_total, avg_price=float(trade.price or leader_price),
+                    cur_price=leader_price, current_value=leader_notional,
+                    redeemable=False, outcome=trade.outcome.upper(), slug=trade.slug,
+                    title=trade.title),
+                trader_address=trader,
+            )
+            spent = await self._execute(user_id, client, action, slippage=frisk["slippage"])
+            if spent:
                 log.info(
-                    "fast-open filled %s total_age=%.1fs shares=%.4f avg=%.4f notional=%.2f trader=%s",
-                    token, time.time() - float(trade.timestamp or detected_at),
-                    result.filled_shares, result.avg_price,
-                    round(result.filled_shares * result.avg_price, 2), trader[:10])
-            else:
-                log.info(
-                    "fast-open skipped %s age=%.1fs notional=%.2f reason=%s trader=%s",
-                    token, leader_age, notional, result.reason, trader[:10])
+                    "fast-open recorded %s total_age=%.1fs notional=%.2f trader=%s",
+                    token, time.time() - float(trade.timestamp or detected_at), spent, trader[:10])
         else:  # leader SELL — exit fast (market FOK; exits aren't spread-sensitive).
             # Deliberately NOT gated on paused: pause stops new buys, but the
             # money already in open copies keeps being managed.
@@ -397,33 +421,45 @@ class CopyEngine:
             # the reconciler is closing/resizing this same position concurrently,
             # only one caller wins the atomic status flip — the other skips
             # instead of also submitting a SELL for the same shares.
-            if not await self.db.try_transition(existing["id"], "open", "closing"):
+            if not await self.db.claim_managed_sell(user_id, token, existing["id"]):
                 return
-            if fraction >= 0.95:
+            full_exit = fraction >= 0.95
+            try:
+                sell_shares = existing["shares"] if full_exit else existing["shares"] * fraction
                 result = await self._place_order(
-                    client, self.pm, token, "SELL", existing["shares"],
+                    client, self.pm, token, "SELL", sell_shares,
                     reference_price=trade.price)
+            except Exception:
+                # Raised failures are before execution's submission boundary.
+                await self.db.try_transition(existing["id"], "closing", "open")
+                raise
+            if full_exit:
                 if result.ok:
+                    # Persistence is intentionally outside the pre-submission
+                    # exception handler: after a successful order, any DB failure
+                    # must leave the durable closing fence in place.
                     await self._close_row(user_id, existing, result.avg_price,
                                           result.filled_shares)
-                else:
+                elif not getattr(result, "submission_uncertain", False):
                     await self.db.try_transition(existing["id"], "closing", "open")
                 return
-            result = await self._place_order(
-                client, self.pm, token, "SELL", existing["shares"] * fraction,
-                reference_price=trade.price)
             if result.ok:
                 sold = result.filled_shares
                 pnl = (result.avg_price - existing["entry_price"]) * sold
                 new_shares = max(0.0, existing["shares"] - sold)
                 frac_left = new_shares / existing["shares"] if existing["shares"] else 0.0
-                await self.db.execute(
-                    "UPDATE copy_positions SET shares=?, notional_usd=?, trader_shares=? "
-                    "WHERE id=?",
-                    (new_shares, existing["notional_usd"] * frac_left,
-                     max(0.0, base - trade.size), existing["id"]))
-                await self._event(user_id, existing["id"], "partial", None, pnl)
-            await self.db.try_transition(existing["id"], "closing", "open")
+                async with self.db.transaction(write=True) as tx:
+                    changed = await tx.execute(
+                        "UPDATE copy_positions SET shares=?,notional_usd=?,trader_shares=?,status='open' "
+                        "WHERE id=? AND user_id=? AND status='closing'",
+                        (new_shares, existing["notional_usd"] * frac_left,
+                         max(0.0, base - trade.size), existing["id"], user_id))
+                    if changed != 1:
+                        raise RuntimeError("fast partial SELL finalization lost closing fence")
+                    await self._event(
+                        user_id, existing["id"], "partial", None, pnl, store=tx)
+            elif not getattr(result, "submission_uncertain", False):
+                await self.db.try_transition(existing["id"], "closing", "open")
 
     async def _reconcile_tick(self) -> None:
         follows = await self.db.fetchall(
@@ -474,6 +510,7 @@ class CopyEngine:
                 max_open=frisk["max_open"], min_price=frisk["min_price"],
                 max_price=frisk["max_price"])
             for action in actions:
+                action.trader_address = trader
                 spent = await self._execute(user_id, client, action, slippage=frisk["slippage"])
                 if action.side == "BUY":
                     available = max(0.0, available - spent)
@@ -481,62 +518,221 @@ class CopyEngine:
     # --- execution + persistence ------------------------------------------
     async def _execute(self, user_id: str, client, action: Action,
                        slippage: float = MAX_COPY_SLIPPAGE_PCT) -> float:
+        if action.side == "BUY":
+            return await self._execute_buy(user_id, client, action)
         if action.kind == "resolve":
             if not await self.db.try_transition(action.row["id"], "open", "closing"):
                 return 0.0   # already being closed/resolved elsewhere
             await self._realize_resolution(user_id, action)
             return 0.0
-        # close = a full exit, same race as resolve; claim before placing the order.
-        if action.kind == "close":
-            if not await self.db.try_transition(action.row["id"], "open", "closing"):
-                log.info("close skipped (already claimed): %s", action.row["id"])
+        # Every SELL mutating a managed row needs the same durable close fence;
+        # this includes resize-down as well as full close.
+        claimed_sell = action.side == "SELL" and action.row is not None
+        if claimed_sell:
+            if not await self.db.claim_managed_sell(
+                    user_id, action.token_id, action.row["id"]):
+                log.info("sell skipped (already claimed): %s", action.row["id"])
                 return 0.0
-        # Both sides are market FOK; the slippage guard vs the leader's price
-        # (per-wallet setting) is the only price gate on BUYs.
         try:
             result = await self._place_order(
                 client, self.pm, action.token_id, action.side, action.amount,
                 reference_price=action.reference_price, max_slippage_pct=slippage)
         except httpx.HTTPStatusError as e:
             # A dead order book (404) on a CLOSE means the market resolved
-            # before we could exit — the position redeems instead of selling
-            # (seen live 2026-07-03: tennis markets resolved + auto-redeemed
-            # while copies were open, and the close crashed the whole sync).
+            # before we could exit — the position redeems instead of selling.
             if action.kind == "close" and e.response.status_code == 404:
                 await self._resolve_departed(user_id, action.row)
                 return 0.0
-            if action.kind == "close":
+            if claimed_sell:
                 await self.db.try_transition(action.row["id"], "closing", "open")
             raise
         except Exception:
-            # never leave a claimed row stuck in 'closing'
-            if action.kind == "close":
+            # execution turns exceptions after submission into an uncertain
+            # OrderResult. A raised exception is pre-submission and retryable.
+            if claimed_sell:
                 await self.db.try_transition(action.row["id"], "closing", "open")
             raise
         if not result.ok:
-            if action.kind == "close":
+            if claimed_sell and not getattr(result, "submission_uncertain", False):
                 await self.db.try_transition(action.row["id"], "closing", "open")
             log.warning("order skipped (%s %s): %s", action.kind, action.token_id, result.reason)
             return 0.0
-        if action.kind == "open":
-            return await self._record_open(user_id, action, result)
         if action.kind == "close":
             await self._record_close(user_id, action, result)
         elif action.kind == "resize":
-            return await self._record_resize(user_id, action, result)
+            recorded = await self._record_resize(user_id, action, result)
+            return recorded
         return 0.0
+
+    async def _execute_buy(self, user_id: str, client, action: Action) -> float:
+        """Reserve, fence, submit once, then atomically persist every BUY."""
+        async with self._risk_lock:
+            prepared = await self._prepare_buy(user_id, action)
+            if prepared is None:
+                return 0.0
+            action, risk = prepared
+            if not await self._mark_claim_submitting(user_id, action):
+                await self._release_buy_claim(user_id, action.token_id, action.claim_id)
+                return 0.0
+            try:
+                result = await self._place_order(
+                    client, self.pm, action.token_id, "BUY", action.amount,
+                    reference_price=action.reference_price,
+                    max_slippage_pct=risk["slippage"],
+                    min_price=risk["min_price"], max_price=risk["max_price"])
+            except Exception:
+                # execution.place_market_order converts every exception at or
+                # after the submission boundary into submission_uncertain. A
+                # raised exception is therefore pre-submission and retryable.
+                await self._release_buy_claim(user_id, action.token_id, action.claim_id)
+                raise
+            if not result.ok:
+                log.warning("order skipped (%s %s): %s", action.kind,
+                            action.token_id, result.reason)
+                if getattr(result, "submission_uncertain", False):
+                    await self._mark_claim_uncertain(user_id, action, result.reason)
+                else:
+                    await self._release_buy_claim(user_id, action.token_id, action.claim_id)
+                return 0.0
+            try:
+                if action.kind == "open":
+                    return await self._record_open(user_id, action, result)
+                return await self._record_resize(user_id, action, result)
+            except Exception as exc:
+                await self._mark_claim_uncertain(user_id, action, f"filled; persistence failed: {exc}")
+                log.critical("BUY filled but persistence failed; claim retained: %s %s",
+                             user_id[:10], action.token_id, exc_info=True)
+                raise
+
+    async def _prepare_buy(self, user_id: str, action: Action) -> tuple[Action, dict] | None:
+        trader = (action.trader_address or (action.row or {}).get("trader_address")
+                  or getattr(action.position, "proxy_wallet", "")).lower()
+        if not trader:
+            return None
+        try:
+            async with self.db.transaction(write=True) as tx:
+                user_sql = "SELECT * FROM users WHERE id = ?" + (" FOR UPDATE" if self.db.is_pg else "")
+                user = await tx.fetchone(user_sql, (user_id,))
+                follow = await tx.fetchone(
+                    "SELECT * FROM followed_traders WHERE user_id=? AND trader_address=?",
+                    (user_id, trader))
+                if not user or not follow or not follow.get("is_active"):
+                    return None
+                risk = self._follow_risk(follow)
+                if bool(user.get("paused")) or risk["paused"]:
+                    return None
+                if await self._opens_blocked(user_id, trader, risk["daily_limit"], store=tx):
+                    return None
+                open_all = await tx.fetchall(
+                    "SELECT * FROM copy_positions WHERE user_id=? "
+                    "AND status IN ('open','closing','reconciliation_required')", (user_id,))
+                claims = await tx.fetchall(
+                    "SELECT * FROM copy_open_claims WHERE user_id=? "
+                    "AND state IN ('reserved','submitting','uncertain')", (user_id,))
+                trader_open = [r for r in open_all if r["trader_address"].lower() == trader]
+                trader_claims = [r for r in claims if r["trader_address"].lower() == trader]
+                allowed = float(action.amount)
+                if action.kind == "open":
+                    active = await tx.fetchone(
+                        "SELECT id FROM copy_positions WHERE user_id=? AND token_id=? "
+                        "AND status IN ('open','closing','reconciliation_required')", (user_id, action.token_id))
+                    if active:
+                        return None
+                    reserved_opens = sum(1 for r in trader_claims if r.get("action") == "open")
+                    if risk["max_open"] is not None and len(trader_open) + reserved_opens >= risk["max_open"]:
+                        return None
+                    p = action.position
+                    price = float(getattr(p, "cur_price", 0) or action.reference_price or 0)
+                    leader_notional = float(getattr(p, "current_value", 0) or 0)
+                    if leader_notional <= 0:
+                        leader_notional = float(getattr(p, "size", 0) or 0) * price
+                    if leader_notional < risk["min_leader"] or not (risk["min_price"] <= price <= risk["max_price"]):
+                        return None
+                    allowed = min(allowed, leader_notional * risk["ratio_pct"] / 100.0,
+                                  risk["max_per_trade"])
+                    floor = risk["ignore_below"]
+                elif action.kind == "resize" and action.subkind == "increase":
+                    fresh = await tx.fetchone(
+                        "SELECT * FROM copy_positions WHERE id=? AND status='open'", (action.row["id"],))
+                    if not fresh:
+                        return None
+                    action = replace(action, row=fresh)
+                    allowed = min(allowed, max(0.0, risk["max_per_trade"] - fresh["notional_usd"]))
+                    floor = MIN_NOTIONAL_USD
+                else:
+                    return None
+                trader_used = (sum(float(r["notional_usd"]) for r in trader_open)
+                               + sum(float(r.get("reserved_usd") or 0) for r in trader_claims))
+                if risk["max_exposure"] is not None:
+                    allowed = min(allowed, max(0.0, risk["max_exposure"] - trader_used))
+                if user.get("max_total_exposure_usd") is not None:
+                    user_used = (sum(float(r["notional_usd"]) for r in open_all)
+                                 + sum(float(r.get("reserved_usd") or 0) for r in claims))
+                    allowed = min(allowed, max(0.0, float(user["max_total_exposure_usd"]) - user_used))
+                if allowed < floor:
+                    return None
+                claim_id = uuid.uuid4().hex
+                now = now_iso()
+                await tx.execute(
+                    "INSERT INTO copy_open_claims(user_id,token_id,trader_address,claim_id,action,state,"
+                    "reserved_usd,risk_revision,claimed_at,updated_at) VALUES(?,?,?,?,?,'reserved',?,?,?,?)",
+                    (user_id, action.token_id, trader, claim_id, action.kind,
+                     allowed, int(user.get("risk_revision") or 0), now, now))
+                return replace(action, amount=allowed, notional_usd=allowed,
+                               trader_address=trader, claim_id=claim_id), risk
+        except aiosqlite.IntegrityError:
+            log.info("buy skipped (already claimed): %s %s", user_id[:10], action.token_id)
+            return None
+
+    async def _mark_claim_submitting(self, user_id: str, action: Action) -> bool:
+        async with self.db.transaction(write=True) as tx:
+            user_sql = "SELECT risk_revision FROM users WHERE id=?" + (" FOR UPDATE" if self.db.is_pg else "")
+            await tx.fetchone(user_sql, (user_id,))
+            count = await tx.execute(
+                "UPDATE copy_open_claims SET state='submitting',updated_at=? "
+                "WHERE user_id=? AND token_id=? AND claim_id=? AND state='reserved' "
+                "AND risk_revision=(SELECT risk_revision FROM users WHERE id=?) "
+                "AND EXISTS(SELECT 1 FROM users WHERE id=? AND paused=0) "
+                "AND EXISTS(SELECT 1 FROM followed_traders WHERE user_id=? AND trader_address=? "
+                "AND is_active=1 AND paused=0)",
+                (now_iso(), user_id, action.token_id, action.claim_id, user_id,
+                 user_id, user_id, action.trader_address))
+            return count == 1
+
+    async def _mark_claim_uncertain(self, user_id: str, action: Action, error: str) -> None:
+        await self.db.execute(
+            "UPDATE copy_open_claims SET state='uncertain',updated_at=?,last_error=? "
+            "WHERE user_id=? AND token_id=? AND claim_id=?",
+            (now_iso(), error[:500], user_id, action.token_id, action.claim_id))
+
+    async def _release_buy_claim(self, user_id: str, token_id: str, claim_id: str) -> None:
+        await self.db.execute(
+            "DELETE FROM copy_open_claims WHERE user_id=? AND token_id=? AND claim_id=?",
+            (user_id, token_id, claim_id))
 
     async def _record_open(self, user_id, action, result) -> float:
         p = action.position
-        # Cost basis from the ACTUAL fill, not the pre-trade target — capped
-        # orders (FAK) can partial-fill, so result.filled_shares may be less
-        # than action.amount implied. Using the target here would desync
-        # notional_usd from shares*entry_price and understate real headroom.
         spent = round(result.filled_shares * result.avg_price, 2)
-        await self._insert_open(
-            user_id, p.proxy_wallet, action.condition_id, action.token_id,
-            p.slug, p.title, action.outcome, result.filled_shares,
-            action.trader_shares, result.avg_price, spent)
+        pid = uuid.uuid4().hex
+        async with self.db.transaction(write=True) as tx:
+            user_sql = "SELECT id FROM users WHERE id=?" + (" FOR UPDATE" if self.db.is_pg else "")
+            await tx.fetchone(user_sql, (user_id,))
+            await tx.execute(
+                "INSERT INTO copy_positions(id,user_id,trader_address,condition_id,token_id,"
+                "market_slug,market_title,outcome,shares,trader_shares,entry_price,notional_usd,status,opened_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'open',?)",
+                (pid, user_id, action.trader_address, action.condition_id, action.token_id,
+                 getattr(p, "slug", ""), getattr(p, "title", ""), action.outcome,
+                 result.filled_shares, action.trader_shares, result.avg_price, spent, now_iso()))
+            await tx.execute(
+                "INSERT INTO trade_events(id,user_id,position_id,event_type,amount_usd,pnl,ts) "
+                "VALUES(?,?,?,'open',?,NULL,?)",
+                (uuid.uuid4().hex, user_id, pid, spent, now_iso()))
+            deleted = await tx.execute(
+                "DELETE FROM copy_open_claims WHERE user_id=? AND token_id=? AND claim_id=? "
+                "AND state='submitting'", (user_id, action.token_id, action.claim_id))
+            if deleted != 1:
+                raise RuntimeError("BUY claim fencing token lost during open finalization")
         return spent
 
     async def _record_close(self, user_id, action, result) -> None:
@@ -546,27 +742,47 @@ class CopyEngine:
         row = action.row
         if action.subkind == "increase":
             spent = round(result.filled_shares * result.avg_price, 2)
-            new_shares = row["shares"] + result.filled_shares
-            new_notional = row["notional_usd"] + spent
-            # weighted-average entry
-            new_entry = ((row["entry_price"] * row["shares"]
-                          + result.avg_price * result.filled_shares) / new_shares
-                         if new_shares else row["entry_price"])
-            await self.db.execute(
-                "UPDATE copy_positions SET shares=?, notional_usd=?, entry_price=?, "
-                "trader_shares=? WHERE id=?",
-                (new_shares, new_notional, new_entry, action.trader_shares, row["id"]))
-            await self._event(user_id, row["id"], "partial", spent, None)
+            async with self.db.transaction(write=True) as tx:
+                user_sql = "SELECT id FROM users WHERE id=?" + (" FOR UPDATE" if self.db.is_pg else "")
+                await tx.fetchone(user_sql, (user_id,))
+                fresh = await tx.fetchone(
+                    "SELECT * FROM copy_positions WHERE id=? AND status='open'", (row["id"],))
+                if not fresh:
+                    raise RuntimeError("position changed before resize persistence")
+                new_shares = fresh["shares"] + result.filled_shares
+                new_notional = fresh["notional_usd"] + spent
+                new_entry = ((fresh["entry_price"] * fresh["shares"]
+                              + result.avg_price * result.filled_shares) / new_shares)
+                changed = await tx.execute(
+                    "UPDATE copy_positions SET shares=?,notional_usd=?,entry_price=?,trader_shares=? "
+                    "WHERE id=? AND status='open'",
+                    (new_shares, new_notional, new_entry, action.trader_shares, fresh["id"]))
+                if changed != 1:
+                    raise RuntimeError("resize persistence lost position race")
+                await tx.execute(
+                    "INSERT INTO trade_events(id,user_id,position_id,event_type,amount_usd,pnl,ts) "
+                    "VALUES(?,?,?,'partial',?,NULL,?)",
+                    (uuid.uuid4().hex, user_id, fresh["id"], spent, now_iso()))
+                deleted = await tx.execute(
+                    "DELETE FROM copy_open_claims WHERE user_id=? AND token_id=? AND claim_id=? "
+                    "AND state='submitting'", (user_id, action.token_id, action.claim_id))
+                if deleted != 1:
+                    raise RuntimeError("BUY claim fencing token lost during resize finalization")
             return spent
         else:  # decrease — sold some shares
             sold = result.filled_shares
             pnl = (result.avg_price - row["entry_price"]) * sold
             new_shares = max(0.0, row["shares"] - sold)
             frac_left = new_shares / row["shares"] if row["shares"] else 0.0
-            await self.db.execute(
-                "UPDATE copy_positions SET shares=?, notional_usd=?, trader_shares=? WHERE id=?",
-                (new_shares, row["notional_usd"] * frac_left, action.trader_shares, row["id"]))
-            await self._event(user_id, row["id"], "partial", None, pnl)
+            async with self.db.transaction(write=True) as tx:
+                changed = await tx.execute(
+                    "UPDATE copy_positions SET shares=?,notional_usd=?,trader_shares=?,status='open' "
+                    "WHERE id=? AND user_id=? AND status='closing'",
+                    (new_shares, row["notional_usd"] * frac_left,
+                     action.trader_shares, row["id"], user_id))
+                if changed != 1:
+                    raise RuntimeError("resize SELL finalization lost closing fence")
+                await self._event(user_id, row["id"], "partial", None, pnl, store=tx)
             return 0.0
 
     async def _realize_resolution(self, user_id, action) -> None:
@@ -629,16 +845,25 @@ class CopyEngine:
     async def _close_row(self, user_id, row, exit_price, filled_shares,
                          *, event_type="close", status="closed") -> None:
         pnl = (exit_price - row["entry_price"]) * filled_shares
-        await self.db.execute(
-            "UPDATE copy_positions SET status=?, exit_price=?, realized_pnl=?, "
-            "closed_at=? WHERE id=?", (status, exit_price, pnl, now_iso(), row["id"]))
-        await self._event(user_id, row["id"], event_type, row["notional_usd"], pnl)
+        async with self.db.transaction(write=True) as tx:
+            changed = await tx.execute(
+                "UPDATE copy_positions SET status=?,exit_price=?,realized_pnl=?,closed_at=? "
+                "WHERE id=? AND user_id=? AND status='closing'",
+                (status, exit_price, pnl, now_iso(), row["id"], user_id))
+            if changed != 1:
+                raise RuntimeError("full SELL finalization lost closing fence")
+            await self._event(
+                user_id, row["id"], event_type, row["notional_usd"], pnl, store=tx)
 
-    async def _event(self, user_id, position_id, event_type, amount_usd, pnl) -> None:
-        await self.db.execute(
+    async def _event(self, user_id, position_id, event_type, amount_usd, pnl,
+                     *, store=None) -> None:
+        store = store or self.db
+        inserted = await store.execute(
             "INSERT INTO trade_events(id, user_id, position_id, event_type, amount_usd, pnl, ts) "
             "VALUES(?,?,?,?,?,?,?)",
             (uuid.uuid4().hex, user_id, position_id, event_type, amount_usd, pnl, now_iso()))
+        if inserted != 1:
+            raise RuntimeError("trade event insertion did not affect exactly one row")
 
     # --- per-wallet risk settings -----------------------------------------
     @staticmethod
@@ -654,7 +879,9 @@ class CopyEngine:
         mo = follow.get("max_open_positions")
         return {
             "paused": bool(follow.get("paused")),
-            "slippage": float(slip) if slip is not None else MAX_COPY_SLIPPAGE_PCT,
+            "slippage": validate_slippage_pct(
+                slip if slip is not None else MAX_COPY_SLIPPAGE_PCT,
+                "followed_traders.max_slippage_pct"),
             "max_exposure": float(exp) if exp is not None else None,
             "daily_limit": float(lim) if lim is not None else None,
             # ratio-of-leader sizing + entry filters (screenshot settings).
@@ -670,13 +897,14 @@ class CopyEngine:
         }
 
     async def _opens_blocked(self, user_id: str, trader_address: str,
-                             daily_limit: float | None) -> bool:
+                             daily_limit: float | None, store=None) -> bool:
         """True if today's realized loss on THIS trader's copies hit the limit."""
         if daily_limit is None:
             return False
         start = dt.datetime.now(dt.timezone.utc).replace(
             hour=0, minute=0, second=0, microsecond=0).isoformat()
-        val = await self.db.fetchval(
+        store = store or self.db
+        val = await store.fetchval(
             "SELECT COALESCE(SUM(e.pnl), 0) FROM trade_events e "
             "JOIN copy_positions p ON p.id = e.position_id "
             "WHERE p.user_id = ? AND p.trader_address = ? AND e.pnl IS NOT NULL AND e.ts >= ?",

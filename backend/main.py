@@ -115,6 +115,7 @@ async def lifespan(app: FastAPI):
     app.state.db = db
     app.state.pm = pm
     app.state.clients = {}            # user_id -> cached CLOB client
+    app.state.copy_risk_lock = asyncio.Lock()  # shared by BUYs and settings writes
 
     if os.environ.get("SEED_ON_START", "1") == "1":
         try:
@@ -135,7 +136,8 @@ async def lifespan(app: FastAPI):
                 log.info("using on-chain OrderFilled detector")
             except Exception:
                 log.exception("on-chain detector init failed; falling back to activity poll")
-        engine = CopyEngine(db, pm, detector=detector)   # None -> ActivityPollDetector
+        engine = CopyEngine(db, pm, detector=detector,
+                            risk_lock=app.state.copy_risk_lock)
         app.state.engine = engine
         tasks.append(asyncio.create_task(engine.run(stop)))
 
