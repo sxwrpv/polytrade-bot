@@ -82,7 +82,9 @@ async def get_pnl_by_wallet(user_id: str, db) -> list[dict]:
         "FROM copy_positions p "
         "LEFT JOIN trader_cache c ON c.address = p.trader_address "
         "WHERE p.user_id = ? AND p.status IN ('closed', 'resolved') "
-        "GROUP BY p.trader_address ORDER BY realized_pnl DESC",
+        # c.display_name grouped too: 1:1 with trader_address, and Postgres
+        # (unlike SQLite) rejects a bare non-aggregated column in SELECT.
+        "GROUP BY p.trader_address, c.display_name ORDER BY realized_pnl DESC",
         (user_id,))
     out = []
     for r in rows:

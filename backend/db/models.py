@@ -427,4 +427,18 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_users_api_token ON users(api_token);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_users_telegram
     ON users(telegram_user_id) WHERE telegram_user_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_trader_cache_stats_refreshed ON trader_cache(stats_refreshed_at);
+
+-- Deny-by-default: enable RLS on every table so a fresh Supabase deploy never
+-- exposes rows through the auto-generated REST/GraphQL API. The bot connects as
+-- the table owner (BYPASSRLS), so it is unaffected; no browser client ever
+-- queries Supabase directly, so no per-user policies are needed. Idempotent
+-- (enabling already-enabled RLS is a no-op). The stronger REVOKE + explicit
+-- deny policies live in supabase/migrations/0002_rls_lockdown.sql (they name
+-- Supabase-only roles, so they're kept out of this boot-time script).
+ALTER TABLE users            ENABLE ROW LEVEL SECURITY;
+ALTER TABLE followed_traders ENABLE ROW LEVEL SECURITY;
+ALTER TABLE copy_positions   ENABLE ROW LEVEL SECURITY;
+ALTER TABLE trade_events     ENABLE ROW LEVEL SECURITY;
+ALTER TABLE trader_cache     ENABLE ROW LEVEL SECURITY;
+ALTER TABLE equity_snapshots ENABLE ROW LEVEL SECURITY;
 """

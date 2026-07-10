@@ -539,8 +539,11 @@ async def get_leaderboard(
         clauses += [f"{fcol} {op} ?" for fcol, op, _ in filters.values()]
         params += [val for _, _, val in filters.values()]
     if search and search.strip():
-        term = f"%{search.strip()}%"
-        clauses.append("(address LIKE ? OR display_name LIKE ? OR x_username LIKE ?)")
+        # LOWER() both sides for case-insensitive search on BOTH backends —
+        # SQLite LIKE ignores ASCII case but Postgres LIKE does not.
+        term = f"%{search.strip().lower()}%"
+        clauses.append("(LOWER(address) LIKE ? OR LOWER(display_name) LIKE ? "
+                       "OR LOWER(x_username) LIKE ?)")
         params += [term, term, term]
     where_sql = ("WHERE " + " AND ".join(clauses)) if clauses else ""
     rows = await db.fetchall(
