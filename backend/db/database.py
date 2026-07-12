@@ -212,9 +212,9 @@ class Database:
             if active_buy:
                 return False
             changed = await tx.execute(
-                "UPDATE copy_positions SET status='closing' "
+                "UPDATE copy_positions SET status='closing', closing_at=? "
                 "WHERE id=? AND user_id=? AND token_id=? AND status='open'",
-                (position_id, user_id, token_id))
+                (now_iso(), position_id, user_id, token_id))
             return changed == 1
 
     async def try_transition(self, position_id: str, from_status: str, to_status: str) -> bool:
@@ -226,9 +226,16 @@ class Database:
         caller that wins the UPDATE proceeds. Returns True iff this call
         performed the transition.
         """
-        rowcount = await self.execute(
-            "UPDATE copy_positions SET status = ? WHERE id = ? AND status = ?",
-            (to_status, position_id, from_status))
+        if to_status == "closing":
+            # stamp the fence so stuck-closing recovery can age-gate safely
+            rowcount = await self.execute(
+                "UPDATE copy_positions SET status = ?, closing_at = ? "
+                "WHERE id = ? AND status = ?",
+                (to_status, now_iso(), position_id, from_status))
+        else:
+            rowcount = await self.execute(
+                "UPDATE copy_positions SET status = ? WHERE id = ? AND status = ?",
+                (to_status, position_id, from_status))
         return rowcount > 0
 
     async def executemany(self, sql: str, rows: Iterable[Sequence[Any]]) -> None:

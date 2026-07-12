@@ -83,6 +83,12 @@ MAX_COPY_SLIPPAGE_PCT = validate_slippage_pct(
 # --- Server ---
 HOST = os.environ.get("HOST", "0.0.0.0")
 PORT = int(os.environ.get("PORT", "8080"))
+# Cross-origin callers of the API, comma-separated (e.g. a Vite dev server on
+# another port). Empty (the default) means NO cross-origin access — the SPA is
+# served same-origin by this backend, so browsers need no CORS at all. The old
+# allow_origins=["*"] + allow_credentials=True combo is a known-bad pairing.
+CORS_ALLOW_ORIGINS = tuple(
+    o.strip() for o in os.environ.get("CORS_ALLOW_ORIGINS", "").split(",") if o.strip())
 
 # --- Wallet / signing ---
 # Trading goes through polymarket-client's AsyncSecureClient (see BUILD_PLAN.md

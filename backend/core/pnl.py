@@ -16,11 +16,20 @@ def _cutoff_iso(days: int) -> str:
 
 
 async def _realized_since(db, user_id: str, days: int) -> float:
+    cutoff = _cutoff_iso(days)
     val = await db.fetchval(
         "SELECT COALESCE(SUM(pnl), 0) FROM trade_events "
         "WHERE user_id = ? AND pnl IS NOT NULL AND ts >= ?",
-        (user_id, _cutoff_iso(days)))
-    return float(val or 0.0)
+        (user_id, cutoff))
+    # Legacy closed rows predate PnL event recording — date them by closed_at
+    # so the windowed numbers cover the same ground as the all-time total.
+    legacy = await db.fetchval(
+        "SELECT COALESCE(SUM(p.realized_pnl), 0) FROM copy_positions p "
+        "WHERE p.user_id = ? AND p.status IN ('closed', 'resolved') "
+        "AND p.closed_at >= ? AND NOT EXISTS("
+        "SELECT 1 FROM trade_events e WHERE e.position_id = p.id AND e.pnl IS NOT NULL)",
+        (user_id, cutoff))
+    return float(val or 0.0) + float(legacy or 0.0)
 
 
 async def get_pnl_stats(user_id: str, db, pm=None) -> dict:
@@ -33,12 +42,25 @@ async def get_pnl_stats(user_id: str, db, pm=None) -> dict:
     # Event PnL includes partial exits plus the final close/resolve. Legacy rows
     # may predate event recording, so fall back to the stored row total only when
     # no PnL event exists for that position.
-    realized = [
+    per_position = [
         float(r["event_pnl"] if int(r["pnl_events"] or 0) else (r["realized_pnl"] or 0.0))
         for r in closed
     ]
-    total_realized = sum(realized)
-    wins = sum(1 for x in realized if x > 0)
+    wins = sum(1 for x in per_position if x > 0)
+    # Total realized counts EVERY booked PnL event — including partial exits on
+    # positions that are still open — plus legacy closed rows that predate event
+    # recording. This keeps realized_pnl consistent with pnl_7d/pnl_30d (event-
+    # based), the by-wallet breakdown, and the equity curve; per_position above
+    # stays completed-positions-only for the win/best/worst stats.
+    event_total = float(await db.fetchval(
+        "SELECT COALESCE(SUM(pnl), 0) FROM trade_events "
+        "WHERE user_id = ? AND pnl IS NOT NULL", (user_id,)) or 0.0)
+    legacy_total = float(await db.fetchval(
+        "SELECT COALESCE(SUM(p.realized_pnl), 0) FROM copy_positions p "
+        "WHERE p.user_id = ? AND p.status IN ('closed', 'resolved') AND NOT EXISTS("
+        "SELECT 1 FROM trade_events e WHERE e.position_id = p.id AND e.pnl IS NOT NULL)",
+        (user_id,)) or 0.0)
+    total_realized = event_total + legacy_total
 
     unrealized = 0.0
     if pm is not None:
@@ -55,10 +77,10 @@ async def get_pnl_stats(user_id: str, db, pm=None) -> dict:
         "unrealized_pnl": round(unrealized, 2),
         "pnl_7d": round(await _realized_since(db, user_id, 7), 2),
         "pnl_30d": round(await _realized_since(db, user_id, 30), 2),
-        "win_rate": round(wins / len(realized), 4) if realized else 0.0,
-        "total_trades": len(realized),
-        "best_trade": round(max(realized), 2) if realized else 0.0,
-        "worst_trade": round(min(realized), 2) if realized else 0.0,
+        "win_rate": round(wins / len(per_position), 4) if per_position else 0.0,
+        "total_trades": len(per_position),
+        "best_trade": round(max(per_position), 2) if per_position else 0.0,
+        "worst_trade": round(min(per_position), 2) if per_position else 0.0,
     }
 
 
@@ -83,14 +105,25 @@ async def get_equity_curve(user_id: str, db, period: str = "30d") -> list[dict]:
 async def get_pnl_by_wallet(user_id: str, db) -> list[dict]:
     """Realized PnL grouped by copied trader — answers "which of my copied
     wallets is actually making money" (User > Performance > breakdown)."""
+    # Per-position PnL uses the same event-based accounting as get_pnl_stats
+    # (partial exits included; row realized_pnl only as the legacy fallback), so
+    # the breakdown always sums to the headline realized number. Open positions
+    # with booked partial-exit PnL contribute too, but only completed positions
+    # count toward closed_trades / win rate.
     rows = await db.fetchall(
         "SELECT p.trader_address, c.display_name, "
-        "COALESCE(SUM(p.realized_pnl), 0) AS realized_pnl, "
-        "COUNT(*) AS closed_trades, "
-        "SUM(CASE WHEN p.realized_pnl > 0 THEN 1 ELSE 0 END) AS wins "
+        "SUM(CASE WHEN COALESCE(e.cnt, 0) > 0 THEN e.total "
+        "    ELSE COALESCE(p.realized_pnl, 0) END) AS realized_pnl, "
+        "SUM(CASE WHEN p.status IN ('closed','resolved') THEN 1 ELSE 0 END) AS closed_trades, "
+        "SUM(CASE WHEN p.status IN ('closed','resolved') AND "
+        "    (CASE WHEN COALESCE(e.cnt, 0) > 0 THEN e.total "
+        "     ELSE COALESCE(p.realized_pnl, 0) END) > 0 THEN 1 ELSE 0 END) AS wins "
         "FROM copy_positions p "
+        "LEFT JOIN (SELECT position_id, COUNT(pnl) AS cnt, COALESCE(SUM(pnl), 0) AS total "
+        "           FROM trade_events WHERE pnl IS NOT NULL GROUP BY position_id) e "
+        "  ON e.position_id = p.id "
         "LEFT JOIN trader_cache c ON c.address = p.trader_address "
-        "WHERE p.user_id = ? AND p.status IN ('closed', 'resolved') "
+        "WHERE p.user_id = ? AND (p.status IN ('closed', 'resolved') OR COALESCE(e.cnt, 0) > 0) "
         # c.display_name grouped too: 1:1 with trader_address, and Postgres
         # (unlike SQLite) rejects a bare non-aggregated column in SELECT.
         "GROUP BY p.trader_address, c.display_name ORDER BY realized_pnl DESC",

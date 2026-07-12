@@ -80,7 +80,8 @@ CREATE TABLE IF NOT EXISTS copy_positions (
     exit_price    REAL,
     realized_pnl  REAL,
     opened_at     TEXT NOT NULL,
-    closed_at     TEXT
+    closed_at     TEXT,
+    closing_at    TEXT                                  -- when status last flipped to 'closing'
 );
 
 -- Reservation acquired before any BUY reaches the exchange. A crash between
@@ -301,6 +302,7 @@ MIGRATIONS = (
     "ON copy_positions(user_id,token_id) WHERE status='open'",
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_active_position_per_token "
     "ON copy_positions(user_id,token_id) WHERE status IN ('open','closing')",
+    "ALTER TABLE copy_positions ADD COLUMN closing_at TEXT",
 )
 
 
@@ -381,7 +383,8 @@ CREATE TABLE IF NOT EXISTS copy_positions (
     exit_price     DOUBLE PRECISION,
     realized_pnl   DOUBLE PRECISION,
     opened_at      TEXT NOT NULL,
-    closed_at       TEXT
+    closed_at       TEXT,
+    closing_at      TEXT
 );
 
 CREATE TABLE IF NOT EXISTS copy_open_claims (

@@ -18,7 +18,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from backend.config import ENCRYPTION_SECRET, TELEGRAM_BOT_TOKEN
+from backend.config import CORS_ALLOW_ORIGINS, ENCRYPTION_SECRET, TELEGRAM_BOT_TOKEN
 from backend.core import auth, equity, trader_stats, wallet
 from backend.core.copy_engine import CopyEngine
 from backend.core.polymarket import PolymarketClient
@@ -174,10 +174,15 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="polymarket-copybot", lifespan=lifespan)
-app.add_middleware(
-    CORSMiddleware, allow_origins=["*"], allow_credentials=True,
-    allow_methods=["*"], allow_headers=["*"],
-)
+# The SPA is served same-origin by this app, so cross-origin access stays OFF
+# unless explicitly configured (CORS_ALLOW_ORIGINS, e.g. a Vite dev server).
+# Never wildcard-with-credentials: that reflected any Origin back as allowed.
+if CORS_ALLOW_ORIGINS:
+    app.add_middleware(
+        CORSMiddleware, allow_origins=list(CORS_ALLOW_ORIGINS),
+        allow_credentials=False,
+        allow_methods=["*"], allow_headers=["*"],
+    )
 app.include_router(routes_auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(routes_user.router, prefix="/api/user", tags=["user"])
 app.include_router(routes_traders.router, prefix="/api/traders", tags=["traders"])

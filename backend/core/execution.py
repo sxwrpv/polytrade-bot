@@ -19,7 +19,13 @@ import logging
 from dataclasses import dataclass, field
 from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
 
-from polymarket.errors import InsufficientLiquidityError
+from polymarket.errors import (
+    InsufficientAllowanceError,
+    InsufficientLiquidityError,
+    RateLimitError,
+    RequestRejectedError,
+    UserInputError,
+)
 
 from backend.config import MAX_COPY_SLIPPAGE_PCT, POLYMARKET_BUILDER_CODE
 from backend.core.polymarket import Level, PolymarketClient
@@ -199,6 +205,27 @@ def _to_units(v) -> float:
         return 0.0
 
 
+def _definitive_rejection(e: Exception) -> bool:
+    """True when the SDK error PROVES no order is live and no fill happened, so
+    the caller's reservation is safe to release instead of freezing behind
+    submission_uncertain. Definitive: a CLOB 4xx rejection ("not enough
+    balance / allowance", "FOK ... fully filled or killed", ...), a rate-limited
+    request, or SDK-side validation that failed before anything was sent. A 5xx
+    or transport failure stays ambiguous — the exchange may have accepted the
+    order before the failure. (Seen live 2026-07-11: six definitive FOK-kill /
+    balance rejections were misfiled as uncertain and permanently froze their
+    tokens behind unreconciled claims.)"""
+    if isinstance(e, (RateLimitError, UserInputError, InsufficientAllowanceError)):
+        return True
+    if isinstance(e, RequestRejectedError):
+        status = getattr(e, "status", None)
+        try:
+            return status is not None and 400 <= int(status) < 500
+        except (TypeError, ValueError):
+            return False
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Main entry
 # ---------------------------------------------------------------------------
@@ -308,9 +335,11 @@ async def place_market_order(
         return res
     except Exception as e:
         res.reason = f"api_error: {e}"
-        # A transport error can occur after the exchange accepted the order.
-        # Callers must reconcile rather than retry blindly.
-        res.submission_uncertain = True
+        # A definitive exchange rejection (4xx / rate limit / SDK validation)
+        # proves no order is live — clean failure, reservation releasable. Only
+        # genuinely ambiguous failures (5xx, transport) require reconciliation.
+        if not _definitive_rejection(e):
+            res.submission_uncertain = True
         return res
 
     _finalize(res, resp, side)
@@ -402,9 +431,10 @@ async def place_capped_order(
                 builder_code=_BUILDER_CODE)
     except Exception as e:
         res.reason = f"api_error: {e}"
-        # A transport error can occur after the exchange accepted the order.
-        # Callers must reconcile rather than retry blindly.
-        res.submission_uncertain = True
+        # Same classification as place_market_order: only ambiguous failures
+        # (5xx, transport) require reconciliation; definitive rejections don't.
+        if not _definitive_rejection(e):
+            res.submission_uncertain = True
         return res
 
     _finalize(res, resp, side)

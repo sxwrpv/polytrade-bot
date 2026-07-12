@@ -33,6 +33,20 @@ def _create_rate_limited(ip: str) -> bool:
     _create_hits[ip] = hits
     return limited
 
+
+def _client_ip(request: Request) -> str:
+    """Real client IP for rate limiting. Behind the tunnel (Tailscale Funnel /
+    localhost.run) every request reaches uvicorn from loopback, so keying on
+    request.client.host put ALL users in one shared bucket; the tunnel's
+    X-Forwarded-For carries the real address. Only trusted from loopback —
+    a direct remote caller can't spoof its way into someone else's bucket."""
+    host = request.client.host if request.client else "unknown"
+    if host in ("127.0.0.1", "::1"):
+        forwarded = request.headers.get("x-forwarded-for", "")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
+    return host
+
 # Bridge response keys verified live against bridge.polymarket.com/deposit
 # (2026-07-01) — one address per chain family; whatever arrives is converted
 # to pUSD at the destination wallet by Polymarket's own Collateral Onramp.
@@ -92,7 +106,7 @@ async def create_wallet(body: CreateWallet, request: Request, db=Depends(get_db)
                         "api_token": existing["api_token"],
                         "gasless": existing["id"] != existing["signer_address"]}
 
-    ip = request.client.host if request.client else "unknown"
+    ip = _client_ip(request)
     if _create_rate_limited(ip):
         raise HTTPException(429, "too many wallets created from this address — try again later")
 
@@ -160,8 +174,11 @@ async def me(request: Request, balance: bool = False,
                                   if p.size > 0 and p.redeemable), 2)
         except Exception:
             positions_val = claimable = None
-        if bal is not None:
-            equity = round(bal + (positions_val or 0.0) + (claimable or 0.0), 2)
+        # Equity only when every component was actually read — a failed
+        # positions read must show '—', not cash silently presented as the
+        # whole account value.
+        if bal is not None and positions_val is not None and claimable is not None:
+            equity = round(bal + positions_val + claimable, 2)
     return {"address": user["id"], "signer_address": user["signer_address"],
             "display_name": user["display_name"], "balance": bal,
             "positions_value": positions_val, "claimable": claimable, "equity": equity,

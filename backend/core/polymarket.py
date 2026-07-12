@@ -262,7 +262,8 @@ class PolymarketClient:
         wallet_address: str,
         *,
         size_threshold: float = 1.0,
-        limit: int = 100,
+        limit: int = 500,
+        offset: int = 0,
         sort_by: str = "CURRENT",
     ) -> list[Position]:
         d = await self._get(
@@ -271,11 +272,36 @@ class PolymarketClient:
                 "user": wallet_address,
                 "sizeThreshold": size_threshold,
                 "limit": limit,
+                "offset": offset,
                 "sortBy": sort_by,
                 "sortDirection": "DESC",
             },
         )
         return [Position.from_api(p) for p in d] if isinstance(d, list) else []
+
+    async def get_all_positions(
+        self,
+        wallet_address: str,
+        *,
+        size_threshold: float = 1.0,
+        page_size: int = 500,
+        max_pages: int = 6,
+    ) -> tuple[list[Position], bool]:
+        """Every position the wallet holds, paged past the endpoint's per-call
+        cap (offset pagination verified live 2026-07-12). Returns
+        (positions, complete): complete=False means the wallet holds more than
+        page_size*max_pages positions and the list is truncated — callers must
+        NOT treat absence from a truncated list as proof a position was exited
+        (whale leaders really do hold 500+ open positions)."""
+        out: list[Position] = []
+        for page in range(max_pages):
+            batch = await self.get_positions(
+                wallet_address, size_threshold=size_threshold,
+                limit=page_size, offset=page * page_size)
+            out.extend(batch)
+            if len(batch) < page_size:
+                return out, True
+        return out, False
 
     # --- leaderboard -------------------------------------------------------
     async def get_leaderboard(

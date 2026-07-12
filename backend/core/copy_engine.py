@@ -50,6 +50,11 @@ log = logging.getLogger("copy_engine")
 
 MIN_NOTIONAL_USD = 1.0       # don't open/resize below this (avoids dust + min-size rejects)
 RESIZE_THRESHOLD = 0.25      # rebalance only when target drifts >25% from current
+# Reconciliation age gates: long enough for the data-api indexer to reflect a
+# fill (uncertain BUYs) and for any legitimately in-flight close to finish
+# (stuck closings) before the wallet is treated as ground truth.
+UNCERTAIN_CLAIM_MIN_AGE_SECONDS = 180.0
+CLOSING_STUCK_MIN_AGE_SECONDS = 600.0
 
 
 # ---------------------------------------------------------------------------
@@ -94,6 +99,7 @@ def plan_actions(
     max_total_shares: float | None = None,
     min_price: float = DEFAULT_MIN_PRICE,
     max_price: float = DEFAULT_MAX_PRICE,
+    positions_complete: bool = True,
 ) -> list[Action]:
     """Diff a leader's live positions against our open copies and emit
     open/close/resize/resolve intents.
@@ -173,11 +179,15 @@ def plan_actions(
                     trader_shares=p.size, row=row, position=p))
             # else: within band — hold
 
-    # trader exited (token no longer held) → close ours
-    for token, row in rows_by_token.items():
-        if token not in pos_by_token:
-            actions.append(Action(kind="close", token_id=token, side="SELL",
-                                  amount=row["shares"], row=row))
+    # trader exited (token no longer held) → close ours. Only when the fetched
+    # position list is COMPLETE: absence from a truncated page proves nothing
+    # (whale leaders hold 500+ positions; closing on a truncated diff force-
+    # sold copies the leader still held).
+    if positions_complete:
+        for token, row in rows_by_token.items():
+            if token not in pos_by_token:
+                actions.append(Action(kind="close", token_id=token, side="SELL",
+                                      amount=row["shares"], row=row))
     return actions
 
 
@@ -239,6 +249,204 @@ class CopyEngine:
         if released or uncertain:
             log.warning("claim recovery: released_reserved=%d marked_uncertain=%d",
                         released, uncertain)
+
+    # --- uncertain-claim / stuck-closing reconciliation ---------------------
+    async def _reconcile_uncertain_claims(self) -> None:
+        """Settle BUY claims parked in 'uncertain' (submission outcome unknown).
+        The wallet is the ground truth: once the indexer has had time to catch
+        up, a holding no tracking row explains means the BUY filled — adopt it;
+        no holding means it never filled — release the claim. Without this,
+        every uncertain claim froze its token forever (no new copies, its
+        reserved_usd counted against exposure) and needed manual DB surgery —
+        six such claims were stuck live on 2026-07-11."""
+        cutoff = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(
+            seconds=UNCERTAIN_CLAIM_MIN_AGE_SECONDS)).isoformat()
+        claims = await self.db.fetchall(
+            "SELECT * FROM copy_open_claims WHERE state='uncertain' AND updated_at < ?",
+            (cutoff,))
+        by_user: dict[str, list[dict]] = defaultdict(list)
+        for c in claims:
+            by_user[c["user_id"]].append(c)
+        for user_id, user_claims in by_user.items():
+            try:
+                positions = await self.pm.get_positions(user_id, size_threshold=0)
+            except Exception:
+                log.exception("uncertain reconciliation: position read failed for %s",
+                              user_id[:10])
+                continue
+            held = {p.asset: p for p in positions if p.size > 0.01}
+            for claim in user_claims:
+                try:
+                    await self._settle_uncertain_claim(
+                        user_id, claim, held.get(claim["token_id"]))
+                except Exception:
+                    log.exception("uncertain claim settlement failed: %s %s",
+                                  user_id[:10], claim["token_id"])
+
+    async def _settle_uncertain_claim(self, user_id: str, claim: dict, p) -> None:
+        token = claim["token_id"]
+        row = await self.db.fetchone(
+            "SELECT * FROM copy_positions WHERE user_id=? AND token_id=? "
+            "AND status IN ('open','closing','reconciliation_required')",
+            (user_id, token))
+        if claim.get("action") == "open":
+            if row is not None:
+                # a tracked row accounts for the shares — nothing left to adopt
+                log.warning("uncertain OPEN claim released (tracked row exists): %s %s",
+                            user_id[:10], token)
+                await self._release_buy_claim(user_id, token, claim["claim_id"])
+            elif p is None:
+                log.info("uncertain OPEN claim released (no fill in wallet): %s %s",
+                         user_id[:10], token)
+                await self._release_buy_claim(user_id, token, claim["claim_id"])
+            else:
+                await self._adopt_uncertain_fill(user_id, claim, p)
+            return
+        # resize-increase: realign the row to the wallet's aggregate when extra
+        # shares appeared; otherwise the top-up never filled — release.
+        if row is None or p is None:
+            log.warning("uncertain RESIZE claim released (row/holding gone): %s %s",
+                        user_id[:10], token)
+            await self._release_buy_claim(user_id, token, claim["claim_id"])
+            return
+        extra = float(p.size) - float(row["shares"])
+        if row["status"] == "open" and extra > 0.01:
+            spent = round(extra * float(p.avg_price or 0), 2)
+            async with self.db.transaction(write=True) as tx:
+                deleted = await tx.execute(
+                    "DELETE FROM copy_open_claims WHERE user_id=? AND token_id=? "
+                    "AND claim_id=? AND state='uncertain'",
+                    (user_id, token, claim["claim_id"]))
+                if deleted != 1:
+                    return   # settled elsewhere
+                changed = await tx.execute(
+                    "UPDATE copy_positions SET shares=?,entry_price=?,notional_usd=? "
+                    "WHERE id=? AND status='open'",
+                    (float(p.size), float(p.avg_price),
+                     round(float(p.size) * float(p.avg_price), 2), row["id"]))
+                if changed != 1:
+                    raise RuntimeError("uncertain resize adoption lost position race")
+                await self._event(user_id, row["id"], "partial", spent, None, store=tx)
+            log.warning("uncertain RESIZE adopted from wallet: %s %s +%.2f shares",
+                        user_id[:10], token, extra)
+        else:
+            await self._release_buy_claim(user_id, token, claim["claim_id"])
+
+    async def _adopt_uncertain_fill(self, user_id: str, claim: dict, p) -> None:
+        """The BUY behind an uncertain claim demonstrably filled (the wallet
+        holds the token and no tracking row explains it): book it as an open
+        copy from the wallet snapshot and clear the claim atomically."""
+        pid = uuid.uuid4().hex
+        notional = round(float(p.size) * float(p.avg_price or 0), 2)
+        async with self.db.transaction(write=True) as tx:
+            user_sql = "SELECT id FROM users WHERE id=?" + (
+                " FOR UPDATE" if self.db.is_pg else "")
+            await tx.fetchone(user_sql, (user_id,))
+            deleted = await tx.execute(
+                "DELETE FROM copy_open_claims WHERE user_id=? AND token_id=? "
+                "AND claim_id=? AND state='uncertain'",
+                (user_id, claim["token_id"], claim["claim_id"]))
+            if deleted != 1:
+                return   # settled elsewhere
+            await tx.execute(
+                "INSERT INTO copy_positions(id,user_id,trader_address,condition_id,token_id,"
+                "market_slug,market_title,outcome,shares,entry_price,notional_usd,status,opened_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,'open',?)",
+                (pid, user_id, claim["trader_address"], p.condition_id, claim["token_id"],
+                 p.slug, p.title, (p.outcome or "").upper(), float(p.size),
+                 float(p.avg_price), notional, now_iso()))
+            await self._event(user_id, pid, "open", notional, None, store=tx)
+        log.warning("uncertain BUY adopted from wallet: %s %s %.2f shares @ %.4f",
+                    user_id[:10], claim["token_id"], p.size, p.avg_price)
+        await self._notify_position({
+            "event": "opened", "user_id": user_id, "position_id": pid,
+            "market_title": p.title, "market_slug": p.slug,
+            "outcome": (p.outcome or "").upper(), "shares": float(p.size),
+            "entry_price": float(p.avg_price), "notional_usd": notional,
+            "trader_address": claim["trader_address"],
+        })
+
+    async def _recover_stuck_closings(self) -> None:
+        """Recover rows stuck mid-close: a 'closing' fence left behind by a
+        crash or an uncertain SELL previously froze the position forever (the
+        engine only manages 'open' rows and manual close 404s on 'closing').
+        Age-gated so a legitimately in-flight close is never touched. Wallet =
+        ground truth: shares still held means no SELL filled -> reopen; shares
+        gone means the SELL (or a resolution) happened -> finalize from the
+        user's own fill history / resolved price."""
+        cutoff = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(
+            seconds=CLOSING_STUCK_MIN_AGE_SECONDS)).isoformat()
+        rows = await self.db.fetchall(
+            "SELECT * FROM copy_positions WHERE status='closing' "
+            "AND (closing_at IS NULL OR closing_at < ?)", (cutoff,))
+        by_user: dict[str, list[dict]] = defaultdict(list)
+        for r in rows:
+            by_user[r["user_id"]].append(r)
+        for user_id, user_rows in by_user.items():
+            try:
+                positions = await self.pm.get_positions(user_id, size_threshold=0)
+            except Exception:
+                log.exception("stuck-closing recovery: position read failed for %s",
+                              user_id[:10])
+                continue
+            held = {p.asset: p for p in positions if p.size > 0.01}
+            for row in user_rows:
+                try:
+                    await self._settle_stuck_closing(user_id, row,
+                                                     held.get(row["token_id"]))
+                except Exception:
+                    log.exception("stuck-closing recovery failed for %s", row["id"])
+
+    async def _settle_stuck_closing(self, user_id: str, row: dict, p) -> None:
+        if p is not None and p.redeemable:
+            exit_price = 1.0 if (p.cur_price or 0) >= 0.5 else 0.0
+            await self._close_row(user_id, row, exit_price, row["shares"],
+                                  event_type="resolve", status="resolved")
+            log.warning("stuck closing row %s resolved at %.0f", row["id"], exit_price)
+        elif p is not None and float(p.size) >= float(row["shares"]) - 0.01:
+            # every share still in the wallet -> the SELL never filled
+            if await self.db.try_transition(row["id"], "closing", "open"):
+                log.warning("stuck closing row %s reopened (wallet still holds "
+                            "the shares)", row["id"])
+        elif p is None:
+            await self._finalize_departed_closing(user_id, row)
+        else:
+            log.warning("stuck closing row %s: wallet holds %.2f of %.2f shares — "
+                        "leaving for manual review", row["id"], p.size, row["shares"])
+
+    async def _finalize_departed_closing(self, user_id: str, row: dict) -> None:
+        """The wallet no longer holds a stuck-closing token: either the market
+        resolved (finalize at the resolved price) or the SELL actually filled
+        (finalize at the real exit price from the user's own fill history)."""
+        try:
+            prices = await self.pm.get_resolved_prices(row["condition_id"])
+        except Exception:
+            prices = {}
+        if row["token_id"] in prices:
+            await self._close_row(user_id, row, prices[row["token_id"]], row["shares"],
+                                  event_type="resolve", status="resolved")
+            log.warning("stuck closing row %s finalized at resolved price %.0f",
+                        row["id"], prices[row["token_id"]])
+            return
+        trades = await self.pm.get_trade_history(user_id, limit=100)
+        since = None
+        if row.get("closing_at"):
+            try:   # small grace window: fills can be stamped just before the fence
+                since = dt.datetime.fromisoformat(row["closing_at"]).timestamp() - 60
+            except ValueError:
+                since = None
+        sells = [t for t in trades
+                 if t.asset == row["token_id"] and t.side.upper() == "SELL"
+                 and (since is None or t.timestamp >= since)]
+        if not sells:
+            log.warning("stuck closing row %s: shares gone but no SELL fill found — "
+                        "retrying next tick", row["id"])
+            return
+        sold = sum(t.size for t in sells)
+        avg = sum(t.size * t.price for t in sells) / sold if sold else 0.0
+        await self._close_row(user_id, row, avg, min(sold, float(row["shares"])))
+        log.warning("stuck closing row %s finalized from fill history: %.2f sh @ %.4f",
+                    row["id"], sold, avg)
 
     async def aclose(self) -> None:
         """Close every cached per-user CLOB client (network sessions)."""
@@ -438,7 +646,8 @@ class CopyEngine:
                 sell_shares = existing["shares"] if full_exit else existing["shares"] * fraction
                 result = await self._place_order(
                     client, self.pm, token, "SELL", sell_shares,
-                    reference_price=trade.price)
+                    reference_price=trade.price,
+                    max_slippage_pct=frisk["slippage"])
             except Exception:
                 # Raised failures are before execution's submission boundary.
                 await self.db.try_transition(existing["id"], "closing", "open")
@@ -472,8 +681,23 @@ class CopyEngine:
                 await self.db.try_transition(existing["id"], "closing", "open")
 
     async def _reconcile_tick(self) -> None:
+        try:
+            await self._reconcile_uncertain_claims()
+        except Exception:
+            log.exception("uncertain-claim reconciliation failed (continuing)")
+        try:
+            await self._recover_stuck_closings()
+        except Exception:
+            log.exception("stuck-closing recovery failed (continuing)")
         follows = await self.db.fetchall(
             "SELECT * FROM followed_traders WHERE is_active = 1")
+        # Unfollow must not orphan open copies: deactivated follows whose
+        # positions are still open keep being managed exactly like a paused
+        # follow (closes/resolves/resize-downs run; opens stay blocked).
+        follows += await self.db.fetchall(
+            "SELECT f.* FROM followed_traders f WHERE f.is_active = 0 AND EXISTS("
+            "SELECT 1 FROM copy_positions p WHERE p.user_id = f.user_id "
+            "AND p.trader_address = f.trader_address AND p.status = 'open')")
         by_user: dict[str, list[dict]] = {}
         for f in follows:
             by_user.setdefault(f["user_id"], []).append(f)
@@ -499,6 +723,7 @@ class CopyEngine:
         for follow in follows:
             frisk = self._follow_risk(follow)
             trader = follow["trader_address"]
+            inactive = not follow.get("is_active")
             open_rows = [r for r in open_rows_all if r["trader_address"] == trader]
             # PAUSE means "no new buys" — NOT "abandon the positions already
             # bought with the user's money". A paused follow with open rows
@@ -506,11 +731,12 @@ class CopyEngine:
             # suppresses opens and resize-ups); only a paused follow with
             # nothing open is skipped entirely. (Surfaced live 2026-07-03:
             # the owner paused a wallet and its resolved positions sat
-            # unmanaged forever.)
-            if frisk["paused"] and not open_rows:
+            # unmanaged forever.) Unfollowed (is_active=0) follows with open
+            # rows are managed the same way — exit-only.
+            if (frisk["paused"] or inactive) and not open_rows:
                 continue
-            positions = await self.pm.get_positions(trader)
-            block_opens = frisk["paused"] or await self._opens_blocked(
+            positions, complete = await self.pm.get_all_positions(trader)
+            block_opens = frisk["paused"] or inactive or await self._opens_blocked(
                 user_id, trader, frisk["daily_limit"])
             actions = plan_actions(
                 positions, open_rows, follow, user_capital, available,
@@ -518,7 +744,8 @@ class CopyEngine:
                 ratio_pct=frisk["ratio_pct"], max_per_trade=frisk["max_per_trade"],
                 min_leader=frisk["min_leader"], ignore_below=frisk["ignore_below"],
                 max_open=frisk["max_open"], min_price=frisk["min_price"],
-                max_price=frisk["max_price"], max_total_shares=frisk["max_total_shares"])
+                max_price=frisk["max_price"], max_total_shares=frisk["max_total_shares"],
+                positions_complete=complete)
             for action in actions:
                 action.trader_address = trader
                 spent = await self._execute(user_id, client, action, slippage=frisk["slippage"])
