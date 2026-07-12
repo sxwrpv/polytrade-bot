@@ -1,6 +1,7 @@
 """/api/positions/* — open (live unrealized), closed history, manual close."""
 from __future__ import annotations
 
+import logging
 import uuid
 
 import aiosqlite
@@ -14,6 +15,18 @@ from backend.config import MAX_COPY_SLIPPAGE_PCT
 from backend.db.database import now_iso
 
 router = APIRouter()
+log = logging.getLogger("positions")
+
+
+async def _notify_position(request: Request, event: dict) -> None:
+    notifier = getattr(getattr(getattr(request, "app", None), "state", None),
+                       "position_notifier", None)
+    if notifier is None:
+        return
+    try:
+        await notifier(event)
+    except Exception:
+        log.exception("position alert failed for %s", event.get("position_id"))
 
 # copy_positions.trader_address for wallet holdings the user closed manually —
 # they were never copied from anyone, but the row keeps them in closed history
@@ -106,8 +119,12 @@ async def open_positions(user=Depends(get_current_user), db=Depends(get_db), pmc
 @router.get("/closed")
 async def closed_positions(user=Depends(get_current_user), db=Depends(get_db)):
     return await db.fetchall(
-        "SELECT * FROM copy_positions WHERE user_id = ? AND status IN ('closed','resolved') "
-        "ORDER BY closed_at DESC", (user["id"],))
+        "SELECT p.*, CASE WHEN "
+        "(SELECT COUNT(e.pnl) FROM trade_events e WHERE e.position_id=p.id) > 0 THEN "
+        "(SELECT COALESCE(SUM(e.pnl),0) FROM trade_events e WHERE e.position_id=p.id) "
+        "ELSE p.realized_pnl END AS realized_pnl "
+        "FROM copy_positions p WHERE p.user_id = ? AND p.status IN ('closed','resolved') "
+        "ORDER BY p.closed_at DESC", (user["id"],))
 
 
 class CloseExternalBody(BaseModel):
@@ -190,6 +207,13 @@ async def close_external_position(body: CloseExternalBody, request: Request,
                  round(p.initial_value, 2), pnl, now_iso()))
             if inserted != 1:
                 raise RuntimeError("external SELL event insertion affected an unexpected row count")
+        await _notify_position(request, {
+            "event": "closed", "user_id": user["id"], "position_id": position_id,
+            "market_title": p.title, "market_slug": p.event_slug or p.slug,
+            "outcome": (p.outcome or "").upper(), "shares": result.filled_shares,
+            "entry_price": p.avg_price, "exit_price": result.avg_price,
+            "realized_pnl": pnl, "trader_address": MANUAL_TRADER,
+        })
     elif not result.submission_uncertain:
         await db.execute("DELETE FROM copy_positions WHERE id=? AND status='closing'",
                          (position_id,))
@@ -239,6 +263,14 @@ async def close_position(position_id: str, request: Request, body: CloseBody | N
                  row["notional_usd"], pnl, now_iso()))
             if inserted != 1:
                 raise RuntimeError("managed SELL event insertion affected an unexpected row count")
+        await _notify_position(request, {
+            "event": "closed", "user_id": user["id"], "position_id": row["id"],
+            "market_title": row.get("market_title", ""),
+            "market_slug": row.get("market_slug", ""), "outcome": row.get("outcome", ""),
+            "shares": result.filled_shares, "entry_price": row["entry_price"],
+            "exit_price": result.avg_price, "realized_pnl": pnl,
+            "trader_address": row.get("trader_address"),
+        })
     elif not result.submission_uncertain:
         await db.try_transition(row["id"], "closing", "open")
     return {"ok": result.ok, "reason": result.reason, "order_id": result.order_id,

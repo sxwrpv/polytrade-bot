@@ -38,6 +38,7 @@ class FollowSettings(BaseModel):
     ignore_below_usd: float | None = Field(None, ge=0, le=50)
     max_open_positions: int | None = Field(None, ge=0, le=50)
     max_total_exposure_usd: float | None = Field(None, ge=0, le=5000)
+    max_total_shares: float | None = Field(None, ge=0, le=1_000_000)
     min_price: float | None = Field(None, ge=0, le=1)
     max_price: float | None = Field(None, ge=0, le=1)
     max_slippage_pct: float | None = Field(None, ge=0, le=10)
@@ -55,6 +56,7 @@ class FollowSettings(BaseModel):
 _FOLLOW_KEYS = (
     "paused", "copy_ratio_pct", "max_position_usd", "min_leader_usd",
     "ignore_below_usd", "max_open_positions", "max_total_exposure_usd",
+    "max_total_shares",
     "min_price", "max_price", "max_slippage_pct", "daily_loss_limit_usd",
     "allocation_pct",
 )
@@ -102,6 +104,7 @@ async def following(user=Depends(get_current_user), db=Depends(get_db)):
         "SELECT f.trader_address, f.allocation_pct, f.copy_ratio_pct, f.max_position_usd, "
         "f.paused, f.min_leader_usd, f.ignore_below_usd, f.max_open_positions, "
         "f.min_price, f.max_price, f.max_slippage_pct, f.max_total_exposure_usd, "
+        "f.max_total_shares, "
         "f.daily_loss_limit_usd, f.created_at, "
         "c.display_name, c.consistency_score, c.total_pnl, c.open_positions "
         "FROM followed_traders f LEFT JOIN trader_cache c ON c.address = f.trader_address "
@@ -171,7 +174,7 @@ async def update_follow_settings(address: str, body: FollowSettings, request: Re
     if "paused" in updates:
         updates["paused"] = int(bool(updates["paused"]))
     # Canonical API semantics: zero means no limit for these three controls.
-    for key in ("max_open_positions", "max_total_exposure_usd", "daily_loss_limit_usd"):
+    for key in ("max_open_positions", "max_total_exposure_usd", "max_total_shares", "daily_loss_limit_usd"):
         if updates.get(key) == 0:
             updates[key] = None
 

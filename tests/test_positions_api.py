@@ -14,6 +14,7 @@ from fastapi import HTTPException
 from backend.api.routes_positions import (
     CloseBody,
     CloseExternalBody,
+    _notify_position,
     close_external_position,
     close_position,
     open_positions,
@@ -59,6 +60,15 @@ class PositionOriginTests(unittest.IsolatedAsyncioTestCase):
 
 
 class CloseSlippageContractTests(unittest.IsolatedAsyncioTestCase):
+    async def test_request_position_notifier_receives_event(self):
+        notifier = AsyncMock()
+        request = SimpleNamespace(app=SimpleNamespace(
+            state=SimpleNamespace(position_notifier=notifier)))
+
+        await _notify_position(request, {"event": "closed", "position_id": "p"})
+
+        notifier.assert_awaited_once_with({"event": "closed", "position_id": "p"})
+
     async def test_external_close_passes_selected_slippage_to_execution(self):
         body = CloseExternalBody(token_id="bot-token", acceptable_slippage_pct=7.5)
         tx = SimpleNamespace(fetchone=AsyncMock(return_value=None), execute=AsyncMock())

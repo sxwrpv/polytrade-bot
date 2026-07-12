@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS followed_traders (
     paused           INTEGER NOT NULL DEFAULT 0,       -- ENABLED (inverted): 1 = paused (no new buys)
     max_slippage_pct REAL,                              -- vs leader price (NULL = global)
     max_total_exposure_usd REAL,                        -- MAX EXPOSURE: cap total open notional for this trader
+    max_total_shares REAL,                              -- cap shares held in any one copied token/market
     daily_loss_limit_usd REAL,                          -- block opens after today's loss on this trader
     -- sizing + entry filters (screenshot settings). NULL = use config default.
     copy_ratio_pct   REAL,                              -- RATIO %: copy = leader position value × this %
@@ -228,6 +229,7 @@ MIGRATIONS = (
     "ALTER TABLE followed_traders ADD COLUMN paused INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE followed_traders ADD COLUMN max_slippage_pct REAL",
     "ALTER TABLE followed_traders ADD COLUMN max_total_exposure_usd REAL",
+    "ALTER TABLE followed_traders ADD COLUMN max_total_shares REAL",
     "ALTER TABLE followed_traders ADD COLUMN daily_loss_limit_usd REAL",
     # per-wallet sizing (ratio-of-leader) + entry filters — see followed_traders above
     "ALTER TABLE followed_traders ADD COLUMN copy_ratio_pct REAL",
@@ -349,6 +351,7 @@ CREATE TABLE IF NOT EXISTS followed_traders (
     paused                 INTEGER NOT NULL DEFAULT 0,
     max_slippage_pct       DOUBLE PRECISION,
     max_total_exposure_usd DOUBLE PRECISION,
+    max_total_shares       DOUBLE PRECISION,
     daily_loss_limit_usd   DOUBLE PRECISION,
     copy_ratio_pct         DOUBLE PRECISION,
     min_leader_usd         DOUBLE PRECISION,
@@ -493,7 +496,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_users_telegram
     ON users(telegram_user_id) WHERE telegram_user_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_trader_cache_stats_refreshed ON trader_cache(stats_refreshed_at);
 
--- Forward upgrades for databases created before the claim protocol.
+-- Forward upgrades for databases created before newer risk controls / claim protocol.
+ALTER TABLE followed_traders ADD COLUMN IF NOT EXISTS max_total_shares DOUBLE PRECISION;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS risk_revision INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE copy_open_claims ADD COLUMN IF NOT EXISTS claim_id TEXT;
 ALTER TABLE copy_open_claims ADD COLUMN IF NOT EXISTS action TEXT NOT NULL DEFAULT 'open';

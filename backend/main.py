@@ -18,10 +18,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from backend.config import ENCRYPTION_SECRET
+from backend.config import ENCRYPTION_SECRET, TELEGRAM_BOT_TOKEN
 from backend.core import auth, equity, trader_stats, wallet
 from backend.core.copy_engine import CopyEngine
 from backend.core.polymarket import PolymarketClient
+from backend.core.telegram_alerts import TelegramPositionNotifier
 from backend.db.database import Database
 from backend.api import routes_auth, routes_positions, routes_traders, routes_user
 
@@ -116,6 +117,7 @@ async def lifespan(app: FastAPI):
     app.state.pm = pm
     app.state.clients = {}            # user_id -> cached CLOB client
     app.state.copy_risk_lock = asyncio.Lock()  # shared by BUYs and settings writes
+    app.state.position_notifier = TelegramPositionNotifier(db, TELEGRAM_BOT_TOKEN)
 
     if os.environ.get("SEED_ON_START", "1") == "1":
         try:
@@ -137,7 +139,8 @@ async def lifespan(app: FastAPI):
             except Exception:
                 log.exception("on-chain detector init failed; falling back to activity poll")
         engine = CopyEngine(db, pm, detector=detector,
-                            risk_lock=app.state.copy_risk_lock)
+                            risk_lock=app.state.copy_risk_lock,
+                            position_notifier=app.state.position_notifier)
         app.state.engine = engine
         tasks.append(asyncio.create_task(engine.run(stop)))
 
@@ -165,6 +168,7 @@ async def lifespan(app: FastAPI):
         engine = getattr(app.state, "engine", None)
         if engine is not None:
             await engine.aclose()
+        await app.state.position_notifier.aclose()
         await pm.aclose()
         await db.close()
 

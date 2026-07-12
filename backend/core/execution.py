@@ -19,6 +19,8 @@ import logging
 from dataclasses import dataclass, field
 from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
 
+from polymarket.errors import InsufficientLiquidityError
+
 from backend.config import MAX_COPY_SLIPPAGE_PCT, POLYMARKET_BUILDER_CODE
 from backend.core.polymarket import Level, PolymarketClient
 
@@ -298,6 +300,12 @@ async def place_market_order(
                 token_id=token_id, side="SELL", shares=amount, order_type="FOK",
                 min_price=exchange_floor,
                 builder_code=_BUILDER_CODE)
+    except InsufficientLiquidityError as e:
+        # The SDK raises this only after the exchange definitively kills an FOK
+        # that could not fill completely. No order remains live and no fill
+        # occurred, so the reservation is safe to release.
+        res.reason = f"insufficient_liquidity: {e}"
+        return res
     except Exception as e:
         res.reason = f"api_error: {e}"
         # A transport error can occur after the exchange accepted the order.

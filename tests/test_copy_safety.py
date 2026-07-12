@@ -76,6 +76,47 @@ class CopySafetyTests(unittest.IsolatedAsyncioTestCase):
         await self.db.close()
         os.unlink(self.path)
 
+    async def test_open_fill_sends_position_alert_after_persistence(self):
+        alerts = []
+
+        async def notify(event):
+            alerts.append(event)
+
+        async def place(*args, **kwargs):
+            return OrderResult(ok=True, filled_shares=20, avg_price=0.5)
+
+        engine = CopyEngine(self.db, SimpleNamespace(), place_order=place,
+                            position_notifier=notify)
+        spent = await engine._execute(USER, object(), open_action(amount=10))
+
+        self.assertEqual(10.0, spent)
+        self.assertEqual(1, len(alerts))
+        self.assertEqual("opened", alerts[0]["event"])
+        self.assertEqual("Market", alerts[0]["market_title"])
+        self.assertEqual(10.0, alerts[0]["notional_usd"])
+
+    async def test_closed_position_sends_pnl_alert_after_persistence(self):
+        alerts = []
+
+        async def notify(event):
+            alerts.append(event)
+
+        await self.db.execute(
+            "INSERT INTO copy_positions(id,user_id,trader_address,condition_id,token_id,"
+            "market_title,outcome,shares,entry_price,notional_usd,status,opened_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,'closing',?)",
+            ("position", USER, TRADER, "condition", TOKEN, "Market", "YES",
+             10.0, 0.4, 4.0, now_iso()))
+        row = await self.db.fetchone("SELECT * FROM copy_positions WHERE id='position'")
+        engine = CopyEngine(self.db, SimpleNamespace(), position_notifier=notify)
+
+        await engine._close_row(USER, row, 0.6, 10.0)
+
+        self.assertEqual(1, len(alerts))
+        self.assertEqual("closed", alerts[0]["event"])
+        self.assertAlmostEqual(2.0, alerts[0]["realized_pnl"])
+        self.assertEqual(0.6, alerts[0]["exit_price"])
+
     async def test_execute_rechecks_pause_immediately_before_buy(self):
         calls = 0
 

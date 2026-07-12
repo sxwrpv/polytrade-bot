@@ -25,9 +25,18 @@ async def _realized_since(db, user_id: str, days: int) -> float:
 
 async def get_pnl_stats(user_id: str, db, pm=None) -> dict:
     closed = await db.fetchall(
-        "SELECT realized_pnl FROM copy_positions "
-        "WHERE user_id = ? AND status IN ('closed', 'resolved')", (user_id,))
-    realized = [float(r["realized_pnl"] or 0.0) for r in closed]
+        "SELECT p.realized_pnl, "
+        "(SELECT COUNT(e.pnl) FROM trade_events e WHERE e.position_id=p.id) AS pnl_events, "
+        "(SELECT COALESCE(SUM(e.pnl),0) FROM trade_events e WHERE e.position_id=p.id) AS event_pnl "
+        "FROM copy_positions p WHERE p.user_id = ? AND p.status IN ('closed', 'resolved')",
+        (user_id,))
+    # Event PnL includes partial exits plus the final close/resolve. Legacy rows
+    # may predate event recording, so fall back to the stored row total only when
+    # no PnL event exists for that position.
+    realized = [
+        float(r["event_pnl"] if int(r["pnl_events"] or 0) else (r["realized_pnl"] or 0.0))
+        for r in closed
+    ]
     total_realized = sum(realized)
     wins = sum(1 for x in realized if x > 0)
 

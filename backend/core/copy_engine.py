@@ -91,6 +91,7 @@ def plan_actions(
     min_leader: float = 0.0,
     ignore_below: float | None = None,
     max_open: int | None = None,
+    max_total_shares: float | None = None,
     min_price: float = DEFAULT_MIN_PRICE,
     max_price: float = DEFAULT_MAX_PRICE,
 ) -> list[Action]:
@@ -138,6 +139,8 @@ def plan_actions(
                 continue
             # OPEN: copy the leader's dollar position, scaled by RATIO %, capped.
             amt = min(leader_notional * ratio_pct / 100.0, max_pos, remaining)
+            if max_total_shares is not None:
+                amt = min(amt, max_total_shares * p.cur_price)
             if amt >= dust_floor:
                 actions.append(Action(
                     kind="open", token_id=token, condition_id=p.condition_id,
@@ -153,6 +156,9 @@ def plan_actions(
                 delta_shares = row["shares"] * (ratio - 1)
                 headroom = max_pos - row["notional_usd"]
                 amt = min(delta_shares * p.cur_price, remaining, headroom)
+                if max_total_shares is not None:
+                    share_headroom = max(0.0, max_total_shares - float(row["shares"]))
+                    amt = min(amt, share_headroom * p.cur_price)
                 if amt >= min_notional:
                     actions.append(Action(
                         kind="resize", subkind="increase", token_id=token, side="BUY",
@@ -184,7 +190,8 @@ class CopyEngine:
                  collateral_fn=None, detector=None,
                  poll_interval: float | None = None,
                  detection_interval: float | None = None,
-                 risk_lock: asyncio.Lock | None = None) -> None:
+                 risk_lock: asyncio.Lock | None = None,
+                 position_notifier=None) -> None:
         self.db = db
         self.pm = pm
         self.poll_interval = poll_interval or COPY_ENGINE_POLL_SECONDS
@@ -202,6 +209,7 @@ class CopyEngine:
         # stricter limit either wins before a BUY, or is acknowledged only after
         # an already-submitted BUY completes.
         self._risk_lock = risk_lock or asyncio.Lock()
+        self._position_notifier = position_notifier
         self._clients: dict[str, object] = {}
         # fast-detection cursors / dedupe, per (user_id, trader_address).
         # _seen values are insertion-ordered dicts used as bounded sets.
@@ -374,6 +382,8 @@ class CopyEngine:
             # RATIO %: copy the leader's dollar position, scaled, then capped.
             notional = min(leader_notional * frisk["ratio_pct"] / 100.0,
                            frisk["max_per_trade"], available)
+            if frisk["max_total_shares"] is not None:
+                notional = min(notional, frisk["max_total_shares"] * leader_price)
             if frisk["max_exposure"] is not None:   # cap exposure to THIS trader
                 trader_open = sum(r["notional_usd"] for r in trader_open_rows)
                 notional = min(notional, max(0.0, frisk["max_exposure"] - trader_open))
@@ -508,7 +518,7 @@ class CopyEngine:
                 ratio_pct=frisk["ratio_pct"], max_per_trade=frisk["max_per_trade"],
                 min_leader=frisk["min_leader"], ignore_below=frisk["ignore_below"],
                 max_open=frisk["max_open"], min_price=frisk["min_price"],
-                max_price=frisk["max_price"])
+                max_price=frisk["max_price"], max_total_shares=frisk["max_total_shares"])
             for action in actions:
                 action.trader_address = trader
                 spent = await self._execute(user_id, client, action, slippage=frisk["slippage"])
@@ -650,6 +660,8 @@ class CopyEngine:
                         return None
                     allowed = min(allowed, leader_notional * risk["ratio_pct"] / 100.0,
                                   risk["max_per_trade"])
+                    if risk["max_total_shares"] is not None:
+                        allowed = min(allowed, risk["max_total_shares"] * price)
                     floor = risk["ignore_below"]
                 elif action.kind == "resize" and action.subkind == "increase":
                     fresh = await tx.fetchone(
@@ -658,6 +670,10 @@ class CopyEngine:
                         return None
                     action = replace(action, row=fresh)
                     allowed = min(allowed, max(0.0, risk["max_per_trade"] - fresh["notional_usd"]))
+                    if risk["max_total_shares"] is not None:
+                        price = float(action.reference_price or getattr(action.position, "cur_price", 0) or 0)
+                        share_headroom = max(0.0, risk["max_total_shares"] - float(fresh["shares"]))
+                        allowed = min(allowed, share_headroom * price)
                     floor = MIN_NOTIONAL_USD
                 else:
                     return None
@@ -733,6 +749,13 @@ class CopyEngine:
                 "AND state='submitting'", (user_id, action.token_id, action.claim_id))
             if deleted != 1:
                 raise RuntimeError("BUY claim fencing token lost during open finalization")
+        await self._notify_position({
+            "event": "opened", "user_id": user_id, "position_id": pid,
+            "market_title": getattr(p, "title", ""),
+            "market_slug": getattr(p, "slug", ""), "outcome": action.outcome,
+            "shares": result.filled_shares, "entry_price": result.avg_price,
+            "notional_usd": spent, "trader_address": action.trader_address,
+        })
         return spent
 
     async def _record_close(self, user_id, action, result) -> None:
@@ -854,6 +877,25 @@ class CopyEngine:
                 raise RuntimeError("full SELL finalization lost closing fence")
             await self._event(
                 user_id, row["id"], event_type, row["notional_usd"], pnl, store=tx)
+        await self._notify_position({
+            "event": "resolved" if status == "resolved" else "closed",
+            "user_id": user_id, "position_id": row["id"],
+            "market_title": row.get("market_title", ""),
+            "market_slug": row.get("market_slug", ""), "outcome": row.get("outcome", ""),
+            "shares": filled_shares, "entry_price": row["entry_price"],
+            "exit_price": exit_price, "realized_pnl": pnl,
+            "trader_address": row.get("trader_address"),
+        })
+
+    async def _notify_position(self, event: dict) -> None:
+        if self._position_notifier is None:
+            return
+        try:
+            await self._position_notifier(event)
+        except Exception:
+            # Trading persistence is already committed. Alert delivery is
+            # best-effort and must never turn a successful fill into a failure.
+            log.exception("position alert failed for %s", event.get("position_id"))
 
     async def _event(self, user_id, position_id, event_type, amount_usd, pnl,
                      *, store=None) -> None:
@@ -877,6 +919,7 @@ class CopyEngine:
         exp = follow.get("max_total_exposure_usd")
         lim = follow.get("daily_loss_limit_usd")
         mo = follow.get("max_open_positions")
+        mts = follow.get("max_total_shares")
         return {
             "paused": bool(follow.get("paused")),
             "slippage": validate_slippage_pct(
@@ -892,6 +935,7 @@ class CopyEngine:
             "min_leader": _f("min_leader_usd", 0.0),
             "ignore_below": _f("ignore_below_usd", DEFAULT_IGNORE_BELOW_USD),
             "max_open": int(mo) if mo is not None else None,   # NULL/0 = unlimited
+            "max_total_shares": float(mts) if mts is not None else None,
             "min_price": _f("min_price", DEFAULT_MIN_PRICE),
             "max_price": _f("max_price", DEFAULT_MAX_PRICE),
         }
