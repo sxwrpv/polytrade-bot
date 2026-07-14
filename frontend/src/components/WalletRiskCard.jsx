@@ -18,7 +18,6 @@ const DEFAULTS = {
   ignore_below_usd: 2,
   max_open_positions: 0,
   max_total_exposure_usd: 0,
-  max_total_shares: 0,
   min_price: 0.1,
   max_price: 0.98,
   max_slippage_pct: 2,
@@ -33,14 +32,13 @@ const SLIDERS = [
   ['ignore_below_usd', 'IGNORE POSITIONS <', 0, 50, 0.5, '$', 'skip if our copy would be this small'],
   ['max_open_positions', 'MAX OPEN', 0, 50, 1, '', '0 = unlimited'],
   ['max_total_exposure_usd', 'MAX EXPOSURE', 0, 5000, 50, '$', 'cap total open on this wallet (0 = none)'],
-  ['max_total_shares', 'MAX SHARES / BET', 0, 10000, 5, '', 'stop buying this market at this share count (0 = unlimited)'],
   ['min_price', 'MIN PRICE', 0, 1, 0.01, '', 'skip cheaper longshots'],
   ['max_price', 'MAX PRICE', 0, 1, 0.01, '', 'skip near-resolved markets'],
   ['max_slippage_pct', 'MAX SLIPPAGE %', 0, 10, 0.5, '%', 'vs leader fill price'],
   ['daily_loss_limit_usd', 'DAILY LOSS LIMIT', 0, 1000, 10, '$', '0 = none'],
 ]
 // values where 0 means "no limit" and should persist as NULL, not 0
-const ZERO_IS_NULL = new Set(['max_open_positions', 'max_total_exposure_usd', 'max_total_shares', 'daily_loss_limit_usd'])
+const ZERO_IS_NULL = new Set(['max_open_positions', 'max_total_exposure_usd', 'daily_loss_limit_usd'])
 
 function withDefaults(w) {
   const out = { ...w }

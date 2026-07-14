@@ -96,7 +96,6 @@ def plan_actions(
     min_leader: float = 0.0,
     ignore_below: float | None = None,
     max_open: int | None = None,
-    max_total_shares: float | None = None,
     min_price: float = DEFAULT_MIN_PRICE,
     max_price: float = DEFAULT_MAX_PRICE,
     positions_complete: bool = True,
@@ -145,8 +144,6 @@ def plan_actions(
                 continue
             # OPEN: copy the leader's dollar position, scaled by RATIO %, capped.
             amt = min(leader_notional * ratio_pct / 100.0, max_pos, remaining)
-            if max_total_shares is not None:
-                amt = min(amt, max_total_shares * p.cur_price)
             if amt >= dust_floor:
                 actions.append(Action(
                     kind="open", token_id=token, condition_id=p.condition_id,
@@ -162,9 +159,6 @@ def plan_actions(
                 delta_shares = row["shares"] * (ratio - 1)
                 headroom = max_pos - row["notional_usd"]
                 amt = min(delta_shares * p.cur_price, remaining, headroom)
-                if max_total_shares is not None:
-                    share_headroom = max(0.0, max_total_shares - float(row["shares"]))
-                    amt = min(amt, share_headroom * p.cur_price)
                 if amt >= min_notional:
                     actions.append(Action(
                         kind="resize", subkind="increase", token_id=token, side="BUY",
@@ -590,8 +584,6 @@ class CopyEngine:
             # RATIO %: copy the leader's dollar position, scaled, then capped.
             notional = min(leader_notional * frisk["ratio_pct"] / 100.0,
                            frisk["max_per_trade"], available)
-            if frisk["max_total_shares"] is not None:
-                notional = min(notional, frisk["max_total_shares"] * leader_price)
             if frisk["max_exposure"] is not None:   # cap exposure to THIS trader
                 trader_open = sum(r["notional_usd"] for r in trader_open_rows)
                 notional = min(notional, max(0.0, frisk["max_exposure"] - trader_open))
@@ -744,7 +736,7 @@ class CopyEngine:
                 ratio_pct=frisk["ratio_pct"], max_per_trade=frisk["max_per_trade"],
                 min_leader=frisk["min_leader"], ignore_below=frisk["ignore_below"],
                 max_open=frisk["max_open"], min_price=frisk["min_price"],
-                max_price=frisk["max_price"], max_total_shares=frisk["max_total_shares"],
+                max_price=frisk["max_price"],
                 positions_complete=complete)
             for action in actions:
                 action.trader_address = trader
@@ -881,19 +873,11 @@ class CopyEngine:
             log.warning("buy skipped (%s %s): wallet position could not be "
                         "verified — failing closed", action.kind, action.token_id)
             return None
-        wallet_cost, wallet_shares = verified
+        wallet_cost, _ = verified
         row_basis = float((action.row or {}).get("notional_usd") or 0.0)
         basis = max(wallet_cost, row_basis)
         allowed = min(float(action.amount),
                       max(0.0, risk["max_per_trade"] - basis))
-        if risk["max_total_shares"] is not None:
-            price = float(action.reference_price
-                          or getattr(action.position, "cur_price", 0) or 0)
-            if price > 0:
-                row_shares = float((action.row or {}).get("shares") or 0.0)
-                share_headroom = max(
-                    0.0, risk["max_total_shares"] - max(wallet_shares, row_shares))
-                allowed = min(allowed, share_headroom * price)
         floor = risk["ignore_below"] if action.kind == "open" else MIN_NOTIONAL_USD
         if allowed < floor:
             log.info("buy skipped (%s %s): verified wallet basis %.2f leaves no "
@@ -952,8 +936,6 @@ class CopyEngine:
                         return None
                     allowed = min(allowed, leader_notional * risk["ratio_pct"] / 100.0,
                                   risk["max_per_trade"])
-                    if risk["max_total_shares"] is not None:
-                        allowed = min(allowed, risk["max_total_shares"] * price)
                     floor = risk["ignore_below"]
                 elif action.kind == "resize" and action.subkind == "increase":
                     fresh = await tx.fetchone(
@@ -962,10 +944,6 @@ class CopyEngine:
                         return None
                     action = replace(action, row=fresh)
                     allowed = min(allowed, max(0.0, risk["max_per_trade"] - fresh["notional_usd"]))
-                    if risk["max_total_shares"] is not None:
-                        price = float(action.reference_price or getattr(action.position, "cur_price", 0) or 0)
-                        share_headroom = max(0.0, risk["max_total_shares"] - float(fresh["shares"]))
-                        allowed = min(allowed, share_headroom * price)
                     floor = MIN_NOTIONAL_USD
                 else:
                     return None
@@ -1211,7 +1189,6 @@ class CopyEngine:
         exp = follow.get("max_total_exposure_usd")
         lim = follow.get("daily_loss_limit_usd")
         mo = follow.get("max_open_positions")
-        mts = follow.get("max_total_shares")
         return {
             "paused": bool(follow.get("paused")),
             "slippage": validate_slippage_pct(
@@ -1227,7 +1204,6 @@ class CopyEngine:
             "min_leader": _f("min_leader_usd", 0.0),
             "ignore_below": _f("ignore_below_usd", DEFAULT_IGNORE_BELOW_USD),
             "max_open": int(mo) if mo is not None else None,   # NULL/0 = unlimited
-            "max_total_shares": float(mts) if mts is not None else None,
             "min_price": _f("min_price", DEFAULT_MIN_PRICE),
             "max_price": _f("max_price", DEFAULT_MAX_PRICE),
         }
