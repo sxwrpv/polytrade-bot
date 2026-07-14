@@ -17,7 +17,7 @@ from types import SimpleNamespace
 from polymarket.errors import RequestRejectedError, TransportError
 
 from backend.core import pnl
-from backend.core.copy_engine import CopyEngine, plan_actions
+from backend.core.copy_engine import Action, CopyEngine, plan_actions
 from backend.core.execution import OrderResult, place_market_order
 from backend.core.polymarket import Level, OrderBook, PolymarketClient, Position, Trade
 from backend.db.database import Database, now_iso
@@ -339,6 +339,105 @@ class UnfollowKeepsManagingTests(EngineDbTestCase):
         await engine._sync_user(USER, [follow])
 
         self.assertEqual(["close"], [a.kind for a in executed])
+
+
+class VerifiedSizeGateTests(EngineDbTestCase):
+    """Pre-submission MAX/TRADE gate against the wallet's REAL holding: DB
+    bookkeeping drift must never let a position grow past the cap."""
+
+    def buy_engine(self, wallet_positions, placed, *, raise_on_read=False):
+        async def get_all_positions(wallet, *, size_threshold=0.0,
+                                    page_size=500, max_pages=6):
+            if raise_on_read:
+                raise RuntimeError("data-api down")
+            return list(wallet_positions), True
+
+        async def place(client, pm, token, side, amount, **kwargs):
+            placed.append(amount)
+            return OrderResult(ok=True, side=side, filled_shares=amount / 0.5,
+                               avg_price=0.5)
+
+        pm = SimpleNamespace(get_all_positions=get_all_positions)
+        return CopyEngine(self.db, pm, place_order=place)
+
+    def open_action(self, amount=8.0) -> Action:
+        p = SimpleNamespace(
+            proxy_wallet=TRADER, asset=TOKEN, condition_id="condition-1",
+            size=2000.0, avg_price=0.5, cur_price=0.5, current_value=1000.0,
+            redeemable=False, outcome="YES", slug="market", title="Market")
+        return Action(kind="open", token_id=TOKEN, condition_id="condition-1",
+                      outcome="YES", side="BUY", amount=amount,
+                      notional_usd=amount, reference_price=0.5,
+                      trader_shares=2000.0, position=p, trader_address=TRADER)
+
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        await self.db.execute(
+            "UPDATE followed_traders SET max_position_usd=8.0 WHERE id='follow-1'")
+
+    async def test_buy_clamped_to_real_wallet_headroom(self):
+        # the wallet already holds $5 of this token that the DB knows nothing
+        # about — only $3 of the $8 cap is really left
+        placed: list[float] = []
+        engine = self.buy_engine(
+            [wallet_position(size=10.0, avg=0.5)], placed)
+
+        spent = await engine._execute(USER, object(), self.open_action(8.0))
+
+        self.assertEqual([3.0], placed)
+        self.assertEqual(3.0, spent)
+        self.assertEqual(3.0, await self.db.fetchval(
+            "SELECT notional_usd FROM copy_positions WHERE token_id=?", (TOKEN,)))
+
+    async def test_buy_skipped_when_wallet_already_at_cap(self):
+        placed: list[float] = []
+        engine = self.buy_engine(
+            [wallet_position(size=16.0, avg=0.5)], placed)   # $8 already held
+
+        spent = await engine._execute(USER, object(), self.open_action(8.0))
+
+        self.assertEqual([], placed)
+        self.assertEqual(0.0, spent)
+        self.assertEqual(0, await self.db.fetchval(
+            "SELECT COUNT(*) FROM copy_positions"))
+        self.assertEqual(0, await self.db.fetchval(
+            "SELECT COUNT(*) FROM copy_open_claims"))   # claim released
+
+    async def test_buy_fails_closed_when_wallet_cannot_be_read(self):
+        placed: list[float] = []
+        engine = self.buy_engine([], placed, raise_on_read=True)
+
+        spent = await engine._execute(USER, object(), self.open_action(8.0))
+
+        self.assertEqual([], placed)
+        self.assertEqual(0.0, spent)
+        self.assertEqual(0, await self.db.fetchval(
+            "SELECT COUNT(*) FROM copy_open_claims"))   # claim released
+
+    async def test_resize_headroom_uses_wallet_truth_over_row(self):
+        # DB row says $4 spent, but the wallet really holds $7 — a $4 top-up
+        # must clamp to $1, and $1 >= MIN_NOTIONAL still executes
+        await self.insert_position(status="open", shares=8.0)
+        await self.db.execute(
+            "UPDATE copy_positions SET notional_usd=4.0 WHERE id='position'")
+        row = await self.db.fetchone("SELECT * FROM copy_positions WHERE id='position'")
+        placed: list[float] = []
+        engine = self.buy_engine(
+            [wallet_position(size=14.0, avg=0.5)], placed)   # $7 real cost
+        p = SimpleNamespace(proxy_wallet=TRADER, asset=TOKEN,
+                            condition_id=f"condition-{TOKEN}", size=4000.0,
+                            avg_price=0.5, cur_price=0.5, current_value=2000.0,
+                            redeemable=False, outcome="YES", slug="market",
+                            title="Market")
+        action = Action(kind="resize", subkind="increase", token_id=TOKEN,
+                        side="BUY", amount=4.0, notional_usd=4.0,
+                        reference_price=0.5, trader_shares=4000.0, row=row,
+                        position=p, trader_address=TRADER)
+
+        spent = await engine._execute(USER, object(), action)
+
+        self.assertEqual([1.0], placed)
+        self.assertEqual(1.0, spent)
 
 
 class PnlConsistencyTests(unittest.IsolatedAsyncioTestCase):

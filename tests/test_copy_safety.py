@@ -16,6 +16,16 @@ TRADER = "0x" + "2" * 40
 TOKEN = "token-1"
 
 
+def fake_pm(wallet_positions=()):
+    """Engine pm stub. The pre-submission size gate reads the user's REAL
+    wallet via get_all_positions; an empty wallet means full headroom."""
+    async def get_all_positions(wallet, *, size_threshold=0.0, page_size=500,
+                                max_pages=6):
+        return list(wallet_positions), True
+
+    return SimpleNamespace(get_all_positions=get_all_positions)
+
+
 def position(*, price: float = 0.50, value: float = 1000.0):
     return SimpleNamespace(
         proxy_wallet=TRADER,
@@ -85,7 +95,7 @@ class CopySafetyTests(unittest.IsolatedAsyncioTestCase):
         async def place(*args, **kwargs):
             return OrderResult(ok=True, filled_shares=20, avg_price=0.5)
 
-        engine = CopyEngine(self.db, SimpleNamespace(), place_order=place,
+        engine = CopyEngine(self.db, fake_pm(), place_order=place,
                             position_notifier=notify)
         spent = await engine._execute(USER, object(), open_action(amount=10))
 
@@ -108,7 +118,7 @@ class CopySafetyTests(unittest.IsolatedAsyncioTestCase):
             ("position", USER, TRADER, "condition", TOKEN, "Market", "YES",
              10.0, 0.4, 4.0, now_iso()))
         row = await self.db.fetchone("SELECT * FROM copy_positions WHERE id='position'")
-        engine = CopyEngine(self.db, SimpleNamespace(), position_notifier=notify)
+        engine = CopyEngine(self.db, fake_pm(), position_notifier=notify)
 
         await engine._close_row(USER, row, 0.6, 10.0)
 
@@ -125,7 +135,7 @@ class CopySafetyTests(unittest.IsolatedAsyncioTestCase):
             calls += 1
             return OrderResult(ok=True, filled_shares=40, avg_price=0.5)
 
-        engine = CopyEngine(self.db, SimpleNamespace(), place_order=place)
+        engine = CopyEngine(self.db, fake_pm(), place_order=place)
         # Simulate an action planned from an old enabled snapshot, then the user
         # receives a successful pause response before execution reaches the CLOB.
         await self.db.execute(
@@ -152,8 +162,8 @@ class CopySafetyTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0.05)
             return OrderResult(ok=True, filled_shares=40, avg_price=0.5)
 
-        first = CopyEngine(self.db, SimpleNamespace(), place_order=place)
-        second = CopyEngine(self.db, SimpleNamespace(), place_order=place)
+        first = CopyEngine(self.db, fake_pm(), place_order=place)
+        second = CopyEngine(self.db, fake_pm(), place_order=place)
 
         await asyncio.gather(
             first._execute(USER, object(), open_action()),
@@ -176,7 +186,7 @@ class CopySafetyTests(unittest.IsolatedAsyncioTestCase):
             submitted_amounts.append(amount)
             return OrderResult(ok=True, filled_shares=amount / 0.5, avg_price=0.5)
 
-        engine = CopyEngine(self.db, SimpleNamespace(), place_order=place)
+        engine = CopyEngine(self.db, fake_pm(), place_order=place)
         # The action was planned at $20, then the user lowered the cap to $8.
         await self.db.execute(
             "UPDATE followed_traders SET max_position_usd=8 WHERE user_id=? AND trader_address=?",
@@ -203,8 +213,8 @@ class CopySafetyTests(unittest.IsolatedAsyncioTestCase):
             return OrderResult(ok=True, filled_shares=amount / 0.5, avg_price=0.5)
 
         try:
-            first = CopyEngine(self.db, SimpleNamespace(), place_order=place)
-            second = CopyEngine(second_db, SimpleNamespace(), place_order=place)
+            first = CopyEngine(self.db, fake_pm(), place_order=place)
+            second = CopyEngine(second_db, fake_pm(), place_order=place)
             await asyncio.gather(
                 first._execute(USER, object(), open_action(amount=8, token="token-a")),
                 second._execute(USER, object(), open_action(amount=8, token="token-b")),
@@ -218,7 +228,7 @@ class CopySafetyTests(unittest.IsolatedAsyncioTestCase):
             await second_db.close()
 
     async def test_risk_revision_fences_reserved_buy_before_submission(self):
-        engine = CopyEngine(self.db, SimpleNamespace(), place_order=None)
+        engine = CopyEngine(self.db, fake_pm(), place_order=None)
         prepared = await engine._prepare_buy(USER, open_action())
         self.assertIsNotNone(prepared)
         reserved, _ = prepared
@@ -231,7 +241,7 @@ class CopySafetyTests(unittest.IsolatedAsyncioTestCase):
         async def place(*args, **kwargs):
             return OrderResult(ok=False, reason="api_error: timeout", submission_uncertain=True)
 
-        engine = CopyEngine(self.db, SimpleNamespace(), place_order=place)
+        engine = CopyEngine(self.db, fake_pm(), place_order=place)
         await engine._execute(USER, object(), open_action())
         claim = await self.db.fetchone(
             "SELECT state FROM copy_open_claims WHERE user_id=? AND token_id=?", (USER, TOKEN))
@@ -241,7 +251,7 @@ class CopySafetyTests(unittest.IsolatedAsyncioTestCase):
         async def place(*args, **kwargs):
             raise RuntimeError("preflight failed")
 
-        engine = CopyEngine(self.db, SimpleNamespace(), place_order=place)
+        engine = CopyEngine(self.db, fake_pm(), place_order=place)
         with self.assertRaisesRegex(RuntimeError, "preflight failed"):
             await engine._execute(USER, object(), open_action())
 
@@ -257,7 +267,7 @@ class CopySafetyTests(unittest.IsolatedAsyncioTestCase):
             calls += 1
             return OrderResult(ok=True, filled_shares=40, avg_price=0.5)
 
-        engine = CopyEngine(self.db, SimpleNamespace(), place_order=place)
+        engine = CopyEngine(self.db, fake_pm(), place_order=place)
         await self.db.execute("UPDATE users SET paused=1 WHERE id=?", (USER,))
 
         await engine._execute(USER, object(), open_action())
@@ -279,7 +289,7 @@ class CopySafetyTests(unittest.IsolatedAsyncioTestCase):
             calls += 1
             return OrderResult(ok=False, reason="timeout", submission_uncertain=True)
 
-        engine = CopyEngine(self.db, SimpleNamespace(), place_order=place)
+        engine = CopyEngine(self.db, fake_pm(), place_order=place)
         await engine._execute(USER, object(), close_action(row))
         await engine._execute(USER, object(), close_action(row))
 
@@ -299,7 +309,7 @@ class CopySafetyTests(unittest.IsolatedAsyncioTestCase):
         async def place(*args, **kwargs):
             raise RuntimeError("preflight")
 
-        engine = CopyEngine(self.db, SimpleNamespace(), place_order=place)
+        engine = CopyEngine(self.db, fake_pm(), place_order=place)
         with self.assertRaises(RuntimeError):
             await engine._execute(USER, object(), close_action(row))
         self.assertEqual("open", await self.db.fetchval(
@@ -368,9 +378,9 @@ class CopySafetyTests(unittest.IsolatedAsyncioTestCase):
         sell = close_action(row)
         try:
             await asyncio.gather(
-                CopyEngine(self.db, SimpleNamespace(), place_order=place)._execute(
+                CopyEngine(self.db, fake_pm(), place_order=place)._execute(
                     USER, object(), resize),
-                CopyEngine(second_db, SimpleNamespace(), place_order=place)._execute(
+                CopyEngine(second_db, fake_pm(), place_order=place)._execute(
                     USER, object(), sell),
             )
             self.assertEqual(1, len(sides), sides)

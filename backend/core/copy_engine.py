@@ -802,12 +802,24 @@ class CopyEngine:
         return 0.0
 
     async def _execute_buy(self, user_id: str, client, action: Action) -> float:
-        """Reserve, fence, submit once, then atomically persist every BUY."""
+        """Reserve, verify against the REAL wallet, fence, submit once, then
+        atomically persist every BUY. The verify step (owner's call,
+        2026-07-12: worth the extra read) re-reads the wallet's actual holding
+        of the token pre-submission and clamps to MAX/TRADE headroom computed
+        from that ground truth — DB bookkeeping drift (quote-recorded fills,
+        adopted positions, anything untracked) can never grow a position past
+        the cap. Fails CLOSED: if the wallet can't be read, the copy is
+        skipped and the reconciler retries next tick."""
         async with self._risk_lock:
             prepared = await self._prepare_buy(user_id, action)
             if prepared is None:
                 return 0.0
             action, risk = prepared
+            clamped = await self._clamp_to_verified_position(user_id, action, risk)
+            if clamped is None:
+                await self._release_buy_claim(user_id, action.token_id, action.claim_id)
+                return 0.0
+            action = clamped
             if not await self._mark_claim_submitting(user_id, action):
                 await self._release_buy_claim(user_id, action.token_id, action.claim_id)
                 return 0.0
@@ -840,6 +852,59 @@ class CopyEngine:
                 log.critical("BUY filled but persistence failed; claim retained: %s %s",
                              user_id[:10], action.token_id, exc_info=True)
                 raise
+
+    async def _wallet_position(self, user_id: str, token_id: str) -> tuple[float, float] | None:
+        """(cost_usd, shares) the wallet REALLY holds for token_id, read fresh
+        from the data-api. (0.0, 0.0) when the wallet provably doesn't hold it;
+        None when it can't be determined (read failed, or the token wasn't in a
+        truncated list) — callers must fail closed on None."""
+        try:
+            positions, complete = await self.pm.get_all_positions(
+                user_id, size_threshold=0)
+        except Exception:
+            log.exception("wallet position verify failed for %s", user_id[:10])
+            return None
+        for p in positions:
+            if p.asset == token_id:
+                return float(p.size) * float(p.avg_price or 0), float(p.size)
+        return (0.0, 0.0) if complete else None
+
+    async def _clamp_to_verified_position(self, user_id: str, action: Action,
+                                          risk: dict) -> Action | None:
+        """Hard per-position gate against exchange ground truth. Basis = the
+        LARGER of the wallet's actual cost for this token and our tracked
+        cost, so neither bookkeeping drift nor an indexer lagging behind a
+        just-filled buy can free up headroom that isn't real. Returns the
+        (possibly clamped) action, or None when there's no room / no proof."""
+        verified = await self._wallet_position(user_id, action.token_id)
+        if verified is None:
+            log.warning("buy skipped (%s %s): wallet position could not be "
+                        "verified — failing closed", action.kind, action.token_id)
+            return None
+        wallet_cost, wallet_shares = verified
+        row_basis = float((action.row or {}).get("notional_usd") or 0.0)
+        basis = max(wallet_cost, row_basis)
+        allowed = min(float(action.amount),
+                      max(0.0, risk["max_per_trade"] - basis))
+        if risk["max_total_shares"] is not None:
+            price = float(action.reference_price
+                          or getattr(action.position, "cur_price", 0) or 0)
+            if price > 0:
+                row_shares = float((action.row or {}).get("shares") or 0.0)
+                share_headroom = max(
+                    0.0, risk["max_total_shares"] - max(wallet_shares, row_shares))
+                allowed = min(allowed, share_headroom * price)
+        floor = risk["ignore_below"] if action.kind == "open" else MIN_NOTIONAL_USD
+        if allowed < floor:
+            log.info("buy skipped (%s %s): verified wallet basis %.2f leaves no "
+                     "headroom under cap %.2f", action.kind, action.token_id,
+                     basis, risk["max_per_trade"])
+            return None
+        if allowed < float(action.amount) - 0.005:
+            log.warning("buy clamped by verified wallet position: %s %.2f -> %.2f "
+                        "(wallet basis %.2f, cap %.2f)", action.token_id,
+                        action.amount, allowed, basis, risk["max_per_trade"])
+        return replace(action, amount=allowed, notional_usd=allowed)
 
     async def _prepare_buy(self, user_id: str, action: Action) -> tuple[Action, dict] | None:
         trader = (action.trader_address or (action.row or {}).get("trader_address")
