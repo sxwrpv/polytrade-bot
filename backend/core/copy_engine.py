@@ -320,6 +320,15 @@ class CopyEngine:
                 await self._event(user_id, row["id"], "partial", spent, None, store=tx)
             log.warning("uncertain RESIZE adopted from wallet: %s %s +%.2f shares",
                         user_id[:10], token, extra)
+            await self._notify_position({
+                "event": "increased", "user_id": user_id, "position_id": row["id"],
+                "market_title": row.get("market_title", ""),
+                "market_slug": row.get("market_slug", ""),
+                "outcome": row.get("outcome", ""),
+                "shares": extra, "entry_price": float(p.avg_price),
+                "notional_usd": spent, "total_shares": float(p.size),
+                "trader_address": row.get("trader_address"),
+            })
         else:
             await self._release_buy_claim(user_id, token, claim["claim_id"])
 
@@ -679,6 +688,16 @@ class CopyEngine:
                         raise RuntimeError("fast partial SELL finalization lost closing fence")
                     await self._event(
                         user_id, existing["id"], "partial", None, pnl, store=tx)
+                await self._notify_position({
+                    "event": "reduced", "user_id": user_id,
+                    "position_id": existing["id"],
+                    "market_title": existing.get("market_title", ""),
+                    "market_slug": existing.get("market_slug", ""),
+                    "outcome": existing.get("outcome", ""),
+                    "shares": sold, "exit_price": result.avg_price,
+                    "realized_pnl": pnl, "total_shares": new_shares,
+                    "trader_address": existing.get("trader_address"),
+                })
             elif not getattr(result, "submission_uncertain", False):
                 await self.db.try_transition(existing["id"], "closing", "open")
 
@@ -1098,6 +1117,15 @@ class CopyEngine:
                     "AND state='submitting'", (user_id, action.token_id, action.claim_id))
                 if deleted != 1:
                     raise RuntimeError("BUY claim fencing token lost during resize finalization")
+            await self._notify_position({
+                "event": "increased", "user_id": user_id, "position_id": fresh["id"],
+                "market_title": fresh.get("market_title", ""),
+                "market_slug": fresh.get("market_slug", ""),
+                "outcome": fresh.get("outcome", ""),
+                "shares": result.filled_shares, "entry_price": result.avg_price,
+                "notional_usd": spent, "total_shares": new_shares,
+                "trader_address": fresh.get("trader_address"),
+            })
             return spent
         else:  # decrease — sold some shares
             sold = result.filled_shares
@@ -1113,6 +1141,15 @@ class CopyEngine:
                 if changed != 1:
                     raise RuntimeError("resize SELL finalization lost closing fence")
                 await self._event(user_id, row["id"], "partial", None, pnl, store=tx)
+            await self._notify_position({
+                "event": "reduced", "user_id": user_id, "position_id": row["id"],
+                "market_title": row.get("market_title", ""),
+                "market_slug": row.get("market_slug", ""),
+                "outcome": row.get("outcome", ""),
+                "shares": sold, "exit_price": result.avg_price,
+                "realized_pnl": pnl, "total_shares": new_shares,
+                "trader_address": row.get("trader_address"),
+            })
             return 0.0
 
     async def _realize_resolution(self, user_id, action) -> None:

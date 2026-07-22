@@ -11,6 +11,9 @@ def _cents(value) -> str:
 
 
 def format_position_alert(event: dict) -> str:
+    """One message per CONFIRMED execution. Senders only call this after the
+    exchange confirmed the fill (or the resolution was recorded) AND the DB
+    committed — never on detection, intent, or a skipped/rejected order."""
     kind = str(event.get("event", "")).lower()
     title = html.escape(str(event.get("market_title") or "Polymarket position"))
     outcome = html.escape(str(event.get("outcome") or "").upper())
@@ -25,6 +28,25 @@ def format_position_alert(event: dict) -> str:
             f"Size: <b>${float(event.get('notional_usd') or 0):.2f}</b> "
             f"({shares:.2f} shares)\n"
             f"Entry: <b>{_cents(event.get('entry_price'))}</b>"
+        )
+    elif kind == "increased":       # confirmed partial BUY (leader topped up)
+        text = (
+            "🟢 <b>POSITION INCREASED</b>\n\n"
+            f"<b>{title}</b>\n"
+            f"Outcome: <b>{outcome}</b>\n"
+            f"Added: <b>${float(event.get('notional_usd') or 0):.2f}</b> "
+            f"({shares:.2f} shares) @ <b>{_cents(event.get('entry_price'))}</b>\n"
+            f"Now holding: <b>{float(event.get('total_shares') or 0):.2f} shares</b>"
+        )
+    elif kind == "reduced":         # confirmed partial SELL (leader trimmed)
+        pnl = float(event.get("realized_pnl") or 0)
+        text = (
+            "🟠 <b>POSITION REDUCED</b>\n\n"
+            f"<b>{title}</b>\n"
+            f"Outcome: <b>{outcome}</b>\n"
+            f"Sold: <b>{shares:.2f} shares</b> @ <b>{_cents(event.get('exit_price'))}</b>\n"
+            f"Realized P&amp;L: <b>{'+' if pnl >= 0 else '-'}${abs(pnl):.2f}</b>\n"
+            f"Still holding: <b>{float(event.get('total_shares') or 0):.2f} shares</b>"
         )
     else:
         pnl = float(event.get("realized_pnl") or 0)

@@ -25,7 +25,6 @@ CREATE TABLE IF NOT EXISTS users (
     private_key_enc         TEXT NOT NULL,             -- AES-256-GCM(signer key, ENCRYPTION_SECRET)
     export_blob             TEXT,                      -- AES-256-GCM(signer key, passphrase) for /export-key
     deposit_wallet_deployed INTEGER NOT NULL DEFAULT 0,
-    referral_code           TEXT UNIQUE,
     referred_by             TEXT,
     -- risk settings (engine-enforced; NULL = use global default)
     paused                  INTEGER NOT NULL DEFAULT 0,   -- master kill-switch
@@ -322,7 +321,6 @@ CREATE TABLE IF NOT EXISTS users (
     private_key_enc          TEXT NOT NULL,
     export_blob              TEXT,
     deposit_wallet_deployed  INTEGER NOT NULL DEFAULT 0,
-    referral_code            TEXT UNIQUE,
     referred_by              TEXT,
     paused                   INTEGER NOT NULL DEFAULT 0,
     risk_revision            INTEGER NOT NULL DEFAULT 0,
