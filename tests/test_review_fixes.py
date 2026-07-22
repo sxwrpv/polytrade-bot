@@ -118,12 +118,12 @@ class PaginationTests(unittest.IsolatedAsyncioTestCase):
                "trader_shares": 40.0, "entry_price": 0.5}
         follow = {"max_position_usd": 50.0}
         closes = [a for a in plan_actions(
-            [], [row], follow, 100.0, 100.0, positions_complete=False)
+            [], [row], follow, 100.0, positions_complete=False)
             if a.kind == "close"]
         self.assertEqual([], closes)
         # the complete list still closes as before
         closes = [a for a in plan_actions(
-            [], [row], follow, 100.0, 100.0, positions_complete=True)
+            [], [row], follow, 100.0, positions_complete=True)
             if a.kind == "close"]
         self.assertEqual(1, len(closes))
 

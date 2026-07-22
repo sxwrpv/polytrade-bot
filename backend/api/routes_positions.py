@@ -92,16 +92,23 @@ async def open_positions(user=Depends(get_current_user), db=Depends(get_db), pmc
             "reserved_usd": claim["reserved_usd"],
         })
     # Include every other live wallet holding. Missing history does not prove it
-    # was manual; preserve bot attribution when history does exist.
+    # was manual; preserve bot attribution when history does exist. One batched
+    # query for all unmanaged tokens (was a per-holding N+1).
     managed = set(by_token)
-    for p in live.values():
-        if p.asset in managed or p.size <= 0.01:
-            continue
-        history = await db.fetchone(
-            "SELECT trader_address, opened_at FROM copy_positions "
-            "WHERE user_id = ? AND token_id = ? AND trader_address != ? "
-            "ORDER BY opened_at DESC LIMIT 1",
-            (user["id"], p.asset, MANUAL_TRADER))
+    unmanaged = [p for p in live.values()
+                 if p.asset not in managed and p.size > 0.01]
+    history_by_token: dict = {}
+    if unmanaged:
+        placeholders = ",".join("?" * len(unmanaged))
+        hist = await db.fetchall(
+            f"SELECT token_id, trader_address, opened_at FROM copy_positions "
+            f"WHERE user_id = ? AND trader_address != ? "
+            f"AND token_id IN ({placeholders}) ORDER BY opened_at",
+            [user["id"], MANUAL_TRADER, *[p.asset for p in unmanaged]])
+        for h in hist:                     # ts-ordered: last seen = latest
+            history_by_token[h["token_id"]] = h
+    for p in unmanaged:
+        history = history_by_token.get(p.asset)
         rows.append({
             "id": None, "external": True, "token_id": p.asset,
             "market_title": p.title, "market_slug": p.event_slug or p.slug,
@@ -239,9 +246,20 @@ async def close_position(position_id: str, request: Request, body: CloseBody | N
     try:
         client = await get_user_client(request, user)
         slippage = body.acceptable_slippage_pct if body else MAX_COPY_SLIPPAGE_PCT
+        # Anchor the user's tolerance to the live mark (the price the UI shows)
+        # like close-external does — on a thin book, the book-derived fallback
+        # (best bid) can sit far below the mark, silently gutting the slider.
+        reference = None
+        try:
+            live = await pmc.get_positions(
+                user["id"], size_threshold=0, market=row["condition_id"])
+            match = next((x for x in live if x.asset == row["token_id"]), None)
+            reference = match.cur_price if match else None
+        except Exception:
+            reference = None     # book-derived reference still applies
         result = await execution.place_market_order(
             client, pmc, row["token_id"], "SELL", row["shares"],
-            reference_price=None, max_slippage_pct=slippage)
+            reference_price=reference, max_slippage_pct=slippage)
     except Exception:
         # execution reports transport ambiguity as a result; a raised exception
         # is therefore pre-submission and safe to release for retry.

@@ -265,18 +265,21 @@ class PolymarketClient:
         limit: int = 500,
         offset: int = 0,
         sort_by: str = "CURRENT",
+        market: str | None = None,
     ) -> list[Position]:
-        d = await self._get(
-            f"{DATA_API}/positions",
-            {
-                "user": wallet_address,
-                "sizeThreshold": size_threshold,
-                "limit": limit,
-                "offset": offset,
-                "sortBy": sort_by,
-                "sortDirection": "DESC",
-            },
-        )
+        params = {
+            "user": wallet_address,
+            "sizeThreshold": size_threshold,
+            "limit": limit,
+            "offset": offset,
+            "sortBy": sort_by,
+            "sortDirection": "DESC",
+        }
+        if market:
+            # condition-id filter (verified live 2026-07-12) — a targeted,
+            # truncation-proof read of one market's position
+            params["market"] = market
+        d = await self._get(f"{DATA_API}/positions", params)
         return [Position.from_api(p) for p in d] if isinstance(d, list) else []
 
     async def get_all_positions(

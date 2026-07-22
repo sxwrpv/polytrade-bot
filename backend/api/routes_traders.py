@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, model_validator
 
 from backend.config import (
-    DEFAULT_ALLOCATION_PCT, DEFAULT_COPY_RATIO_PCT, DEFAULT_MAX_POSITION_USD,
+    DEFAULT_COPY_RATIO_PCT, DEFAULT_MAX_POSITION_USD,
     DEFAULT_MAX_PRICE, DEFAULT_MIN_PRICE,
 )
 from backend.core import trader_stats
@@ -27,7 +27,6 @@ class FollowBody(BaseModel):
     # RATIO %: copy = leader position value × this %. max_position_usd = MAX/TRADE.
     copy_ratio_pct: float = Field(DEFAULT_COPY_RATIO_PCT, ge=0, le=20)
     max_position_usd: float = Field(DEFAULT_MAX_POSITION_USD, ge=1, le=500)
-    allocation_pct: float = Field(DEFAULT_ALLOCATION_PCT, ge=0, le=100)
 
 
 class FollowSettings(BaseModel):
@@ -42,7 +41,6 @@ class FollowSettings(BaseModel):
     max_price: float | None = Field(None, ge=0, le=1)
     max_slippage_pct: float | None = Field(None, ge=0, le=10)
     daily_loss_limit_usd: float | None = Field(None, ge=0, le=1000)
-    allocation_pct: float | None = Field(None, ge=0, le=100)
 
     @model_validator(mode="after")
     def valid_price_bracket(self):
@@ -56,7 +54,6 @@ _FOLLOW_KEYS = (
     "paused", "copy_ratio_pct", "max_position_usd", "min_leader_usd",
     "ignore_below_usd", "max_open_positions", "max_total_exposure_usd",
     "min_price", "max_price", "max_slippage_pct", "daily_loss_limit_usd",
-    "allocation_pct",
 )
 
 
@@ -105,7 +102,7 @@ async def leaderboard(request: Request, sort: str = "consistency", limit: int = 
 async def following(user=Depends(get_current_user), db=Depends(get_db)):
     """The user's active follows (leaderboard- or manually-added), with cached stats."""
     rows = await db.fetchall(
-        "SELECT f.trader_address, f.allocation_pct, f.copy_ratio_pct, f.max_position_usd, "
+        "SELECT f.trader_address, f.copy_ratio_pct, f.max_position_usd, "
         "f.paused, f.min_leader_usd, f.ignore_below_usd, f.max_open_positions, "
         "f.min_price, f.max_price, f.max_slippage_pct, f.max_total_exposure_usd, "
         "f.daily_loss_limit_usd, f.created_at, "
@@ -152,15 +149,15 @@ async def follow(address: str, body: FollowBody, request: Request,
                 paused = 0 if not existing["is_active"] else existing["paused"]
                 await tx.execute(
                     "UPDATE followed_traders SET copy_ratio_pct=?,max_position_usd=?,"
-                    "allocation_pct=?,paused=?,is_active=1 WHERE id=?",
-                    (body.copy_ratio_pct, body.max_position_usd, body.allocation_pct,
+                    "paused=?,is_active=1 WHERE id=?",
+                    (body.copy_ratio_pct, body.max_position_usd,
                      paused, existing["id"]))
             else:
                 await tx.execute(
                     "INSERT INTO followed_traders(id,user_id,trader_address,copy_ratio_pct,"
-                    "max_position_usd,allocation_pct,created_at) VALUES(?,?,?,?,?,?,?)",
+                    "max_position_usd,created_at) VALUES(?,?,?,?,?,?)",
                     (uuid.uuid4().hex, user["id"], address, body.copy_ratio_pct,
-                     body.max_position_usd, body.allocation_pct, now_iso()))
+                     body.max_position_usd, now_iso()))
     await _wait_for_trader_submissions(db, user["id"], address)
     return {"ok": True, "following": address,
             "copy_ratio_pct": body.copy_ratio_pct, "max_position_usd": body.max_position_usd}

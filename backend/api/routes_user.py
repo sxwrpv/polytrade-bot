@@ -66,21 +66,17 @@ class CreateWallet(BaseModel):
 
 
 class SettingsBody(BaseModel):
+    # Only settings the engine actually reads: display_name (UI), paused (the
+    # account-level kill switch), max_total_exposure_usd (account-wide cap
+    # across every copied wallet). Slippage and daily-loss limits are PER
+    # COPIED WALLET (followed_traders) — the user-level twins were dead
+    # columns the engine never consulted, removed 2026-07-12.
     display_name: str | None = Field(None, max_length=80)
     paused: bool | None = None
-    copy_multiplier: float | None = Field(None, ge=0.1, le=5)
-    max_slippage_pct: float | None = Field(None, ge=0, le=10)
     max_total_exposure_usd: float | None = Field(None, ge=0, le=100000)
-    daily_loss_limit_usd: float | None = Field(None, ge=0, le=100000)
-    default_allocation_pct: float | None = Field(None, ge=0, le=100)
-    default_max_position_usd: float | None = Field(None, ge=1, le=500)
 
 
-_SETTINGS_KEYS = (
-    "display_name", "paused", "copy_multiplier", "max_slippage_pct",
-    "max_total_exposure_usd", "daily_loss_limit_usd",
-    "default_allocation_pct", "default_max_position_usd",
-)
+_SETTINGS_KEYS = ("display_name", "paused", "max_total_exposure_usd")
 
 
 @router.post("/create-wallet")
@@ -218,20 +214,15 @@ async def activity(limit: int = 30, user=Depends(get_current_user), db=Depends(g
     limit = max(1, min(int(limit), 100))
     cutoff = (dt.datetime.now(dt.timezone.utc)
               - dt.timedelta(hours=ACTIVITY_WINDOW_HOURS)).isoformat()
-    rows = await db.fetchall(
+    return await db.fetchall(
         "SELECT e.ts, e.event_type, e.amount_usd, e.pnl, "
         "p.market_title, p.market_slug, p.outcome, p.trader_address, "
-        "p.entry_price, p.exit_price "
+        "p.entry_price, p.exit_price, c.display_name AS trader_name "
         "FROM trade_events e JOIN copy_positions p ON p.id = e.position_id "
+        "LEFT JOIN trader_cache c ON c.address = p.trader_address "
         "WHERE e.user_id = ? AND e.event_type != 'resolve' AND e.ts >= ? "
         "ORDER BY e.ts DESC LIMIT ?",
         (user["id"], cutoff, limit))
-    for r in rows:
-        cached = await db.fetchone(
-            "SELECT display_name FROM trader_cache WHERE address = ?",
-            (r["trader_address"],))
-        r["trader_name"] = cached["display_name"] if cached else None
-    return rows
 
 
 @router.get("/pnl")
@@ -253,13 +244,8 @@ async def equity_series(period: str = "7d", user=Depends(get_current_user), db=D
 async def pnl_by_wallet(user=Depends(get_current_user), db=Depends(get_db)):
     """Realized PnL breakdown per copied wallet, with cached display name/tier
     joined in for the User > Performance > breakdown folder."""
-    rows = await pnl_mod.get_pnl_by_wallet(user["id"], db)
-    for r in rows:
-        cached = await db.fetchone(
-            "SELECT display_name FROM trader_cache WHERE address = ?",
-            (r["trader_address"],))
-        r["display_name"] = cached["display_name"] if cached else None
-    return rows
+    # display_name is already LEFT JOINed inside get_pnl_by_wallet
+    return await pnl_mod.get_pnl_by_wallet(user["id"], db)
 
 
 @router.get("/settings")
@@ -273,9 +259,8 @@ async def update_settings(body: SettingsBody, request: Request,
     updates = {k: v for k, v in body.model_dump(exclude_unset=True).items() if k in _SETTINGS_KEYS}
     if "paused" in updates:
         updates["paused"] = int(bool(updates["paused"]))
-    for key in ("max_total_exposure_usd", "daily_loss_limit_usd"):
-        if updates.get(key) == 0:
-            updates[key] = None
+    if updates.get("max_total_exposure_usd") == 0:   # 0 = no limit
+        updates["max_total_exposure_usd"] = None
     if updates:
         cols = ", ".join(f"{k} = ?" for k in updates)
         lock = getattr(request.app.state, "copy_risk_lock", None)

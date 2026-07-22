@@ -6,11 +6,10 @@ Runs as an asyncio background task. Each tick, per (user, followed trader):
      (the source of truth — so a restart never re-opens a held position)
   3. emit intents — OPEN / CLOSE / RESIZE / RESOLVE — and execute them
 
-Sizing is portfolio-aware (fixes the original per-position %-of-balance bug): a
-trader position's target notional is its weight within the trader's portfolio,
-scaled by the user's earmarked capital (allocation_pct), capped by
-max_position_usd and the user's available collateral. Σ(weights)=1, so total
-exposure to a trader can never exceed the earmarked capital.
+Sizing (ratio-of-leader, owner model 2026-07-06): each copy mirrors the
+LEADER's own dollar position — notional = leader_position_value × copy_ratio_pct%
+— clamped by MAX/TRADE (max_position_usd), available collateral, the per-trader
+exposure cap, and finally the pre-submission verified-wallet gate.
 
 `plan_actions` is pure (no IO) and exhaustively tested. The engine's collaborators
 (client factory, order placement, collateral lookup) are injectable so the whole
@@ -83,12 +82,10 @@ def plan_actions(
     trader_positions: list[Position],
     open_rows: list[dict],
     follow: dict,
-    user_capital: float,
     available_collateral: float,
     *,
     min_notional: float = MIN_NOTIONAL_USD,
     resize_threshold: float = RESIZE_THRESHOLD,
-    size_multiplier: float = 1.0,
     max_total_exposure: float | None = None,
     block_opens: bool = False,
     ratio_pct: float = DEFAULT_COPY_RATIO_PCT,
@@ -551,8 +548,13 @@ class CopyEngine:
             # increase and churn). Falls back to this trade if not yet indexed.
             trader_total = trade.size
             leader_price = float(trade.price or 0)
+            match = None
             try:
-                tpos = await self.pm.get_positions(trader, size_threshold=0)
+                if trade.condition_id:   # targeted read — fast and truncation-proof
+                    tpos = await self.pm.get_positions(
+                        trader, size_threshold=0, market=trade.condition_id)
+                else:
+                    tpos = await self.pm.get_positions(trader, size_threshold=0)
                 match = next((p for p in tpos if p.asset == token), None)
                 if match and match.size > 0:
                     trader_total = match.size
@@ -560,6 +562,14 @@ class CopyEngine:
             except Exception:
                 log.exception("trader position lookup failed; using trade size")
             leader_notional = trader_total * (leader_price or float(trade.price or 0))
+            # The on-chain detector's OrderFilled events carry NO market
+            # metadata — fill condition/outcome/slug/title from the leader's
+            # indexed position, or the row is booked blind and can never be
+            # matched to its resolution later.
+            condition_id = trade.condition_id or getattr(match, "condition_id", "") or ""
+            outcome = (trade.outcome or getattr(match, "outcome", "") or "").upper()
+            slug = trade.slug or getattr(match, "slug", "") or ""
+            title = trade.title or getattr(match, "title", "") or ""
 
             # entry filters (same as the reconciler's plan_actions)
             if leader_notional < frisk["min_leader"]:
@@ -596,16 +606,16 @@ class CopyEngine:
                 "fast-open candidate %s age=%.1fs side=%s notional=%.2f ref=%.4f trader=%s",
                 token, leader_age, trade.side.upper(), notional, float(trade.price or 0), trader[:10])
             action = Action(
-                kind="open", token_id=token, condition_id=trade.condition_id,
-                outcome=trade.outcome.upper(), side="BUY", amount=notional,
+                kind="open", token_id=token, condition_id=condition_id,
+                outcome=outcome, side="BUY", amount=notional,
                 notional_usd=notional, reference_price=trade.price,
                 trader_shares=trader_total,
                 position=SimpleNamespace(
-                    proxy_wallet=trader, asset=token, condition_id=trade.condition_id,
+                    proxy_wallet=trader, asset=token, condition_id=condition_id,
                     size=trader_total, avg_price=float(trade.price or leader_price),
                     cur_price=leader_price, current_value=leader_notional,
-                    redeemable=False, outcome=trade.outcome.upper(), slug=trade.slug,
-                    title=trade.title),
+                    redeemable=False, outcome=outcome, slug=slug,
+                    title=title),
                 trader_address=trader,
             )
             spent = await self._execute(user_id, client, action, slippage=frisk["slippage"])
@@ -709,8 +719,6 @@ class CopyEngine:
         open_rows_all = await self.db.fetchall(
             "SELECT * FROM copy_positions WHERE user_id = ? AND status = 'open'",
             (user_id,))
-        # user capital = available collateral + cost basis of open copies
-        user_capital = available + sum(r["notional_usd"] for r in open_rows_all)
 
         for follow in follows:
             frisk = self._follow_risk(follow)
@@ -728,10 +736,23 @@ class CopyEngine:
             if (frisk["paused"] or inactive) and not open_rows:
                 continue
             positions, complete = await self.pm.get_all_positions(trader)
+            # Backfill market metadata for rows opened blind by the on-chain
+            # fast path (OrderFilled events carry none): without condition_id
+            # a dead-market position can never be matched to its resolution.
+            by_token = {p.asset: p for p in positions}
+            for r in open_rows:
+                p = by_token.get(r["token_id"])
+                if p is not None and (not r.get("condition_id") or not r.get("market_title")):
+                    await self.db.execute(
+                        "UPDATE copy_positions SET condition_id=?, market_title=?, "
+                        "market_slug=?, outcome=? WHERE id=? AND status='open'",
+                        (p.condition_id, p.title, p.event_slug or p.slug,
+                         (r.get("outcome") or p.outcome or "").upper(), r["id"]))
+                    r.update(condition_id=p.condition_id, market_title=p.title)
             block_opens = frisk["paused"] or inactive or await self._opens_blocked(
                 user_id, trader, frisk["daily_limit"])
             actions = plan_actions(
-                positions, open_rows, follow, user_capital, available,
+                positions, open_rows, follow, available,
                 max_total_exposure=frisk["max_exposure"], block_opens=block_opens,
                 ratio_pct=frisk["ratio_pct"], max_per_trade=frisk["max_per_trade"],
                 min_leader=frisk["min_leader"], ignore_below=frisk["ignore_below"],
@@ -845,11 +866,25 @@ class CopyEngine:
                              user_id[:10], action.token_id, exc_info=True)
                 raise
 
-    async def _wallet_position(self, user_id: str, token_id: str) -> tuple[float, float] | None:
+    async def _wallet_position(self, user_id: str, token_id: str,
+                               condition_id: str = "") -> tuple[float, float] | None:
         """(cost_usd, shares) the wallet REALLY holds for token_id, read fresh
         from the data-api. (0.0, 0.0) when the wallet provably doesn't hold it;
         None when it can't be determined (read failed, or the token wasn't in a
-        truncated list) — callers must fail closed on None."""
+        truncated list) — callers must fail closed on None. With condition_id
+        the read is a single market-filtered call (fast, truncation-proof);
+        errors there fall back to the full scan before failing closed."""
+        if condition_id:
+            try:
+                positions = await self.pm.get_positions(
+                    user_id, size_threshold=0, market=condition_id)
+                for p in positions:
+                    if p.asset == token_id:
+                        return float(p.size) * float(p.avg_price or 0), float(p.size)
+                return 0.0, 0.0
+            except Exception:
+                log.exception("targeted wallet read failed for %s — falling back "
+                              "to full scan", user_id[:10])
         try:
             positions, complete = await self.pm.get_all_positions(
                 user_id, size_threshold=0)
@@ -868,7 +903,9 @@ class CopyEngine:
         cost, so neither bookkeeping drift nor an indexer lagging behind a
         just-filled buy can free up headroom that isn't real. Returns the
         (possibly clamped) action, or None when there's no room / no proof."""
-        verified = await self._wallet_position(user_id, action.token_id)
+        verified = await self._wallet_position(
+            user_id, action.token_id,
+            action.condition_id or (action.row or {}).get("condition_id") or "")
         if verified is None:
             log.warning("buy skipped (%s %s): wallet position could not be "
                         "verified — failing closed", action.kind, action.token_id)
@@ -1093,6 +1130,16 @@ class CopyEngine:
         (seen live 2026-07-03: matching on conditionId marked losing sides of
         both-sides copies as $1 winners). Redeem records remain the fallback
         when Gamma doesn't know the market."""
+        if not row.get("condition_id"):
+            # Opened blind (on-chain fast path, metadata never backfilled) —
+            # the resolution cannot be looked up, so flag the row for review
+            # instead of booking a fictional $0 loss.
+            await self.db.execute(
+                "UPDATE copy_positions SET status='reconciliation_required' "
+                "WHERE id=? AND status='closing'", (row["id"],))
+            log.error("position %s died without condition_id — marked "
+                      "reconciliation_required", row["id"])
+            return
         exit_price = None
         try:
             prices = await self.pm.get_resolved_prices(row["condition_id"])

@@ -39,9 +39,6 @@ HTTP_TIMEOUT = float(os.environ.get("HTTP_TIMEOUT", "15"))
 # Alchemy/Infura endpoint for reliability; a public RPC works for light use.
 POLYGON_RPC_URL = os.environ.get("POLYGON_RPC_URL", "").strip()
 
-# --- Referral ---
-REFERRAL_CODE = os.environ.get("REFERRAL_CODE", "").strip()
-
 # --- Database ---
 # When DATABASE_URL is set (a Postgres/Supabase DSN) the app uses Postgres via
 # asyncpg; otherwise it falls back to local SQLite at DB_PATH. Supabase: use the
@@ -57,7 +54,6 @@ DB_PATH = os.environ.get("DB_PATH", "copybot.db")
 DETECTION_POLL_SECONDS = float(os.environ.get("DETECTION_POLL_SECONDS", "2"))
 # Slow reconciliation diff — catches missed trades, drift, and resolutions.
 COPY_ENGINE_POLL_SECONDS = float(os.environ.get("COPY_ENGINE_POLL_SECONDS", "30"))
-DEFAULT_ALLOCATION_PCT = float(os.environ.get("DEFAULT_ALLOCATION_PCT", "10.0"))
 DEFAULT_MAX_POSITION_USD = float(os.environ.get("DEFAULT_MAX_POSITION_USD", "15.0"))
 # Per-wallet sizing model: each copy = the LEADER's position value × this %,
 # then capped by MAX/TRADE (max_position_usd), available collateral, and the

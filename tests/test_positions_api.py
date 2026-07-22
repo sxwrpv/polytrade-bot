@@ -26,6 +26,9 @@ from backend.db.database import Database, now_iso
 
 class FakeOriginDB:
     async def fetchall(self, sql, params=()):
+        if "token_id IN" in sql:     # batched bot-history lookup
+            return [{"token_id": "bot-token", "trader_address": "0xleader",
+                     "opened_at": "2026-07-09T20:00:00Z"}]
         if "FROM copy_positions" in sql:
             return []
         if "FROM copy_open_claims" in sql:
@@ -33,8 +36,6 @@ class FakeOriginDB:
         raise AssertionError(f"unexpected fetchall: {sql}")
 
     async def fetchone(self, sql, params=()):
-        if "token_id = ?" in sql and "trader_address" in sql:
-            return {"trader_address": "0xleader", "opened_at": "2026-07-09T20:00:00Z"}
         raise AssertionError(f"unexpected fetchone: {sql}")
 
 

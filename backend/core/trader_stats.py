@@ -61,7 +61,7 @@ def assign_tier(score: float) -> str:
 
 
 def _day(ts: float) -> str:
-    return dt.datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d")
+    return dt.datetime.fromtimestamp(ts, dt.timezone.utc).strftime("%Y-%m-%d")
 
 
 def realized_closings(trades, redeems=(), positions=(), *,
@@ -175,7 +175,8 @@ def _period_metrics(closings: list[tuple], trades: list, days: int) -> dict:
     high % means the trader actively locks in outcomes.
     """
     cutoff_ts = time.time() - days * 86400
-    cutoff_day = dt.datetime.utcfromtimestamp(cutoff_ts).strftime("%Y-%m-%d")
+    cutoff_day = dt.datetime.fromtimestamp(
+        cutoff_ts, dt.timezone.utc).strftime("%Y-%m-%d")
 
     in_window = [c for c in closings if c[0] >= cutoff_day]
     total_closes = len(in_window)

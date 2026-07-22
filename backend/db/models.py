@@ -30,12 +30,9 @@ CREATE TABLE IF NOT EXISTS users (
     -- risk settings (engine-enforced; NULL = use global default)
     paused                  INTEGER NOT NULL DEFAULT 0,   -- master kill-switch
     risk_revision           INTEGER NOT NULL DEFAULT 0,   -- invalidates reserved BUYs on settings changes
-    copy_multiplier         REAL NOT NULL DEFAULT 1.0,    -- 0.1x..5x scaling of every copy
     max_slippage_pct        REAL,                          -- per-user cap vs leader price
     max_total_exposure_usd  REAL,                          -- cap on total open notional
     daily_loss_limit_usd    REAL,                          -- block opens after today's loss hits this
-    default_allocation_pct  REAL NOT NULL DEFAULT 10.0,    -- prefill for follow modal
-    default_max_position_usd REAL NOT NULL DEFAULT 15.0,
     created_at              TEXT NOT NULL
 );
 
@@ -44,7 +41,6 @@ CREATE TABLE IF NOT EXISTS followed_traders (
     user_id          TEXT NOT NULL REFERENCES users(id),
     trader_address   TEXT NOT NULL,                    -- proxyWallet of the copied trader
     -- per-wallet risk settings (each copied trader is configured independently)
-    allocation_pct   REAL NOT NULL DEFAULT 10.0,       -- LEGACY (portfolio-weight model); superseded by copy_ratio_pct
     max_position_usd REAL NOT NULL DEFAULT 15.0,       -- MAX/TRADE: pUSD cap per position
     paused           INTEGER NOT NULL DEFAULT 0,       -- ENABLED (inverted): 1 = paused (no new buys)
     max_slippage_pct REAL,                              -- vs leader price (NULL = global)
@@ -208,12 +204,9 @@ TABLES = ("users", "followed_traders", "copy_positions", "copy_open_claims", "tr
 MIGRATIONS = (
     "ALTER TABLE users ADD COLUMN paused INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE users ADD COLUMN risk_revision INTEGER NOT NULL DEFAULT 0",
-    "ALTER TABLE users ADD COLUMN copy_multiplier REAL NOT NULL DEFAULT 1.0",
     "ALTER TABLE users ADD COLUMN max_slippage_pct REAL",
     "ALTER TABLE users ADD COLUMN max_total_exposure_usd REAL",
     "ALTER TABLE users ADD COLUMN daily_loss_limit_usd REAL",
-    "ALTER TABLE users ADD COLUMN default_allocation_pct REAL NOT NULL DEFAULT 10.0",
-    "ALTER TABLE users ADD COLUMN default_max_position_usd REAL NOT NULL DEFAULT 15.0",
     "ALTER TABLE copy_positions ADD COLUMN trader_shares REAL",
     "ALTER TABLE copy_open_claims ADD COLUMN claim_id TEXT",
     "ALTER TABLE copy_open_claims ADD COLUMN action TEXT NOT NULL DEFAULT 'open'",
@@ -333,12 +326,9 @@ CREATE TABLE IF NOT EXISTS users (
     referred_by              TEXT,
     paused                   INTEGER NOT NULL DEFAULT 0,
     risk_revision            INTEGER NOT NULL DEFAULT 0,
-    copy_multiplier          DOUBLE PRECISION NOT NULL DEFAULT 1.0,
     max_slippage_pct         DOUBLE PRECISION,
     max_total_exposure_usd   DOUBLE PRECISION,
     daily_loss_limit_usd     DOUBLE PRECISION,
-    default_allocation_pct   DOUBLE PRECISION NOT NULL DEFAULT 10.0,
-    default_max_position_usd DOUBLE PRECISION NOT NULL DEFAULT 15.0,
     created_at               TEXT NOT NULL
 );
 
@@ -346,7 +336,6 @@ CREATE TABLE IF NOT EXISTS followed_traders (
     id                     TEXT PRIMARY KEY,
     user_id                TEXT NOT NULL REFERENCES users(id),
     trader_address         TEXT NOT NULL,
-    allocation_pct         DOUBLE PRECISION NOT NULL DEFAULT 10.0,
     max_position_usd       DOUBLE PRECISION NOT NULL DEFAULT 15.0,
     paused                 INTEGER NOT NULL DEFAULT 0,
     max_slippage_pct       DOUBLE PRECISION,
