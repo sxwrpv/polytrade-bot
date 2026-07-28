@@ -52,6 +52,7 @@ async def open_positions(user=Depends(get_current_user), db=Depends(get_db), pmc
         p = live.get(r["token_id"])
         r["current_price"] = p.cur_price if p else None
         r["unrealized_pnl"] = round(p.cash_pnl, 2) if p else None
+        r["redeemable"] = bool(p.redeemable) if p else False
         r["reconciliation_required"] = r["status"] in (
             "closing", "reconciliation_required")
     for claim in claims:
@@ -120,18 +121,54 @@ async def open_positions(user=Depends(get_current_user), db=Depends(get_db), pmc
             "trader_address": history["trader_address"] if history else None,
             "redeemable": p.redeemable,
         })
-    return rows
+    # A redeemable holding is a SETTLED market: the outcome is final and there is
+    # nothing left to trade — only winnings to claim. It is not an open position,
+    # so it belongs in /closed (see below), not here. Rows still awaiting
+    # reconciliation stay visible regardless: they need operator attention.
+    return [r for r in rows
+            if not (r.get("redeemable") and not r.get("reconciliation_required"))]
 
 
 @router.get("/closed")
-async def closed_positions(user=Depends(get_current_user), db=Depends(get_db)):
-    return await db.fetchall(
+async def closed_positions(user=Depends(get_current_user), db=Depends(get_db),
+                           pmc=Depends(get_pm)):
+    rows = await db.fetchall(
         "SELECT p.*, CASE WHEN "
         "(SELECT COUNT(e.pnl) FROM trade_events e WHERE e.position_id=p.id) > 0 THEN "
         "(SELECT COALESCE(SUM(e.pnl),0) FROM trade_events e WHERE e.position_id=p.id) "
         "ELSE p.realized_pnl END AS realized_pnl "
         "FROM copy_positions p WHERE p.user_id = ? AND p.status IN ('closed','resolved') "
         "ORDER BY p.closed_at DESC", (user["id"],))
+    # Settled markets whose winnings were never redeemed still sit in the wallet
+    # as `redeemable` tokens. The engine normally flips its own rows to
+    # 'resolved', but a holding it never opened (or one whose follow was removed
+    # before resolution) has no closed row — it would otherwise disappear from
+    # the UI entirely once /open stops showing it. Surface those here, deduped
+    # against the DB rows, flagged `claimable` so the card can prompt a redeem.
+    known = {r["token_id"] for r in rows}
+    try:
+        live = await pmc.get_positions(user["id"], size_threshold=0)
+    except Exception:
+        log.exception("live positions unavailable for closed view")
+        live = []
+    unclaimed = []
+    for p in live:
+        if not p.redeemable or p.size <= 0.01 or p.asset in known:
+            continue
+        unclaimed.append({
+            "id": None, "external": True, "claimable": True,
+            "token_id": p.asset, "market_title": p.title,
+            "market_slug": p.event_slug or p.slug,
+            "outcome": (p.outcome or "").upper(), "shares": p.size,
+            "entry_price": p.avg_price, "notional_usd": round(p.initial_value, 2),
+            # settled: cur_price is the resolution price (~1 won / ~0 lost) and
+            # cash_pnl is the final realized amount, per the data API.
+            "exit_price": p.cur_price, "realized_pnl": round(p.cash_pnl, 2),
+            "status": "resolved", "trader_address": None,
+            "opened_at": None, "closed_at": None,
+        })
+    # unclaimed first — they're the only rows here that still need an action
+    return unclaimed + rows
 
 
 class CloseExternalBody(BaseModel):

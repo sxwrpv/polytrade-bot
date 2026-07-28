@@ -17,6 +17,7 @@ from backend.api.routes_positions import (
     _notify_position,
     close_external_position,
     close_position,
+    closed_positions,
     open_positions,
 )
 from backend.core.copy_engine import Action, CopyEngine
@@ -416,3 +417,106 @@ class LegacyUpgradeTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _live(asset, *, redeemable, size=10.0, cur_price=0.5, cash_pnl=1.0,
+          avg_price=0.4, initial_value=4.0):
+    return SimpleNamespace(
+        asset=asset, size=size, cur_price=cur_price, cash_pnl=cash_pnl,
+        title=f"{asset} market", event_slug="event", slug="market",
+        outcome="YES", avg_price=avg_price, initial_value=initial_value,
+        redeemable=redeemable, condition_id="condition",
+    )
+
+
+class SettledPositionRoutingTests(unittest.IsolatedAsyncioTestCase):
+    """A redeemable holding is a settled market: it belongs in /closed, not /open."""
+
+    class DB:
+        def __init__(self, managed=(), closed=()):
+            self.managed = list(managed)
+            self.closed = list(closed)
+
+        async def fetchall(self, sql, params=()):
+            if "token_id IN" in sql:
+                return []
+            if "FROM copy_open_claims" in sql:
+                return []
+            if "status IN ('closed','resolved')" in sql:
+                return self.closed
+            if "FROM copy_positions" in sql:
+                return self.managed
+            raise AssertionError(f"unexpected fetchall: {sql}")
+
+    class PM:
+        def __init__(self, positions):
+            self.positions = positions
+
+        async def get_positions(self, user_id, size_threshold=0):
+            return list(self.positions)
+
+    async def test_open_excludes_settled_holdings_and_keeps_live_ones(self):
+        pm = self.PM([_live("settled", redeemable=True),
+                      _live("live", redeemable=False)])
+
+        rows = await open_positions(user={"id": "u"}, db=self.DB(), pmc=pm)
+
+        self.assertEqual(["live"], [r["token_id"] for r in rows])
+
+    async def test_open_keeps_settled_row_that_still_needs_reconciliation(self):
+        managed = [{"id": "p1", "token_id": "settled", "status": "closing",
+                    "shares": 10.0, "entry_price": 0.4, "notional_usd": 4.0}]
+        pm = self.PM([_live("settled", redeemable=True)])
+
+        rows = await open_positions(user={"id": "u"}, db=self.DB(managed=managed), pmc=pm)
+
+        self.assertEqual(["settled"], [r["token_id"] for r in rows])
+        self.assertTrue(rows[0]["reconciliation_required"])
+
+    async def test_closed_surfaces_unclaimed_settled_holding(self):
+        pm = self.PM([_live("settled", redeemable=True, cur_price=1.0,
+                            cash_pnl=6.0, size=10.0)])
+
+        rows = await closed_positions(user={"id": "u"}, db=self.DB(), pmc=pm)
+
+        self.assertEqual(1, len(rows))
+        self.assertEqual("resolved", rows[0]["status"])
+        self.assertTrue(rows[0]["claimable"])
+        self.assertEqual(6.0, rows[0]["realized_pnl"])
+        self.assertEqual(1.0, rows[0]["exit_price"])
+
+    async def test_closed_does_not_duplicate_a_holding_already_resolved_in_db(self):
+        closed = [{"id": "p1", "token_id": "settled", "status": "resolved",
+                   "realized_pnl": 6.0, "closed_at": "2026-07-10T00:00:00Z"}]
+        pm = self.PM([_live("settled", redeemable=True)])
+
+        rows = await closed_positions(
+            user={"id": "u"}, db=self.DB(closed=closed), pmc=pm)
+
+        self.assertEqual(1, len(rows))
+        self.assertEqual("p1", rows[0]["id"])
+        self.assertNotIn("claimable", rows[0])
+
+    async def test_settled_holding_never_disappears_between_tabs(self):
+        """The regression guard: filtered from /open MUST mean present in /closed."""
+        pm = self.PM([_live("settled", redeemable=True)])
+        db = self.DB()
+
+        open_rows = await open_positions(user={"id": "u"}, db=db, pmc=pm)
+        closed_rows = await closed_positions(user={"id": "u"}, db=db, pmc=pm)
+
+        self.assertNotIn("settled", [r["token_id"] for r in open_rows])
+        self.assertIn("settled", [r["token_id"] for r in closed_rows])
+
+    async def test_closed_survives_live_position_fetch_failure(self):
+        class Broken:
+            async def get_positions(self, user_id, size_threshold=0):
+                raise RuntimeError("data-api down")
+
+        closed = [{"id": "p1", "token_id": "t", "status": "closed",
+                   "realized_pnl": 1.0, "closed_at": "2026-07-10T00:00:00Z"}]
+
+        rows = await closed_positions(
+            user={"id": "u"}, db=self.DB(closed=closed), pmc=Broken())
+
+        self.assertEqual(["p1"], [r["id"] for r in rows])

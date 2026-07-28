@@ -69,6 +69,10 @@ export default function PositionCard({ p, closed, onClose }) {
         <div className="muted">
           closed by you
         </div>
+      ) : p.claimable ? (
+        <div className="muted">
+          market settled — winnings not redeemed yet
+        </div>
       ) : p.external ? (
         <div className="muted">
           {p.origin === 'bot_history'
@@ -93,6 +97,12 @@ export default function PositionCard({ p, closed, onClose }) {
         </span>
       </div>
       <div className="muted">{(p.shares || 0).toFixed(0)} shares</div>
+      {closed && p.claimable && (
+        <div className="muted" style={{ marginTop: 8 }}>
+          <span className="badge pos">CLAIMABLE</span>{' '}
+          redeem on polymarket.com to turn this into spendable cash
+        </div>
+      )}
       {!closed && (needsReconciliation ? (
         <div className="muted" style={{ marginTop: 8 }}>
           <span className="badge neg">RECONCILIATION REQUIRED</span>
