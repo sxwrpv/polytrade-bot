@@ -747,8 +747,15 @@ class CopyEngine:
             return
         client = await self._get_client(user)
         available = await self._collateral_fn(client)
+        # Capital at risk, not just settled positions: a row mid-close still
+        # holds real shares, and a reconciliation_required row may represent an
+        # order that DID fill. The fast-detection path already counted all
+        # three; counting only 'open' here under-reported exposure, so the same
+        # wallet produced two different numbers depending on which path ran and
+        # MAX EXPOSURE could be exceeded via the reconciler. Single definition.
         open_rows_all = await self.db.fetchall(
-            "SELECT * FROM copy_positions WHERE user_id = ? AND status = 'open'",
+            "SELECT * FROM copy_positions WHERE user_id = ? "
+            "AND status IN ('open','closing','reconciliation_required')",
             (user_id,))
 
         for follow in follows:
@@ -1013,7 +1020,11 @@ class CopyEngine:
         basis = max(wallet_cost, row_basis)
         allowed = min(float(action.amount),
                       max(0.0, risk["max_per_trade"] - basis))
-        floor = risk["ignore_below"] if action.kind == "open" else MIN_NOTIONAL_USD
+        # The user's "IGNORE POSITIONS < $" governs resizes as well as opens —
+        # the UI promises "skip if our copy would be this small" without
+        # qualification, and a sub-threshold top-up still pays full spread and
+        # fees. MIN_NOTIONAL_USD stays only as the absolute floor beneath it.
+        floor = max(risk["ignore_below"], MIN_NOTIONAL_USD)
         if allowed < floor:
             log.info("buy skipped (%s %s): verified wallet basis %.2f leaves no "
                      "headroom under cap %.2f", action.kind, action.token_id,

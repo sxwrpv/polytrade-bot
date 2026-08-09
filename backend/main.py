@@ -14,7 +14,7 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -44,6 +44,20 @@ log = logging.getLogger("main")
 _FRONTEND_DIST = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")
 _DOCS_DIR = os.path.join(os.path.dirname(__file__), "..", "docs")
 _DOCS_INDEX = os.path.join(_DOCS_DIR, "site", "index.html")
+_DOCS_PAGES = {
+    "README.md",
+    "getting-started.md",
+    "core-concepts.md",
+    "copy-trading.md",
+    "wallet-and-funding.md",
+    "risk-and-security.md",
+    "api-reference.md",
+    "configuration.md",
+    "deployment.md",
+    "troubleshooting.md",
+    "glossary.md",
+}
+_DOCS_SLUGS = {"overview", *(name.removesuffix(".md") for name in _DOCS_PAGES)}
 
 
 async def _stats_refresh_loop(db, pm, stop: asyncio.Event) -> None:
@@ -232,17 +246,25 @@ async def health():
     return {"status": "ok"}
 
 
-# Product documentation. Static content is mounted before the page route so
-# /docs/content/* resolves to source Markdown/assets; every named page returns
-# the same shell and is rendered client-side from its matching Markdown file.
+# Product documentation. Only allowlisted Markdown and dedicated site assets
+# are public; adding an internal file under docs/ cannot expose it by accident.
 if os.path.isfile(_DOCS_INDEX):
     app.mount(
-        "/docs/content", StaticFiles(directory=_DOCS_DIR), name="docs-content")
+        "/docs/assets", StaticFiles(directory=os.path.join(_DOCS_DIR, "site")),
+        name="docs-assets")
+
+    @app.get("/docs/content/{filename}", include_in_schema=False)
+    async def documentation_content(filename: str):
+        if filename not in _DOCS_PAGES:
+            raise HTTPException(status_code=404, detail="Documentation page not found")
+        return FileResponse(os.path.join(_DOCS_DIR, filename), media_type="text/markdown")
 
     @app.get("/docs", include_in_schema=False)
     @app.get("/docs/", include_in_schema=False)
     @app.get("/docs/{page}", include_in_schema=False)
     async def documentation(page: str | None = None):
+        if page is not None and page not in _DOCS_SLUGS:
+            raise HTTPException(status_code=404, detail="Documentation page not found")
         return FileResponse(_DOCS_INDEX)
 
 

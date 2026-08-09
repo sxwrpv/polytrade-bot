@@ -415,8 +415,13 @@ class VerifiedSizeGateTests(EngineDbTestCase):
             "SELECT COUNT(*) FROM copy_open_claims"))   # claim released
 
     async def test_resize_headroom_uses_wallet_truth_over_row(self):
-        # DB row says $4 spent, but the wallet really holds $7 — a $4 top-up
-        # must clamp to $1, and $1 >= MIN_NOTIONAL still executes
+        # DB row says $4 spent, but the wallet really holds $7. With a $10 cap
+        # the top-up must clamp to $3 (10 - 7 wallet truth); using the row's $4
+        # basis would have allowed $4, so the asserted $3 IS the proof that
+        # wallet truth won. Cap raised from the class default so the clamped
+        # amount clears the user's dust floor, which now governs resizes too.
+        await self.db.execute(
+            "UPDATE followed_traders SET max_position_usd=10.0 WHERE id='follow-1'")
         await self.insert_position(status="open", shares=8.0)
         await self.db.execute(
             "UPDATE copy_positions SET notional_usd=4.0 WHERE id='position'")
@@ -436,8 +441,8 @@ class VerifiedSizeGateTests(EngineDbTestCase):
 
         spent = await engine._execute(USER, object(), action)
 
-        self.assertEqual([1.0], placed)
-        self.assertEqual(1.0, spent)
+        self.assertEqual([3.0], placed)
+        self.assertEqual(3.0, spent)
 
 
 class PnlConsistencyTests(unittest.IsolatedAsyncioTestCase):

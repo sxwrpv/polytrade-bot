@@ -7,6 +7,8 @@ orderbook read each time against an API that already returns 429s.
 """
 from __future__ import annotations
 
+import pathlib
+import re
 import unittest
 from types import SimpleNamespace
 
@@ -91,3 +93,35 @@ class FillOrKillBudgetTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SingleSourceOfTruthTests(unittest.TestCase):
+    """Guards against the two definitions drifting apart again."""
+
+    def test_exposure_uses_one_status_set_in_both_paths(self):
+        """Same capital-at-risk definition in the reconciler and the fast path.
+
+        They previously disagreed: the fast path counted
+        open+closing+reconciliation_required while the reconciler counted only
+        'open', so the same wallet reported two different exposures and
+        MAX EXPOSURE could be exceeded via the reconciler.
+        """
+        src = pathlib.Path("backend/core/copy_engine.py").read_text()
+        risk_sets = re.findall(
+            r"SELECT \* FROM copy_positions WHERE user_id ?= ?\? ?\"?\s*\"?AND status ([^\"]+)", src)
+        self.assertTrue(risk_sets, "could not locate the position-set queries")
+        for got in risk_sets:
+            self.assertIn("'closing'", got)
+            self.assertIn("'reconciliation_required'", got)
+
+    def test_user_dust_floor_governs_resizes_too(self):
+        """`IGNORE POSITIONS < $` must not apply only to opens.
+
+        The UI promises "skip if our copy would be this small" without
+        qualification; resizes previously bypassed it for a hardcoded $1.
+        """
+        src = pathlib.Path("backend/core/copy_engine.py").read_text()
+        self.assertNotIn(
+            'floor = risk["ignore_below"] if action.kind == "open" else MIN_NOTIONAL_USD',
+            src)
+        self.assertIn('floor = max(risk["ignore_below"], MIN_NOTIONAL_USD)', src)

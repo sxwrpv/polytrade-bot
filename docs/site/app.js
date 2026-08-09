@@ -42,16 +42,26 @@ function escapeHtml(value) {
   return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+function escapeAttribute(value) {
+  return escapeHtml(value).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
 function slugify(value) {
   return value.toLowerCase().replace(/<[^>]*>/g, '').replace(/[^a-z0-9\s-]/g, '').trim().replace(/\s+/g, '-');
 }
 
 function normalizeLink(target) {
-  if (/^(https?:|mailto:|#)/.test(target)) return target;
-  const [path, anchor] = target.split('#');
+  const value = target.trim();
+  if (/^https?:\/\//i.test(value) || /^mailto:/i.test(value) || value.startsWith('#')) {
+    return value;
+  }
+  // Reject protocol-relative URLs and every non-allowlisted scheme, including
+  // javascript: and data:. Documentation Markdown is rendered with innerHTML.
+  if (value.startsWith('//') || /^[a-z][a-z0-9+.-]*:/i.test(value)) return '#';
+  const [path, anchor] = value.split('#');
   const file = path.split('/').pop();
   const page = pages.find(item => item.file === file);
-  if (!page) return target;
+  if (!page) return '#';
   return `${pageUrl(page.slug)}${anchor ? `#${anchor}` : ''}`;
 }
 
@@ -59,8 +69,8 @@ function inline(value) {
   let output = escapeHtml(value);
   output = output.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, target) => {
     const href = normalizeLink(target);
-    const external = /^https?:/.test(href);
-    return `<a href="${href}"${external ? ' target="_blank" rel="noreferrer"' : ''}>${label}</a>`;
+    const external = /^https?:\/\//i.test(href);
+    return `<a href="${escapeAttribute(href)}"${external ? ' target="_blank" rel="noreferrer"' : ''}>${label}</a>`;
   });
   output = output.replace(/`([^`]+)`/g, '<code>$1</code>');
   output = output.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
@@ -209,7 +219,9 @@ const searchData = new Map();
 async function buildSearchIndex() {
   await Promise.all(pages.map(async page => {
     try {
-      const text = await fetch(`/docs/content/${page.file}`).then(response => response.text());
+      const response = await fetch(`/docs/content/${page.file}`);
+      if (!response.ok) throw new Error(`Search source returned ${response.status}`);
+      const text = await response.text();
       searchData.set(page.slug, text.replace(/```[\s\S]*?```/g, ' ').replace(/[#>*_`\[\]()-]/g, ' ').replace(/\s+/g, ' ').trim());
     } catch { searchData.set(page.slug, ''); }
   }));
