@@ -57,7 +57,10 @@ _DOCS_PAGES = {
     "troubleshooting.md",
     "glossary.md",
 }
-_DOCS_SLUGS = {"overview", *(name.removesuffix(".md") for name in _DOCS_PAGES)}
+_DOCS_SLUGS = {
+    "overview",
+    *(name.removesuffix(".md") for name in _DOCS_PAGES if name != "README.md"),
+}
 
 
 async def _stats_refresh_loop(db, pm, stop: asyncio.Event) -> None:

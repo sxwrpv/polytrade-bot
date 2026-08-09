@@ -37,6 +37,7 @@ def test_docs_assets_are_available_from_a_dedicated_mount():
 
 def test_unknown_documentation_page_returns_not_found():
     assert client.get("/docs/not-a-real-page").status_code == 404
+    assert client.get("/docs/README").status_code == 404
     assert client.get("/docs/content/.env").status_code == 404
 
 
