@@ -20,6 +20,7 @@ RUN python -m pip install --no-cache-dir -r requirements.txt \
     && useradd --uid 1000 --gid 1000 --create-home polytrade
 
 COPY --chown=polytrade:polytrade backend/ backend/
+COPY --chown=polytrade:polytrade docs/ docs/
 COPY --from=frontend-build --chown=polytrade:polytrade /build/frontend/dist/ frontend/dist/
 
 USER polytrade

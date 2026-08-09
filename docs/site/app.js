@@ -1,0 +1,288 @@
+const groups = [
+  { title: 'Getting Started', pages: [
+    ['overview', 'Overview', 'README.md'],
+    ['getting-started', 'Quickstart', 'getting-started.md'],
+  ]},
+  { title: 'Core Concepts', pages: [
+    ['core-concepts', 'How PolyTrade Works', 'core-concepts.md'],
+    ['copy-trading', 'Copy Trading', 'copy-trading.md'],
+    ['wallet-and-funding', 'Wallet & Funding', 'wallet-and-funding.md'],
+  ]},
+  { title: 'Risk & Safety', pages: [
+    ['risk-and-security', 'Risk and Security', 'risk-and-security.md'],
+  ]},
+  { title: 'Developers', pages: [
+    ['api-reference', 'API Reference', 'api-reference.md'],
+    ['configuration', 'Configuration', 'configuration.md'],
+  ]},
+  { title: 'Operations', pages: [
+    ['deployment', 'Deployment', 'deployment.md'],
+    ['troubleshooting', 'Troubleshooting', 'troubleshooting.md'],
+  ]},
+  { title: 'Reference', pages: [
+    ['glossary', 'Glossary', 'glossary.md'],
+  ]},
+];
+
+const pages = groups.flatMap(group => group.pages.map(page => ({
+  slug: page[0], title: page[1], file: page[2], group: group.title,
+})));
+const pageMap = Object.fromEntries(pages.map(page => [page.slug, page]));
+
+function currentSlug() {
+  const path = window.location.pathname.replace(/^\/docs\/?/, '').replace(/\/$/, '');
+  return pageMap[path] ? path : 'overview';
+}
+
+function pageUrl(slug) {
+  return slug === 'overview' ? '/docs' : `/docs/${slug}`;
+}
+
+function escapeHtml(value) {
+  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function slugify(value) {
+  return value.toLowerCase().replace(/<[^>]*>/g, '').replace(/[^a-z0-9\s-]/g, '').trim().replace(/\s+/g, '-');
+}
+
+function normalizeLink(target) {
+  if (/^(https?:|mailto:|#)/.test(target)) return target;
+  const [path, anchor] = target.split('#');
+  const file = path.split('/').pop();
+  const page = pages.find(item => item.file === file);
+  if (!page) return target;
+  return `${pageUrl(page.slug)}${anchor ? `#${anchor}` : ''}`;
+}
+
+function inline(value) {
+  let output = escapeHtml(value);
+  output = output.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, target) => {
+    const href = normalizeLink(target);
+    const external = /^https?:/.test(href);
+    return `<a href="${href}"${external ? ' target="_blank" rel="noreferrer"' : ''}>${label}</a>`;
+  });
+  output = output.replace(/`([^`]+)`/g, '<code>$1</code>');
+  output = output.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  output = output.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+  return output;
+}
+
+function renderMarkdown(markdown) {
+  const lines = markdown.replace(/\r/g, '').split('\n');
+  const out = [];
+  let paragraph = [];
+  let list = null;
+  let code = null;
+  let quote = [];
+
+  const flushParagraph = () => {
+    if (paragraph.length) out.push(`<p>${inline(paragraph.join(' '))}</p>`);
+    paragraph = [];
+  };
+  const flushList = () => {
+    if (!list) return;
+    const cls = list.checklist ? ' class="checklist"' : '';
+    out.push(`<${list.type}${cls}>${list.items.map(item => `<li>${inline(item)}</li>`).join('')}</${list.type}>`);
+    list = null;
+  };
+  const flushQuote = () => {
+    if (!quote.length) return;
+    const warning = quote[0].match(/^\[!WARNING\]/i);
+    if (warning) {
+      const body = quote.join(' ').replace(/^\[!WARNING\]\s*/i, '');
+      out.push(`<aside class="callout"><div class="callout-title">⚠ Warning</div><div>${inline(body)}</div></aside>`);
+    } else {
+      out.push(`<blockquote><p>${inline(quote.join(' '))}</p></blockquote>`);
+    }
+    quote = [];
+  };
+  const flushAll = () => { flushParagraph(); flushList(); flushQuote(); };
+
+  for (const line of lines) {
+    if (code) {
+      if (line.startsWith('```')) {
+        out.push(`<pre><code>${escapeHtml(code.lines.join('\n'))}</code></pre>`);
+        code = null;
+      } else code.lines.push(line);
+      continue;
+    }
+    if (line.startsWith('```')) {
+      flushAll();
+      code = { lang: line.slice(3).trim(), lines: [] };
+      continue;
+    }
+    const heading = line.match(/^(#{1,3})\s+(.+)$/);
+    if (heading) {
+      flushAll();
+      const level = heading[1].length;
+      const label = inline(heading[2]);
+      const id = slugify(heading[2]);
+      out.push(`<h${level} id="${id}"><a class="heading-anchor" href="#${id}">${label}</a></h${level}>`);
+      continue;
+    }
+    const quoted = line.match(/^>\s?(.*)$/);
+    if (quoted) {
+      flushParagraph(); flushList();
+      quote.push(quoted[1]);
+      continue;
+    }
+    const unordered = line.match(/^\s*-\s+(.*)$/);
+    const ordered = line.match(/^\s*\d+\.\s+(.*)$/);
+    if (unordered || ordered) {
+      flushParagraph(); flushQuote();
+      const type = ordered ? 'ol' : 'ul';
+      let item = (unordered || ordered)[1];
+      const checked = /^\[[ xX]\]\s*/.test(item);
+      item = item.replace(/^\[[ xX]\]\s*/, '');
+      if (!list || list.type !== type) { flushList(); list = { type, items: [], checklist: checked }; }
+      list.checklist ||= checked;
+      list.items.push(item);
+      continue;
+    }
+    if (!line.trim()) { flushAll(); continue; }
+    flushList(); flushQuote();
+    paragraph.push(line.trim());
+  }
+  flushAll();
+  if (code) out.push(`<pre><code>${escapeHtml(code.lines.join('\n'))}</code></pre>`);
+  return out.join('\n');
+}
+
+function renderSidebar(activeSlug) {
+  document.getElementById('sidebar-nav').innerHTML = groups.map(group => `
+    <section class="nav-group">
+      <h2 class="nav-group-title">${group.title}</h2>
+      ${group.pages.map(([slug, title]) => `<a class="nav-link${slug === activeSlug ? ' active' : ''}" href="${pageUrl(slug)}"${slug === activeSlug ? ' aria-current="page"' : ''}>${title}</a>`).join('')}
+    </section>
+  `).join('');
+}
+
+function renderToc() {
+  const headings = [...document.querySelectorAll('.prose h2, .prose h3')];
+  const nav = document.getElementById('toc-nav');
+  nav.innerHTML = headings.map(h => `<a href="#${h.id}" data-id="${h.id}"${h.tagName === 'H3' ? ' style="padding-left:22px"' : ''}>${h.textContent}</a>`).join('');
+  if (!headings.length) document.querySelector('.toc').style.display = 'none';
+
+  const observer = new IntersectionObserver(entries => {
+    const visible = entries.filter(entry => entry.isIntersecting).sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)[0];
+    if (!visible) return;
+    nav.querySelectorAll('a').forEach(a => a.classList.toggle('active', a.dataset.id === visible.target.id));
+  }, { rootMargin: '-110px 0px -70% 0px' });
+  headings.forEach(heading => observer.observe(heading));
+}
+
+function renderPager(slug) {
+  const index = pages.findIndex(page => page.slug === slug);
+  const previous = pages[index - 1];
+  const next = pages[index + 1];
+  document.getElementById('page-pager').innerHTML = `
+    ${previous ? `<a class="pager-link" href="${pageUrl(previous.slug)}"><span class="pager-label">← Previous</span><span class="pager-title">${previous.title}</span></a>` : '<span></span>'}
+    ${next ? `<a class="pager-link next" href="${pageUrl(next.slug)}"><span class="pager-label">Next →</span><span class="pager-title">${next.title}</span></a>` : ''}
+  `;
+}
+
+async function loadPage() {
+  const slug = currentSlug();
+  const page = pageMap[slug];
+  renderSidebar(slug);
+  try {
+    const response = await fetch(`/docs/content/${page.file}`, { cache: 'no-cache' });
+    if (!response.ok) throw new Error(`Documentation returned ${response.status}`);
+    const markdown = await response.text();
+    const prose = document.getElementById('prose');
+    prose.innerHTML = renderMarkdown(markdown);
+    prose.hidden = false;
+    document.getElementById('loading-state').hidden = true;
+    document.title = `${page.title} - PolyTrade Documentation`;
+    renderToc();
+    renderPager(slug);
+  } catch (error) {
+    const prose = document.getElementById('prose');
+    prose.innerHTML = `<h1>Documentation unavailable</h1><p>${escapeHtml(error.message)}</p><p><a href="/docs">Return to the documentation overview</a>.</p>`;
+    prose.hidden = false;
+    document.getElementById('loading-state').hidden = true;
+  }
+}
+
+const searchData = new Map();
+async function buildSearchIndex() {
+  await Promise.all(pages.map(async page => {
+    try {
+      const text = await fetch(`/docs/content/${page.file}`).then(response => response.text());
+      searchData.set(page.slug, text.replace(/```[\s\S]*?```/g, ' ').replace(/[#>*_`\[\]()-]/g, ' ').replace(/\s+/g, ' ').trim());
+    } catch { searchData.set(page.slug, ''); }
+  }));
+}
+
+let selectedResult = 0;
+function search(query) {
+  const container = document.getElementById('search-results');
+  const terms = query.toLowerCase().trim().split(/\s+/).filter(Boolean);
+  const matches = !terms.length ? pages.slice(0, 6) : pages.filter(page => {
+    const haystack = `${page.title} ${page.group} ${searchData.get(page.slug) || ''}`.toLowerCase();
+    return terms.every(term => haystack.includes(term));
+  }).slice(0, 8);
+  selectedResult = 0;
+  if (!matches.length) { container.innerHTML = '<div class="search-empty">No documentation matched your search.</div>'; return; }
+  container.innerHTML = matches.map((page, index) => {
+    const copy = searchData.get(page.slug) || 'Open this documentation page.';
+    return `<a class="search-result${index === 0 ? ' selected' : ''}" href="${pageUrl(page.slug)}"><span class="search-result-group">${page.group}</span><div class="search-result-title">${page.title}</div><div class="search-result-copy">${escapeHtml(copy.slice(0, 150))}</div></a>`;
+  }).join('');
+}
+
+function openSearch() {
+  const modal = document.getElementById('search-modal');
+  modal.hidden = false;
+  document.body.style.overflow = 'hidden';
+  const input = document.getElementById('search-input');
+  input.value = '';
+  search('');
+  setTimeout(() => input.focus(), 0);
+}
+function closeSearch() {
+  document.getElementById('search-modal').hidden = true;
+  document.body.style.overflow = '';
+}
+
+function setupInteractions() {
+  const sidebar = document.getElementById('sidebar');
+  const menu = document.getElementById('mobile-menu');
+  menu.addEventListener('click', () => {
+    const open = sidebar.classList.toggle('open');
+    menu.setAttribute('aria-expanded', String(open));
+  });
+  document.getElementById('sidebar-backdrop').addEventListener('click', () => {
+    sidebar.classList.remove('open'); menu.setAttribute('aria-expanded', 'false');
+  });
+
+  const savedTheme = localStorage.getItem('polytrade-docs-theme');
+  if (savedTheme) document.documentElement.dataset.theme = savedTheme;
+  else if (matchMedia('(prefers-color-scheme: dark)').matches) document.documentElement.dataset.theme = 'dark';
+  document.getElementById('theme-toggle').addEventListener('click', () => {
+    const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+    document.documentElement.dataset.theme = next;
+    localStorage.setItem('polytrade-docs-theme', next);
+  });
+
+  document.getElementById('search-trigger').addEventListener('click', openSearch);
+  document.querySelectorAll('[data-close-search]').forEach(button => button.addEventListener('click', closeSearch));
+  document.getElementById('search-input').addEventListener('input', event => search(event.target.value));
+  document.addEventListener('keydown', event => {
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); openSearch(); }
+    if (event.key === 'Escape' && !document.getElementById('search-modal').hidden) closeSearch();
+    if (!document.getElementById('search-modal').hidden && ['ArrowDown', 'ArrowUp', 'Enter'].includes(event.key)) {
+      const results = [...document.querySelectorAll('.search-result')];
+      if (!results.length) return;
+      event.preventDefault();
+      if (event.key === 'Enter') { window.location.href = results[selectedResult].href; return; }
+      selectedResult = (selectedResult + (event.key === 'ArrowDown' ? 1 : -1) + results.length) % results.length;
+      results.forEach((result, index) => result.classList.toggle('selected', index === selectedResult));
+      results[selectedResult].scrollIntoView({ block: 'nearest' });
+    }
+  });
+}
+
+setupInteractions();
+buildSearchIndex();
+loadPage();

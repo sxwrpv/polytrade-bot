@@ -2,7 +2,7 @@
 
 Copy real Polymarket positions from wallets you choose, with your own allocation and risk limits.
 
-[Open PolyTrade](https://polytradebot.live) · [Documentation](docs/README.md) · [API reference](docs/api-reference.md) · [Risk disclosure](docs/risk-and-security.md)
+[Open PolyTrade](https://polytradebot.live) · [Documentation](https://polytradebot.live/docs) · [API reference](https://polytradebot.live/docs/api-reference) · [Risk disclosure](https://polytradebot.live/docs/risk-and-security)
 
 > [!WARNING]
 > PolyTrade is custodial, executes real orders, and can lose all funds deposited to it. Copying a profitable wallet does not reproduce that wallet's returns. Delay, liquidity, price movement, market resolution, infrastructure failure, and custody risk all matter.

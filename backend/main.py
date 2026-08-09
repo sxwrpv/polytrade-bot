@@ -16,6 +16,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from backend.config import CORS_ALLOW_ORIGINS, DB_PATH, ENCRYPTION_SECRET, TELEGRAM_BOT_TOKEN
@@ -41,6 +42,8 @@ for _noisy in ("httpx", "httpcore", "urllib3", "web3", "websockets"):
 
 log = logging.getLogger("main")
 _FRONTEND_DIST = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")
+_DOCS_DIR = os.path.join(os.path.dirname(__file__), "..", "docs")
+_DOCS_INDEX = os.path.join(_DOCS_DIR, "site", "index.html")
 
 
 async def _stats_refresh_loop(db, pm, stop: asyncio.Event) -> None:
@@ -202,7 +205,13 @@ async def lifespan(app: FastAPI):
         await db.close()
 
 
-app = FastAPI(title="polymarket-copybot", lifespan=lifespan)
+app = FastAPI(
+    title="PolyTrade API",
+    lifespan=lifespan,
+    docs_url="/api/docs",
+    redoc_url="/api/redoc",
+    openapi_url="/api/openapi.json",
+)
 # The SPA is served same-origin by this app, so cross-origin access stays OFF
 # unless explicitly configured (CORS_ALLOW_ORIGINS, e.g. a Vite dev server).
 # Never wildcard-with-credentials: that reflected any Origin back as allowed.
@@ -223,6 +232,20 @@ async def health():
     return {"status": "ok"}
 
 
-# SPA (built in phase 10) — mount last so it doesn't shadow /api.
+# Product documentation. Static content is mounted before the page route so
+# /docs/content/* resolves to source Markdown/assets; every named page returns
+# the same shell and is rendered client-side from its matching Markdown file.
+if os.path.isfile(_DOCS_INDEX):
+    app.mount(
+        "/docs/content", StaticFiles(directory=_DOCS_DIR), name="docs-content")
+
+    @app.get("/docs", include_in_schema=False)
+    @app.get("/docs/", include_in_schema=False)
+    @app.get("/docs/{page}", include_in_schema=False)
+    async def documentation(page: str | None = None):
+        return FileResponse(_DOCS_INDEX)
+
+
+# SPA — mount last so it doesn't shadow /api or /docs.
 if os.path.isdir(_FRONTEND_DIST):
     app.mount("/", StaticFiles(directory=_FRONTEND_DIST, html=True), name="spa")

@@ -49,6 +49,10 @@ log = logging.getLogger("copy_engine")
 
 MIN_NOTIONAL_USD = 1.0       # don't open/resize below this (avoids dust + min-size rejects)
 RESIZE_THRESHOLD = 0.25      # rebalance only when target drifts >25% from current
+# Fill-or-kill budget: how many consecutive non-fills before an intent is
+# abandoned. The reconcile tick (COPY_ENGINE_POLL_SECONDS, 5s in production)
+# supplies the spacing, so this is ~3 tries over ~15s.
+MAX_FILL_ATTEMPTS = 3
 # Reconciliation age gates: long enough for the data-api indexer to reflect a
 # fill (uncertain BUYs) and for any legitimately in-flight close to finish
 # (stuck closings) before the wallet is treated as ground truth.
@@ -216,6 +220,14 @@ class CopyEngine:
         # _seen values are insertion-ordered dicts used as bounded sets.
         self._cursors: dict[tuple, int] = {}
         self._seen: dict[tuple, dict] = defaultdict(dict)
+        # Fill-or-kill attempt budget. plan_actions is stateless — it re-derives
+        # the same intent from live positions every tick — so an order that
+        # cannot fill was retried forever (observed: a resize needing >2% over
+        # mark on a ~10%-spread book, re-attempted every 5s indefinitely,
+        # burning a geoblock probe + orderbook read each time against an API
+        # that already 429s). Track consecutive non-fills and give up.
+        # Value: [attempts, intent_fingerprint]
+        self._attempts: dict[tuple, list] = {}
 
     # --- lifecycle ---------------------------------------------------------
     async def run(self, stop_event: asyncio.Event) -> None:
@@ -785,8 +797,63 @@ class CopyEngine:
                     available = max(0.0, available - spent)
 
     # --- execution + persistence ------------------------------------------
+    # --- fill-or-kill attempt budget --------------------------------------
+    @staticmethod
+    def _attempt_key(user_id: str, action: Action) -> tuple:
+        return (user_id, action.token_id, action.kind, action.subkind)
+
+    @staticmethod
+    def _intent_fingerprint(action: Action) -> tuple:
+        """Identity of *this* intent. When it changes the situation is new, so
+        the budget re-arms — otherwise one temporarily-wide spread would freeze
+        a position permanently, even after the leader moved again.
+
+        Keyed on the LEADER's share count only. `action.amount` is deliberately
+        excluded: _prepare_buy/_clamp_to_verified_position rewrite it from live
+        collateral and MAX/TRADE headroom, so it drifts between ticks without
+        the intent changing — including it would reset the budget every attempt
+        and defeat the kill entirely.
+        """
+        return (round(action.trader_shares or 0.0, 4),)
+
+    def _fill_budget_exhausted(self, user_id: str, action: Action) -> bool:
+        key = self._attempt_key(user_id, action)
+        state = self._attempts.get(key)
+        if state is None:
+            return False
+        attempts, fingerprint = state
+        if fingerprint != self._intent_fingerprint(action):
+            self._attempts.pop(key, None)      # new intent -> fresh budget
+            return False
+        return attempts >= MAX_FILL_ATTEMPTS
+
+    def _record_fill_outcome(self, user_id: str, action: Action, *,
+                             filled: bool, reason: str = "") -> None:
+        key = self._attempt_key(user_id, action)
+        if filled:
+            self._attempts.pop(key, None)
+            return
+        attempts, _ = self._attempts.get(key, (0, None))
+        attempts += 1
+        self._attempts[key] = [attempts, self._intent_fingerprint(action)]
+        if attempts < MAX_FILL_ATTEMPTS:
+            return
+        # Budget spent. An abandoned ENTRY is a missed opportunity; an
+        # abandoned EXIT means still holding something the leader already
+        # left, so that one is escalated rather than logged quietly.
+        is_exit = action.side == "SELL" or action.kind in ("close", "resolve")
+        if is_exit:
+            log.warning("KILLED after %d attempts — STILL HOLDING a position the "
+                        "leader exited (%s %s): %s", attempts, action.kind,
+                        action.token_id[:16], reason)
+        else:
+            log.info("killed after %d attempts (%s %s): %s", attempts,
+                     action.kind, action.token_id[:16], reason)
+
     async def _execute(self, user_id: str, client, action: Action,
                        slippage: float = MAX_COPY_SLIPPAGE_PCT) -> float:
+        if self._fill_budget_exhausted(user_id, action):
+            return 0.0          # killed; re-arms if the leader's intent changes
         if action.side == "BUY":
             return await self._execute_buy(user_id, client, action)
         if action.kind == "resolve":
@@ -824,8 +891,15 @@ class CopyEngine:
         if not result.ok:
             if claimed_sell and not getattr(result, "submission_uncertain", False):
                 await self.db.try_transition(action.row["id"], "closing", "open")
+            # An uncertain submission may still have reached the exchange, so it
+            # is NOT a non-fill — the reconciler owns resolving it and must not
+            # be starved of retries by the budget.
+            if not getattr(result, "submission_uncertain", False):
+                self._record_fill_outcome(user_id, action, filled=False,
+                                          reason=result.reason)
             log.warning("order skipped (%s %s): %s", action.kind, action.token_id, result.reason)
             return 0.0
+        self._record_fill_outcome(user_id, action, filled=True)
         if action.kind == "close":
             await self._record_close(user_id, action, result)
         elif action.kind == "resize":
@@ -871,10 +945,15 @@ class CopyEngine:
                 log.warning("order skipped (%s %s): %s", action.kind,
                             action.token_id, result.reason)
                 if getattr(result, "submission_uncertain", False):
+                    # may have reached the exchange — reconciler owns it, so it
+                    # must not consume the fill budget
                     await self._mark_claim_uncertain(user_id, action, result.reason)
                 else:
+                    self._record_fill_outcome(user_id, action, filled=False,
+                                              reason=result.reason)
                     await self._release_buy_claim(user_id, action.token_id, action.claim_id)
                 return 0.0
+            self._record_fill_outcome(user_id, action, filled=True)
             try:
                 if action.kind == "open":
                     return await self._record_open(user_id, action, result)

@@ -2,9 +2,9 @@
 
 Production base URL: `https://polytradebot.live`
 
-- Swagger UI: `GET /docs`
-- ReDoc: `GET /redoc`
-- OpenAPI JSON: `GET /openapi.json`
+- Swagger UI: `GET /api/docs`
+- ReDoc: `GET /api/redoc`
+- OpenAPI JSON: `GET /api/openapi.json`
 
 Generated OpenAPI is the field/schema reference. This page describes workflow and security behavior.
 
@@ -88,7 +88,7 @@ Example settings shape:
 }
 ```
 
-Use `/openapi.json` for validation ranges and nullability.
+Use `/api/openapi.json` for validation ranges and nullability.
 
 ## Position routes
 
@@ -122,4 +122,4 @@ Cookie authentication is for the PolyTrade frontend. CORS defaults off and does 
 
 ## Schema workflow
 
-When changing an endpoint: update models/routes, run tests, inspect `/openapi.json`, update this workflow guide, and never document response fields the implementation does not return.
+When changing an endpoint: update models/routes, run tests, inspect `/api/openapi.json`, update this workflow guide, and never document response fields the implementation does not return.

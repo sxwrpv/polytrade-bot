@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="PolyTrade product, API, security, and deployment documentation." />
+  <title>PolyTrade Documentation</title>
+  <link rel="stylesheet" href="/docs/content/site/styles.css" />
+</head>
+<body>
+  <a class="skip-link" href="#doc-content">Skip to content</a>
+  <div class="risk-banner">
+    <span>Real-money copy trading</span>
+    <a href="/docs/risk-and-security">Read the risk disclosure <span aria-hidden="true">→</span></a>
+  </div>
+
+  <header class="topbar">
+    <div class="brand-row">
+      <button class="mobile-menu" id="mobile-menu" aria-label="Open navigation" aria-expanded="false">
+        <span></span><span></span><span></span>
+      </button>
+      <a class="brand" href="/docs">
+        <span class="brand-mark">P</span>
+        <span>PolyTrade</span>
+        <span class="brand-divider"></span>
+        <span class="brand-docs">Documentation</span>
+      </a>
+    </div>
+
+    <div class="top-actions">
+      <button class="search-trigger" id="search-trigger" aria-label="Search documentation">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 21-4.35-4.35m2.35-5.65a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z"/></svg>
+        <span>Search documentation</span>
+        <kbd>⌘ K</kbd>
+      </button>
+      <nav class="header-links" aria-label="Header links">
+        <a href="https://polytradebot.live/">Open app</a>
+        <a href="/api/docs">API</a>
+        <a href="https://github.com/sxwrpv/polytrade-bot">GitHub</a>
+      </nav>
+      <button class="theme-toggle" id="theme-toggle" aria-label="Toggle color theme">
+        <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v2m0 14v2M3 12h2m14 0h2M5.64 5.64l1.42 1.42m9.88 9.88 1.42 1.42m0-12.72-1.42 1.42M7.06 16.94l-1.42 1.42M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0Z"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 15.5A8.5 8.5 0 0 1 8.5 4 8.5 8.5 0 1 0 20 15.5Z"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <div class="docs-shell">
+    <aside class="sidebar" id="sidebar" aria-label="Documentation navigation">
+      <nav id="sidebar-nav"></nav>
+      <div class="sidebar-footer">
+        <span class="status-dot"></span>
+        <span>Production</span>
+        <a href="/api/health">Status</a>
+      </div>
+    </aside>
+    <button class="sidebar-backdrop" id="sidebar-backdrop" aria-label="Close navigation"></button>
+
+    <main class="main-column" id="doc-content" tabindex="-1">
+      <div class="loading-state" id="loading-state">
+        <span></span><span></span><span></span>
+      </div>
+      <article class="prose" id="prose" hidden></article>
+      <nav class="page-pager" id="page-pager" aria-label="Page navigation"></nav>
+      <footer class="doc-footer">
+        <span>PolyTrade Documentation</span>
+        <span>Real trades. Explicit risk.</span>
+      </footer>
+    </main>
+
+    <aside class="toc" aria-label="On this page">
+      <div class="toc-title">On this page</div>
+      <nav id="toc-nav"></nav>
+      <a class="toc-api" href="/api/docs">Interactive API reference <span>↗</span></a>
+    </aside>
+  </div>
+
+  <div class="search-modal" id="search-modal" hidden>
+    <button class="search-backdrop" data-close-search aria-label="Close search"></button>
+    <section class="search-panel" role="dialog" aria-modal="true" aria-label="Search documentation">
+      <div class="search-input-row">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 21-4.35-4.35m2.35-5.65a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z"/></svg>
+        <input id="search-input" type="search" placeholder="Search PolyTrade documentation…" autocomplete="off" />
+        <kbd>ESC</kbd>
+      </div>
+      <div class="search-results" id="search-results"></div>
+      <div class="search-help"><span><kbd>↑</kbd><kbd>↓</kbd> Navigate</span><span><kbd>↵</kbd> Open</span></div>
+    </section>
+  </div>
+
+  <script src="/docs/content/site/app.js" defer></script>
+</body>
+</html>

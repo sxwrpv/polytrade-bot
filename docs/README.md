@@ -2,7 +2,7 @@
 
 Run and understand a real-money Polymarket copy-trading service.
 
-[Open the app](https://polytradebot.live) · [API docs](https://polytradebot.live/docs) · [Health endpoint](https://polytradebot.live/api/health)
+[Open the app](https://polytradebot.live) · [Interactive API](https://polytradebot.live/api/docs) · [Health endpoint](https://polytradebot.live/api/health)
 
 > [!WARNING]
 > PolyTrade is custodial and submits real orders. Funds can be lost in full. Read [Risk and Security](risk-and-security.md) before depositing.
@@ -32,7 +32,7 @@ Run and understand a real-money Polymarket copy-trading service.
 
 **Operators:** Risk and Security → Configuration → Deployment → Troubleshooting.
 
-**Developers:** Core Concepts → API Reference → Configuration, then FastAPI's generated `/openapi.json`.
+**Developers:** Core Concepts → API Reference → Configuration, then FastAPI's generated `/api/openapi.json`.
 
 ## Product boundaries
 
