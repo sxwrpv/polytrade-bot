@@ -18,8 +18,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from backend.config import CORS_ALLOW_ORIGINS, ENCRYPTION_SECRET, TELEGRAM_BOT_TOKEN
-from backend.core import auth, equity, trader_stats, wallet
+from backend.config import CORS_ALLOW_ORIGINS, DB_PATH, ENCRYPTION_SECRET, TELEGRAM_BOT_TOKEN
+from backend.core import auth, equity, runtime_security, trader_stats, wallet
 from backend.core.copy_engine import CopyEngine
 from backend.core.polymarket import PolymarketClient
 from backend.core.telegram_alerts import TelegramPositionNotifier
@@ -106,6 +106,18 @@ async def _equity_snapshot_loop(app, stop: asyncio.Event) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Before anything opens a file: make new DB/WAL/log files owner-only, then
+    # tighten whatever already exists. .env holds ENCRYPTION_SECRET (which
+    # decrypts every user's wallet key), the database password, and the builder
+    # credentials — it must never be group/world readable.
+    runtime_security.secure_process_umask()
+    try:
+        runtime_security.harden_runtime_files(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            db_path=DB_PATH)
+    except OSError:
+        log.exception("could not tighten runtime file permissions")
+
     db = Database()
     await db.connect()
     await db.init()

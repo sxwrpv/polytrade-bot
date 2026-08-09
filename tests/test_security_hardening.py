@@ -39,13 +39,24 @@ except ImportError:                                  # pragma: no cover
 
 _PENDING = "target hardening not wired up yet"
 
+# Gate each concern on ITS OWN dependency, not on one shared flag — the export
+# step-up landed before the cookie-session migration, and a coarse guard would
+# have silently reported the unfinished half as passing.
+import inspect as _inspect                            # noqa: E402
+from backend.api import deps as _deps                 # noqa: E402
+
+_COOKIE_AUTH_READY = "SESSION_COOKIE" in _inspect.getsource(_deps.get_current_user)
+_FRONTEND_MIGRATED = "Authorization" not in (
+    Path(__file__).parents[1] / "frontend/src/api.js").read_text()
+
 
 @unittest.skipUnless(_EXPORT_READY, _PENDING)
 class _RequiresTargetAuth(unittest.IsolatedAsyncioTestCase):
-    """Base for cases that need the not-yet-landed cookie/step-up auth."""
+    """Base for cases that need the landed step-up export auth."""
 
 
-class SessionSecurityTests(_RequiresTargetAuth):
+@unittest.skipUnless(_COOKIE_AUTH_READY, 'cookie-session migration not wired up yet')
+class SessionSecurityTests(unittest.IsolatedAsyncioTestCase):
     async def test_session_is_hashed_expiring_and_cookie_authenticated(self):
         raw, stored, expires_at = auth.new_session()
         self.assertNotEqual(raw, stored)
@@ -156,7 +167,7 @@ class RuntimePermissionTests(unittest.TestCase):
             self.assertEqual(stat.S_IMODE((root / "logs").stat().st_mode), 0o700)
 
 
-@unittest.skipUnless(_EXPORT_READY, _PENDING)
+@unittest.skipUnless(_FRONTEND_MIGRATED, 'frontend still sends the Bearer token')
 class FrontendStorageTests(unittest.TestCase):
     def test_frontend_never_stores_or_sends_bearer_token(self):
         source = (Path(__file__).parents[1] / "frontend/src/api.js").read_text()

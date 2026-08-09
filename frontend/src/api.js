@@ -50,7 +50,10 @@ export const api = {
   activity: (limit = 30) => req(`/user/activity?limit=${limit}`),
   depositAddress: () => req('/user/deposit-address'),
   settings: (body) => req('/user/settings', { method: 'POST', body: JSON.stringify(body) }),
-  exportKey: () => req('/user/export-key', { method: 'POST' }),
+  // Key export needs a fresh Telegram step-up proof, not just the session —
+  // pass the CURRENT initData so the backend can re-verify the human.
+  exportKey: (initData) =>
+    req('/user/export-key', { method: 'POST', body: JSON.stringify({ init_data: initData }) }),
   // traders — leaderboard doubles as the wallet screener: pass sort/limit/offset
   // plus any number of `<column>_min` / `<column>_max` filter keys (see
   // backend/core/trader_stats.py _FILTERABLE_COLUMNS); they all combine with AND.

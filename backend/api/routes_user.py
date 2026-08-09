@@ -289,10 +289,40 @@ async def update_settings(body: SettingsBody, request: Request,
     return {"ok": True, "updated": list(updates)}
 
 
+class ExportKeyBody(BaseModel):
+    # Fresh Telegram initData proving the caller controls the linked account.
+    init_data: str
+
+
+# Exporting the signer key hands over irreversible control of the wallet, so it
+# is the one action a stolen session token must NOT be able to perform on its
+# own. The session proves "some client holds the token"; this proves "the human
+# who owns the linked Telegram account is here right now".
+EXPORT_STEP_UP_MAX_AGE = 300     # seconds — initData must be minutes old, not a day
+
+
 @router.post("/export-key")
-async def export_key(user=Depends(get_current_user)):
-    """Reveal the signer private key. Gated by the Bearer session token (a
-    secret only this user's client holds) — no passphrase second factor; see
-    BUILD_PLAN.md for that deliberate tradeoff."""
+async def export_key(body: ExportKeyBody, user=Depends(get_current_user)):
+    """Reveal the signer private key, gated by a fresh Telegram step-up.
+
+    Requires initData that (a) carries Telegram's valid HMAC, (b) is at most
+    EXPORT_STEP_UP_MAX_AGE old, and (c) belongs to the SAME Telegram account
+    linked to this wallet. A leaked session token alone can no longer drain a
+    user, and a replayed old initData is rejected by the freshness window.
+    """
+    linked = user.get("telegram_user_id")
+    if not linked or not TELEGRAM_BOT_TOKEN:
+        # No second factor available: refuse rather than silently falling back
+        # to session-only auth on the most dangerous endpoint in the app.
+        raise HTTPException(
+            403, "key export requires a linked Telegram account — open the app "
+                 "from the Telegram bot and try again")
+    tg_user = auth.validate_init_data(
+        body.init_data, TELEGRAM_BOT_TOKEN, max_age=EXPORT_STEP_UP_MAX_AGE)
+    if not tg_user or int(tg_user.get("id", 0)) != int(linked):
+        log.warning("export-key step-up REJECTED for %s", str(user.get("id"))[:10])
+        raise HTTPException(403, "telegram verification failed or expired — reopen "
+                                 "the app from Telegram and retry")
+    log.info("export-key step-up ok for %s", str(user.get("id"))[:10])
     pk = wallet.decrypt_private_key(user["private_key_enc"], ENCRYPTION_SECRET)
     return {"private_key": pk}

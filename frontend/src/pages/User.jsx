@@ -47,8 +47,15 @@ export default function User({ onLogout }) {
 
   async function reveal() {
     setExpErr('')
+    // Step-up: the backend re-verifies the live Telegram identity, so the key
+    // can only be revealed from inside Telegram — a stolen session isn't enough.
+    const initData = window.Telegram?.WebApp?.initData || ''
+    if (!initData) {
+      setExpErr('OPEN THE APP FROM THE TELEGRAM BOT TO EXPORT YOUR KEY')
+      return
+    }
     try {
-      const r = await api.exportKey()
+      const r = await api.exportKey(initData)
       setKey(r.private_key)
     } catch (e) {
       setExpErr(String(e.message || e))
