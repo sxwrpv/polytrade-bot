@@ -1,0 +1,64 @@
+name: polytrade
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: polytrade:local
+    restart: unless-stopped
+    init: true
+    env_file:
+      - .env
+    environment:
+      HOST: 0.0.0.0
+      PORT: "8080"
+      DB_PATH: /app/data/copybot.db
+      ENFORCE_FRONTEND_GEOBLOCK: "0"
+      # Safe default: a fresh or unconfigured deploy must NOT start trading.
+      # Production opts in by setting COPY_ENGINE_AUTOSTART=1 in its own
+      # /opt/polytrade/.env (Compose interpolates from the project .env), so the
+      # live worker survives a redeploy WITHOUT this committed file diverging
+      # from the VPS. A hardcoded "0" here meant prod had to hand-edit
+      # compose.yaml, and any redeploy from git would then silently stop the
+      # copy engine while /api/health kept returning 200 — i.e. looking fine
+      # while placing no trades.
+      COPY_ENGINE_AUTOSTART: "${COPY_ENGINE_AUTOSTART:-0}"
+    expose:
+      - "8080"
+    volumes:
+      - ./data:/app/data
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+  caddy:
+    image: caddy:2.10.2-alpine
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  caddy_data:
+  caddy_config:

@@ -1,0 +1,56 @@
+from pathlib import Path
+import unittest
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+class DockerDeploymentContractTests(unittest.TestCase):
+    def test_backend_runs_exactly_one_uvicorn_worker(self):
+        dockerfile = (ROOT / "Dockerfile").read_text()
+        self.assertIn('"--workers", "1"', dockerfile)
+
+    def test_backend_port_is_not_published_by_compose(self):
+        compose = (ROOT / "compose.yaml").read_text()
+        self.assertNotIn("8080:8080", compose)
+        self.assertNotIn("8123:8080", compose)
+
+    def test_services_restart_and_backend_has_healthcheck(self):
+        compose = (ROOT / "compose.yaml").read_text()
+        self.assertGreaterEqual(compose.count("restart: unless-stopped"), 2)
+        self.assertIn("healthcheck:", compose)
+
+    def test_caddy_is_the_only_ingress(self):
+        compose = (ROOT / "compose.yaml").read_text()
+        caddyfile = (ROOT / "Caddyfile").read_text()
+        self.assertIn('"80:80"', compose)
+        self.assertIn('"443:443"', compose)
+        self.assertIn("reverse_proxy app:8080", caddyfile)
+
+    def test_build_does_not_enable_global_prereleases(self):
+        dockerfile = (ROOT / "Dockerfile").read_text()
+        self.assertNotIn("pip install --no-cache-dir --pre", dockerfile)
+
+    def test_copy_engine_defaults_to_disabled(self):
+        """An unconfigured deploy must not start trading.
+
+        The value is interpolated so production can opt in via its own .env
+        instead of hand-editing this file (a divergent compose.yaml meant a
+        redeploy from git would silently stop the live engine). The default
+        must still be off.
+        """
+        compose = (ROOT / "compose.yaml").read_text()
+        self.assertIn('COPY_ENGINE_AUTOSTART: "${COPY_ENGINE_AUTOSTART:-0}"', compose)
+        # ":-0" is the whole safety property — it is what makes an absent or
+        # empty setting resolve to "engine off" rather than the app's own
+        # autostart-on default.
+        self.assertNotIn('COPY_ENGINE_AUTOSTART: "${COPY_ENGINE_AUTOSTART}"', compose)
+
+    def test_build_context_excludes_secrets(self):
+        dockerignore = (ROOT / ".dockerignore").read_text().splitlines()
+        self.assertIn(".env", dockerignore)
+        self.assertIn("*.pem", dockerignore)
+        self.assertIn("*.db", dockerignore)
+
+
+if __name__ == "__main__":
+    unittest.main()
