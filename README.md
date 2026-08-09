@@ -1,122 +1,128 @@
-# polymarket-copybot
+# PolyTrade
 
-A real-money Polymarket copytrading platform. Follow any wallet — from the
-official leaderboard or pasted in manually — and the engine mirrors their
-opens, resizes, and exits with your own capital, in your own custodial wallet.
+Copy real Polymarket positions from wallets you choose, with your own allocation and risk limits.
 
-Polymarket only. No paper mode, no simulation, no other venue. Every trade is
-a real order signed and submitted via `polymarket-client`'s AsyncSecureClient
-(gasless deposit wallets via the Builder program). See `BUILD_PLAN.md` for
-the full design history and the hard rules this was built against.
+[Open PolyTrade](https://polytradebot.live) · [Documentation](docs/README.md) · [API reference](docs/api-reference.md) · [Risk disclosure](docs/risk-and-security.md)
 
-## What this is NOT
+> [!WARNING]
+> PolyTrade is custodial, executes real orders, and can lose all funds deposited to it. Copying a profitable wallet does not reproduce that wallet's returns. Delay, liquidity, price movement, market resolution, infrastructure failure, and custody risk all matter.
 
-- Not paper trading. There is no mock mode and no simulated fills — trades
-  execute for real, subject to real preconditions (geoblock, liquidity,
-  slippage cap, balance) checked before submission.
-- Not risk-free. Prediction markets carry risk of total loss, and you are
-  responsible for the funds in your custodial wallet.
+## Start here
 
-## Architecture
+- **Use the app:** [Create and fund a wallet](docs/getting-started.md)
+- **Understand execution:** [How copy trading works](docs/copy-trading.md)
+- **Configure limits:** [Risk and security](docs/risk-and-security.md)
+- **Run the service:** [Deployment guide](docs/deployment.md)
+- **Integrate with the backend:** [API reference](docs/api-reference.md)
+- **Resolve a problem:** [Troubleshooting](docs/troubleshooting.md)
 
+## What PolyTrade does
+
+PolyTrade watches selected Polymarket wallets, detects changes in their positions, calculates a copy size from your settings, and submits a real order from your PolyTrade wallet when all safety checks pass.
+
+The platform includes:
+
+- a React web app and Telegram Mini App;
+- a FastAPI backend;
+- a durable copy engine with duplicate-execution fences and reconciliation;
+- per-trader and account-level risk controls;
+- a custodial wallet encrypted at rest;
+- Docker, Caddy, HTTPS, and database deployment support.
+
+## What PolyTrade does not do
+
+- It has no paper-trading or simulated-fill mode.
+- It does not guarantee that every source trade will be copied.
+- It does not guarantee the same entry price, size, timing, or return as the source wallet.
+- Pausing or unfollowing does not liquidate existing positions.
+- Resolved winnings are not automatically redeemed by PolyTrade.
+- The public health endpoint is not proof that the copy engine or upstream services are healthy.
+
+## Execution at a glance
+
+```text
+source wallet changes position
+        ↓
+fast detector observes the change
+        ↓
+copy engine validates user, strategy, balance, exposure and price
+        ↓
+durable claim prevents duplicate submission
+        ↓
+market FOK order is submitted with a signed price ceiling/floor
+        ↓
+fill is persisted, alerted and continuously reconciled
 ```
+
+The 30-second full-position reconciliation path remains the correctness layer even when faster detection is enabled.
+
+## Repository map
+
+```text
 backend/
-  main.py            FastAPI entrypoint — lifespan starts the DB + CopyEngine
-  config.py           Polymarket-only config (hosts, risk defaults, secrets)
-  db/                 SQLite (aiosqlite): users, followed_traders, copy_positions,
-                       trade_events, trader_cache
-  core/
-    polymarket.py      read client: leaderboard, positions, orderbook, markets,
-                        trade history, geoblock (see API_RECON.md)
-    wallet.py           keypair generation + AES-256-GCM encryption (at-rest +
-                        passphrase export) + CLOB client construction
-    execution.py        real order placement — market FOK (exits) and
-                        price-capped limit FAK (entries, anchored to the
-                        leader's fill price so a slow reaction never means a
-                        worse entry — see BUILD_PLAN §5.5)
-    detection.py         fast per-trade leader detection (activity poll or
-                        on-chain OrderFilled logs) feeding the copy engine
-                        within seconds, instead of a single slow poll
-    copy_engine.py       the tick loop: diff each followed trader's live
-                        positions against the DB, open/resize/close/resolve
-    trader_stats.py      leaderboard seeding + consistency scoring
-    pnl.py               user equity curve + period PnL stats
-  api/                routes_user / routes_traders / routes_positions
-frontend/             React + Vite, cyber-brutalism UI (see BUILD_PLAN §"Frontend")
+  main.py              FastAPI app and background task lifecycle
+  api/                 auth, user, trader and position routes
+  core/                detection, execution, copy engine, wallet and PnL logic
+  db/                  SQLite/Postgres access and schema
+frontend/
+  src/                  React application
+  dist/                 production build served by FastAPI
+supabase/migrations/    Postgres schema and security migrations
+deploy/macmini/         legacy local deployment tooling
+tests/                  backend, safety and deployment contracts
+docs/                   user, API and operator documentation
+compose.yaml            production service topology
+Caddyfile               HTTPS reverse proxy and security headers
 ```
 
-### Position lifecycle
+## Local development
 
-`leader opens -> detected (fast poll or on-chain) -> price-capped copy order
-placed -> position tracked in copy_positions -> leader resizes/exits or market
-resolves -> position updated/closed, PnL realized`. Diff state lives in the
-database, not memory, so a restart never re-opens a position that's already
-held.
-
-### Risk settings (per copied wallet)
-
-Each wallet you follow is configured independently: allocation %, max
-position size, max slippage vs. the leader's price, max total exposure to
-that trader, a daily loss limit, and a pause switch. Set via
-`POST /api/traders/{address}/settings`.
-
-## Quick start
+Requirements: Python 3.12+, Node.js 20+, and npm.
 
 ```bash
-cd polymarket-copybot
-python3 -m venv .venv && source .venv/bin/activate
+git clone https://github.com/sxwrpv/polytrade-bot.git
+cd polytrade-bot
+
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env   # set ENCRYPTION_SECRET at minimum
+cp .env.example .env
 
-# backend
-uvicorn backend.main:app --host 0.0.0.0 --port 8080
+cd frontend
+npm install
+npm run build
+cd ..
 
-# frontend (separate terminal, dev mode)
-cd frontend && npm install && npm run dev
+uvicorn backend.main:app --host 127.0.0.1 --port 8080
 ```
 
-For a production-style single-process run, build the frontend first
-(`npm run build` — outputs `frontend/dist`) and FastAPI serves it directly at
-`/`; no separate frontend server needed.
+Before creating a wallet, configure a strong `ENCRYPTION_SECRET`. Builder credentials are required for the intended gasless wallet path. See [Configuration](docs/configuration.md).
 
-## Configuration
+## Tests
 
-See `.env.example` for the full list. The load-bearing ones:
+```bash
+source .venv/bin/activate
+python -m pytest -q
 
-- `ENCRYPTION_SECRET` — encrypts signer private keys at rest (AES-256-GCM).
-  Required; the app refuses to create wallets without it.
-- `DETECTION_POLL_SECONDS` / `COPY_ENGINE_POLL_SECONDS` — fast per-trade
-  detection cadence vs. the slower full-reconcile cadence.
-- `MAX_COPY_SLIPPAGE_PCT` — default cap on how far a copy order's price may
-  drift from the leader's fill price before it's skipped instead of chased.
-- `POLYGON_RPC_URL` — optional; if set, leader-trade detection uses on-chain
-  `OrderFilled` logs (faster, attributed) instead of polling the activity API.
+cd frontend
+npm run build
+```
 
-## Wallets and custody
+## Documentation
 
-The app is custodial: onboarding is create-only (no import, no passphrase) —
-it generates an Ethereum keypair per user, encrypts the private key at rest,
-and signs orders on the user's behalf so copying can run unattended. Users can
-export their private key at any time via `POST /api/user/export-key`, gated
-only by wallet auth — there is no passphrase second factor. That's a
-deliberate simplification, not an oversight: anyone who can authenticate as a
-wallet (i.e. knows its address) can export its key.
+The documentation is arranged like a product guide rather than a build log:
 
-**Funding** uses Polymarket's own bridge (`GET /api/user/deposit-address`):
-send USDC/USDT (or other supported assets) from Ethereum, Polygon, Arbitrum,
-Base, Optimism, BNB, Solana, Tron, or Bitcoin, and it's converted to pUSD in
-the wallet automatically — no gas needed for this step, exactly like
-Polymarket's own direct-deposit flow. Separately, the wallet still needs a
-small amount of MATIC once, for the on-chain USDC allowance approval before
-its first trade — this is a real constraint of the EOA wallet model (see
-`BUILD_PLAN.md` §wallet model): Polymarket's relayer only covers gasless
-transactions for Safe/Proxy wallet types, not plain EOAs, and implementing
-proxy-wallet address derivation is deferred, not done.
+1. [Getting Started](docs/getting-started.md)
+2. [Core Concepts](docs/core-concepts.md)
+3. [Copy Trading](docs/copy-trading.md)
+4. [Wallet and Funding](docs/wallet-and-funding.md)
+5. [Risk and Security](docs/risk-and-security.md)
+6. [API Reference](docs/api-reference.md)
+7. [Configuration](docs/configuration.md)
+8. [Deployment](docs/deployment.md)
+9. [Troubleshooting](docs/troubleshooting.md)
+10. [Glossary](docs/glossary.md)
 
-## Going further
+## License and responsibility
 
-- `BUILD_PLAN.md` — the phase-by-phase build log, every design decision and
-  why, and the verified API reference for the endpoints this depends on.
-- Signature auth (`X-Signature` over a nonce) to replace the current
-  MVP-level `X-Wallet-Address` header auth is the planned upgrade before
-  handling meaningful real funds at scale.
+No license is granted unless a license file says otherwise. Operators are responsible for access controls, secrets, legal eligibility, backups, monitoring, incident response, and all real-money trading consequences.
