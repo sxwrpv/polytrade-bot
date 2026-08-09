@@ -76,6 +76,15 @@ DEFAULT_IGNORE_BELOW_USD = float(os.environ.get("DEFAULT_IGNORE_BELOW_USD", "2.0
 MAX_COPY_SLIPPAGE_PCT = validate_slippage_pct(
     os.environ.get("MAX_COPY_SLIPPAGE_PCT", "2.0"), "MAX_COPY_SLIPPAGE_PCT")
 
+# polymarket.com/api/geoblock reports whether the caller's IP may use the
+# WEBSITE. It is a different surface from the CLOB trading API, with a different
+# restriction list — Ireland, for example, is close-only on the frontend while
+# the API remains available. Treating that frontend answer as an order-level
+# veto silently refused 290 legitimate orders here without one ever reaching the
+# exchange, so it is recorded as a signal, not a gate. The exchange itself is
+# the authority on what it will accept. Set to 1 to restore hard blocking.
+ENFORCE_FRONTEND_GEOBLOCK = os.environ.get("ENFORCE_FRONTEND_GEOBLOCK", "0") == "1"
+
 # --- Server ---
 HOST = os.environ.get("HOST", "0.0.0.0")
 PORT = int(os.environ.get("PORT", "8080"))

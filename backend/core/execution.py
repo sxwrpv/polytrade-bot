@@ -27,7 +27,9 @@ from polymarket.errors import (
     UserInputError,
 )
 
-from backend.config import MAX_COPY_SLIPPAGE_PCT, POLYMARKET_BUILDER_CODE
+from backend.config import (
+    ENFORCE_FRONTEND_GEOBLOCK, MAX_COPY_SLIPPAGE_PCT, POLYMARKET_BUILDER_CODE,
+)
 from backend.core.polymarket import Level, PolymarketClient
 
 log = logging.getLogger("execution")
@@ -230,6 +232,38 @@ def _definitive_rejection(e: Exception) -> bool:
 # Main entry
 # ---------------------------------------------------------------------------
 
+async def _check_frontend_geoblock(pm, res: "OrderResult") -> bool:
+    """Probe the FRONTEND geoblock and record the result on `res`.
+
+    Returns True only when the order must be aborted, which now requires
+    ENFORCE_FRONTEND_GEOBLOCK=1.
+
+    Why this is advisory: `polymarket.com/api/geoblock` answers for the
+    *website*, not the CLOB trading API — they are separate surfaces with
+    separate restriction lists (Ireland is close-only on the frontend while the
+    API stays reachable; verified live: clob.polymarket.com returns 200 and
+    authenticated balance reads succeed while this probe says blocked). Using it
+    as an order-level veto meant 290 consecutive orders were refused by our own
+    code and never reached the exchange. The exchange rejects what it won't
+    accept, so the signal is logged and attached to the result instead.
+    """
+    try:
+        geo = await pm.get_geoblock()
+    except Exception as e:            # probe failure was already non-fatal
+        res.raw["geoblock_error"] = str(e)
+        return False
+    if not geo.get("blocked"):
+        return False
+    where = f"{geo.get('country')}/{geo.get('region')}"
+    res.raw["frontend_geoblock"] = where
+    if ENFORCE_FRONTEND_GEOBLOCK:
+        res.reason = f"geoblocked ({where})"
+        return True
+    log.info("frontend geoblock reports %s — submitting anyway (the CLOB API is "
+             "a separate surface; set ENFORCE_FRONTEND_GEOBLOCK=1 to block)", where)
+    return False
+
+
 async def place_market_order(
     client,
     pm: PolymarketClient,
@@ -249,14 +283,8 @@ async def place_market_order(
     side = side.upper()
     res = OrderResult(ok=False, side=side, token_id=token_id, amount_usd=amount)
 
-    if check_geoblock:
-        try:
-            geo = await pm.get_geoblock()
-            if geo.get("blocked"):
-                res.reason = f"geoblocked ({geo.get('country')}/{geo.get('region')})"
-                return res
-        except Exception as e:  # best-effort; don't hard-fail on geoblock probe error
-            res.raw["geoblock_error"] = str(e)
+    if check_geoblock and await _check_frontend_geoblock(pm, res):
+        return res
 
     book = await pm.get_orderbook(token_id)
     if side == "BUY":
@@ -376,14 +404,8 @@ async def place_capped_order(
     side = side.upper()
     res = OrderResult(ok=False, side=side, token_id=token_id, amount_usd=target_usd or 0.0)
 
-    if check_geoblock:
-        try:
-            geo = await pm.get_geoblock()
-            if geo.get("blocked"):
-                res.reason = f"geoblocked ({geo.get('country')}/{geo.get('region')})"
-                return res
-        except Exception as e:
-            res.raw["geoblock_error"] = str(e)
+    if check_geoblock and await _check_frontend_geoblock(pm, res):
+        return res
 
     book = await pm.get_orderbook(token_id)
     tick = book.tick_size or 0.01
