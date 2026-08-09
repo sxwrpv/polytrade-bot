@@ -4,6 +4,17 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 
 
+
+def _caddy_directives() -> str:
+    """Caddyfile with comment lines stripped.
+
+    Assertions about what Caddy will DO must not trip over comments that
+    legitimately name the thing being avoided (e.g. explaining why
+    X-Frame-Options and HSTS preload are deliberately absent).
+    """
+    raw = (ROOT / "Caddyfile").read_text().splitlines()
+    return "\n".join(l for l in raw if not l.strip().startswith("#"))
+
 class DockerDeploymentContractTests(unittest.TestCase):
     def test_backend_runs_exactly_one_uvicorn_worker(self):
         dockerfile = (ROOT / "Dockerfile").read_text()
@@ -25,6 +36,26 @@ class DockerDeploymentContractTests(unittest.TestCase):
         self.assertIn('"80:80"', compose)
         self.assertIn('"443:443"', compose)
         self.assertIn("reverse_proxy app:8080", caddyfile)
+
+    def test_caddy_allows_telegram_to_frame_the_mini_app(self):
+        """Telegram Web/Desktop render Mini Apps in an iframe.
+
+        X-Frame-Options: DENY blocks that with no visible error — the app just
+        renders as a blank frame. frame-ancestors must permit Telegram and
+        nobody else, and XFO must not reappear alongside it.
+        """
+        caddyfile = _caddy_directives()
+        self.assertIn("frame-ancestors", caddyfile)
+        self.assertIn("https://web.telegram.org", caddyfile)
+        self.assertNotIn("X-Frame-Options", caddyfile)
+
+    def test_caddy_serves_the_registered_domain_for_tls(self):
+        """Telegram requires a trusted HTTPS URL; a bare IP cannot get a cert."""
+        caddyfile = _caddy_directives()
+        self.assertIn("polytradebot.live", caddyfile)
+        self.assertIn("Strict-Transport-Security", caddyfile)
+        # preload is effectively irreversible — keep it out
+        self.assertNotIn("preload", caddyfile)
 
     def test_build_does_not_enable_global_prereleases(self):
         dockerfile = (ROOT / "Dockerfile").read_text()

@@ -1,12 +1,35 @@
-:80 {
-    encode zstd gzip
+# Public ingress. Caddy terminates TLS and is the only thing exposed; the app
+# listens on 8080 inside the Docker network and is never published directly.
+#
+# HTTPS is automatic: Caddy provisions and renews a Let's Encrypt certificate
+# for the names below over the HTTP-01 challenge on port 80, and installs the
+# HTTP->HTTPS redirect itself. DNS must already resolve to this host BEFORE the
+# first start, or the challenge fails and repeated failures hit Let's Encrypt's
+# rate limits.
+polytradebot.live, www.polytradebot.live {
+	encode zstd gzip
 
-    header {
-        -Server
-        X-Content-Type-Options "nosniff"
-        X-Frame-Options "DENY"
-        Referrer-Policy "strict-origin-when-cross-origin"
-    }
+	header {
+		-Server
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		# Telegram only opens Mini Apps over HTTPS; make downgrades impossible.
+		# No `preload` on purpose — preloading is effectively irreversible.
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		# Telegram Web and Desktop render Mini Apps INSIDE AN IFRAME, so the
+		# previous `X-Frame-Options: DENY` would have shown a blank frame with
+		# no obvious cause once the bot button pointed here. frame-ancestors
+		# does what XFO was meant to do while allowing exactly Telegram —
+		# everyone else is still refused. (XFO is intentionally absent: it has
+		# no multi-origin form, and browsers prefer frame-ancestors anyway.)
+		Content-Security-Policy "frame-ancestors 'self' https://web.telegram.org https://*.telegram.org"
+	}
 
-    reverse_proxy app:8080
+	reverse_proxy app:8080
+}
+
+# Plain-HTTP access by IP, kept so health checks and monitoring don't depend on
+# DNS or a certificate. No TLS here (a public CA will not issue for a bare IP).
+http://52.51.200.58 {
+	reverse_proxy app:8080
 }
