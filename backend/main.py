@@ -31,6 +31,14 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s | %(message)s",
 )
 
+# httpx logs a line per request at INFO. The engine polls Polymarket constantly,
+# so this alone was ~86% of the log volume and grew server.log to 1.5 GB with no
+# rotation. Warnings and errors still come through; set HTTP_LOG_LEVEL=INFO to
+# get the per-request trace back when debugging.
+for _noisy in ("httpx", "httpcore", "urllib3", "web3", "websockets"):
+    logging.getLogger(_noisy).setLevel(
+        os.environ.get("HTTP_LOG_LEVEL", "WARNING").upper())
+
 log = logging.getLogger("main")
 _FRONTEND_DIST = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")
 
@@ -111,12 +119,17 @@ async def lifespan(app: FastAPI):
     # decrypts every user's wallet key), the database password, and the builder
     # credentials — it must never be group/world readable.
     runtime_security.secure_process_umask()
+    _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     try:
-        runtime_security.harden_runtime_files(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            db_path=DB_PATH)
+        runtime_security.harden_runtime_files(_root, db_path=DB_PATH)
     except OSError:
         log.exception("could not tighten runtime file permissions")
+    try:
+        trimmed = runtime_security.trim_oversized_logs(_root)
+        if trimmed:
+            log.warning("trimmed oversized log file(s): %s", ", ".join(trimmed))
+    except OSError:
+        log.exception("could not trim oversized logs")
 
     db = Database()
     await db.connect()
