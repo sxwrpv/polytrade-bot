@@ -47,7 +47,10 @@ from backend.db.database import now_iso
 
 log = logging.getLogger("copy_engine")
 
-MIN_NOTIONAL_USD = 1.0       # don't open/resize below this (avoids dust + min-size rejects)
+# Fallback minimum only — used when a caller supplies no per-wallet floor.
+# The live minimum is per copied wallet (followed_traders.ignore_below_usd, the
+# "IGNORE POSITIONS < $" slider); see _clamp_to_verified_position.
+MIN_NOTIONAL_USD = 1.0
 RESIZE_THRESHOLD = 0.25      # rebalance only when target drifts >25% from current
 # Fill-or-kill budget: how many consecutive non-fills before an intent is
 # abandoned. The reconcile tick (COPY_ENGINE_POLL_SECONDS, 5s in production)
@@ -1020,11 +1023,14 @@ class CopyEngine:
         basis = max(wallet_cost, row_basis)
         allowed = min(float(action.amount),
                       max(0.0, risk["max_per_trade"] - basis))
-        # The user's "IGNORE POSITIONS < $" governs resizes as well as opens —
-        # the UI promises "skip if our copy would be this small" without
-        # qualification, and a sub-threshold top-up still pays full spread and
-        # fees. MIN_NOTIONAL_USD stays only as the absolute floor beneath it.
-        floor = max(risk["ignore_below"], MIN_NOTIONAL_USD)
+        # SINGLE SOURCE OF TRUTH for minimum size: the per-wallet
+        # "IGNORE POSITIONS < $" slider, for opens and resizes alike. No hidden
+        # global override — a slider that silently can't go below a constant is
+        # the same class of bug as the open/resize split it replaced. The real
+        # protections live elsewhere: execution rejects anything under the
+        # market's own min_order_size, and the fill-or-kill budget stops a
+        # too-low setting from retrying forever.
+        floor = risk["ignore_below"]
         if allowed < floor:
             log.info("buy skipped (%s %s): verified wallet basis %.2f leaves no "
                      "headroom under cap %.2f", action.kind, action.token_id,
@@ -1090,7 +1096,11 @@ class CopyEngine:
                         return None
                     action = replace(action, row=fresh)
                     allowed = min(allowed, max(0.0, risk["max_per_trade"] - fresh["notional_usd"]))
-                    floor = MIN_NOTIONAL_USD
+                    # Same per-wallet floor as opens (see _clamp_to_verified_position).
+                    # Splitting them left this reservation step laxer than the
+                    # verified-size gate downstream, so a sub-threshold resize
+                    # reserved a claim only to be rejected a step later.
+                    floor = risk["ignore_below"]
                 else:
                     return None
                 trader_used = (sum(float(r["notional_usd"]) for r in trader_open)

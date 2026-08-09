@@ -29,7 +29,7 @@ const SLIDERS = [
   ['copy_ratio_pct', 'RATIO %', 0, 20, 0.1, '%', 'copy = leader position × this %'],
   ['max_position_usd', 'MAX / TRADE', 1, 500, 1, '$', 'hard cap per copied position'],
   ['min_leader_usd', 'MIN LEADER', 0, 10000, 50, '$', "skip if leader's position is smaller"],
-  ['ignore_below_usd', 'IGNORE POSITIONS <', 0, 50, 0.5, '$', 'skip if our copy would be this small'],
+  ['ignore_below_usd', 'MIN SIZE / COPY', 0.5, 50, 0.5, '$', 'skip any copy or top-up smaller than this'],
   ['max_open_positions', 'MAX OPEN', 0, 50, 1, '', '0 = unlimited'],
   ['max_total_exposure_usd', 'MAX EXPOSURE', 0, 5000, 50, '$', 'cap total open on this wallet (0 = none)'],
   ['min_price', 'MIN PRICE', 0, 1, 0.01, '', 'skip cheaper longshots'],

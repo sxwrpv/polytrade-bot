@@ -114,14 +114,17 @@ class SingleSourceOfTruthTests(unittest.TestCase):
             self.assertIn("'closing'", got)
             self.assertIn("'reconciliation_required'", got)
 
-    def test_user_dust_floor_governs_resizes_too(self):
-        """`IGNORE POSITIONS < $` must not apply only to opens.
+    def test_minimum_size_is_per_wallet_everywhere(self):
+        """The per-wallet slider is the ONLY minimum-size authority.
 
-        The UI promises "skip if our copy would be this small" without
-        qualification; resizes previously bypassed it for a hardcoded $1.
+        Three separate sites gate BUY size. They previously disagreed: opens
+        used the slider, resizes used a hardcoded $1, and a later fix clamped
+        two of them with max(). A global constant silently overriding the
+        slider is the same bug as the open/resize split it replaced.
         """
         src = pathlib.Path("backend/core/copy_engine.py").read_text()
-        self.assertNotIn(
-            'floor = risk["ignore_below"] if action.kind == "open" else MIN_NOTIONAL_USD',
-            src)
-        self.assertIn('floor = max(risk["ignore_below"], MIN_NOTIONAL_USD)', src)
+        floors = re.findall(r"^\s*floor = (.+)$", src, re.M)
+        self.assertGreaterEqual(len(floors), 3, "expected every BUY-size gate")
+        for got in floors:
+            self.assertEqual('risk["ignore_below"]', got.strip(),
+                             "a size gate bypasses the per-wallet slider")
