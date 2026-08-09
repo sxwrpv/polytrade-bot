@@ -1,9 +1,8 @@
-"""Shared FastAPI dependencies: app-state accessors, auth, per-user CLOB client.
+"""Shared FastAPI dependencies: app-state accessors and cookie auth.
 
-Auth: Bearer session token (users.api_token — a secret issued at wallet
-creation or re-issued via Telegram login). NOT the wallet address: addresses
-are public on-chain data the moment the bot trades, so address-header auth
-would let anyone act as any user — including exporting their private key.
+Authentication uses a short-lived random value held only in an HttpOnly cookie.
+Only its SHA-256 digest is stored in the database. Wallet addresses and legacy
+Bearer/X-API-Token headers are never accepted as credentials.
 """
 from __future__ import annotations
 
