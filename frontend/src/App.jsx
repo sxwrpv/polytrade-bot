@@ -39,8 +39,10 @@ export default function App() {
     api
       .telegramAuth(tg.initData)
       .then((r) => {
-        if (r.address && r.api_token) {
-          saveSession({ address: r.address, token: r.api_token })
+        if (r.address) {
+          // the session itself arrived as an HttpOnly cookie; cache only the
+          // public address so the UI can paint before /me resolves
+          saveSession({ address: r.address })
           setSession(getSession())
         }
       })

@@ -16,7 +16,7 @@ export default function Onboarding({ onDone }) {
       // user gets their existing wallet back instead of a duplicate.
       const initData = window.Telegram?.WebApp?.initData || null
       const r = await api.createWallet({ init_data: initData })
-      saveSession({ address: r.address, token: r.api_token })
+      saveSession({ address: r.address })   // session = HttpOnly cookie
       haptic('success')
       setResult(r)
     } catch (e) {

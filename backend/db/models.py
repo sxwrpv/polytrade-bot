@@ -19,7 +19,8 @@ SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS users (
     id                      TEXT PRIMARY KEY,          -- deposit/funder wallet (0x..., = proxyWallet)
     signer_address          TEXT,                      -- EOA derived from the signer key
-    api_token               TEXT,                      -- secret session token (Bearer auth; the address is public!)
+    api_token               TEXT,                      -- sha256: digest of the session cookie value (never the raw secret)
+    api_token_expires_at    TEXT,                      -- ISO8601 UTC; NULL or past = session invalid
     telegram_user_id        INTEGER,                   -- linked Telegram account (Mini App login)
     display_name            TEXT,
     private_key_enc         TEXT NOT NULL,             -- AES-256-GCM(signer key, ENCRYPTION_SECRET)
@@ -264,6 +265,8 @@ MIGRATIONS = (
     # indexes live here, not in SCHEMA_SQL, because on a pre-existing DB the
     # columns only exist after the ALTERs above have run.
     "ALTER TABLE users ADD COLUMN api_token TEXT",
+    # session expiry — sessions are short-lived; NULL/past means invalid
+    "ALTER TABLE users ADD COLUMN api_token_expires_at TEXT",
     "ALTER TABLE users ADD COLUMN telegram_user_id INTEGER",
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_users_api_token ON users(api_token)",
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_users_telegram "
@@ -316,6 +319,7 @@ CREATE TABLE IF NOT EXISTS users (
     id                       TEXT PRIMARY KEY,
     signer_address           TEXT,
     api_token                TEXT,
+    api_token_expires_at     TEXT,
     telegram_user_id         BIGINT,
     display_name             TEXT,
     private_key_enc          TEXT NOT NULL,

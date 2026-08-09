@@ -6,7 +6,7 @@ import logging
 import time
 
 import aiosqlite
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from backend.config import CREATE_WALLET_RATE_LIMIT, ENCRYPTION_SECRET, TELEGRAM_BOT_TOKEN
@@ -80,7 +80,8 @@ _SETTINGS_KEYS = ("display_name", "paused", "max_total_exposure_usd")
 
 
 @router.post("/create-wallet")
-async def create_wallet(body: CreateWallet, request: Request, db=Depends(get_db)):
+async def create_wallet(body: CreateWallet, request: Request, response: Response,
+                        db=Depends(get_db)):
     """Generate a signer, build its client (derives + deploys the gasless
     Deposit Wallet automatically when a Builder key is configured; falls back
     to EOA otherwise), wait for backend indexing, then set up trading
@@ -98,8 +99,9 @@ async def create_wallet(body: CreateWallet, request: Request, db=Depends(get_db)
             existing = await db.fetchone(
                 "SELECT * FROM users WHERE telegram_user_id = ?", (int(tg_user["id"]),))
             if existing:
+                raw = await auth.issue_session(db, existing["id"])
+                auth.set_session_cookie(response, raw)
                 return {"address": existing["id"], "signer_address": existing["signer_address"],
-                        "api_token": existing["api_token"],
                         "gasless": existing["id"] != existing["signer_address"]}
 
     ip = _client_ip(request)
@@ -126,21 +128,24 @@ async def create_wallet(body: CreateWallet, request: Request, db=Depends(get_db)
         await client.close()
 
     enc = wallet.encrypt_private_key(pk, ENCRYPTION_SECRET)
-    token = auth.new_api_token()
+    # Only the digest is persisted; `raw` goes out solely as an HttpOnly cookie.
+    raw, stored, expires_at = auth.new_session()
     display_name = body.display_name
     if not display_name and tg_user:
         display_name = tg_user.get("username") or tg_user.get("first_name")
     try:
         await db.execute(
-            "INSERT INTO users(id, signer_address, api_token, telegram_user_id, "
-            "display_name, private_key_enc, created_at) "
-            "VALUES(?,?,?,?,?,?,?)",
-            (funder, signer, token, int(tg_user["id"]) if tg_user else None,
+            "INSERT INTO users(id, signer_address, api_token, api_token_expires_at, "
+            "telegram_user_id, display_name, private_key_enc, created_at) "
+            "VALUES(?,?,?,?,?,?,?,?)",
+            (funder, signer, stored, expires_at,
+             int(tg_user["id"]) if tg_user else None,
              display_name, enc, now_iso()))
     except aiosqlite.IntegrityError:
         raise HTTPException(409, "wallet already exists")
+    auth.set_session_cookie(response, raw)
     return {"address": funder, "signer_address": signer,
-            "api_token": token, "gasless": funder != signer}
+            "gasless": funder != signer}
 
 
 @router.get("/me")

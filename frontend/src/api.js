@@ -1,7 +1,11 @@
-// fetch() wrappers for the backend. Auth = secret session token (Bearer),
-// issued once at wallet creation or re-issued by Telegram login — never the
-// wallet address, which is public on-chain data.
-const KEY = 'session' // JSON {address, token}
+// fetch() wrappers for the backend.
+//
+// Auth is an HttpOnly session cookie set by the server — this file deliberately
+// holds NO credential. Script running on the page (an XSS, a bad dependency)
+// cannot read the session, which is exactly why the old localStorage Bearer
+// token was removed. Only the public wallet address is cached locally, purely
+// so the UI can render before /me returns; it grants nothing on its own.
+const KEY = 'session' // JSON {address} — public data only, never a secret
 
 function load() {
   try {
@@ -12,14 +16,15 @@ function load() {
 }
 export const getSession = load
 export const getWallet = () => load()?.address || null
-export const saveSession = (s) => localStorage.setItem(KEY, JSON.stringify(s))
+export const saveSession = (s) =>
+  localStorage.setItem(KEY, JSON.stringify({ address: s?.address ?? null }))
 export const clearWallet = () => localStorage.removeItem(KEY)
 
 async function req(path, opts = {}) {
   const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) }
-  const s = load()
-  if (s?.token) headers['Authorization'] = `Bearer ${s.token}`
-  const r = await fetch(`/api${path}`, { ...opts, headers })
+  // same-origin: the SPA is served by the same FastAPI app, so the session
+  // cookie rides along automatically and no token is ever handled in JS.
+  const r = await fetch(`/api${path}`, { ...opts, headers, credentials: 'same-origin' })
   if (!r.ok) {
     const body = await r.json().catch(() => ({}))
     throw new Error(body.detail || r.statusText)
@@ -38,6 +43,7 @@ export function haptic(type = 'success') {
 
 export const api = {
   // auth
+  logout: () => req('/auth/logout', { method: 'POST' }),
   telegramAuth: (initData) =>
     req('/auth/telegram', { method: 'POST', body: JSON.stringify({ init_data: initData }) }),
   // user

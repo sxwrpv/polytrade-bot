@@ -121,9 +121,13 @@ async def lifespan(app: FastAPI):
     db = Database()
     await db.connect()
     await db.init()
-    n = await auth.ensure_api_tokens(db)   # rows that predate token auth
+    # One-way cutover to hashed, expiring sessions: any surviving plaintext or
+    # non-expiring token is a credential that a DB leak could replay, so it is
+    # destroyed rather than migrated. Everyone signs in again — Telegram users
+    # re-auth automatically from initData on next launch.
+    n = await auth.invalidate_legacy_sessions(db)
     if n:
-        log.info("backfilled session tokens for %d users", n)
+        log.info("invalidated %d legacy (plaintext/non-expiring) sessions", n)
     pm = PolymarketClient()
     app.state.db = db
     app.state.pm = pm

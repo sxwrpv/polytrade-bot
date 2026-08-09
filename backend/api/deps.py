@@ -6,10 +6,12 @@ Bearer/X-API-Token headers are never accepted as credentials.
 """
 from __future__ import annotations
 
+import time
+
 from fastapi import Header, HTTPException, Request
 
 from backend.config import ENCRYPTION_SECRET
-from backend.core import wallet
+from backend.core import auth, wallet
 
 
 def get_db(request: Request):
@@ -23,15 +25,25 @@ def get_pm(request: Request):
 async def get_current_user(request: Request,
                            authorization: str = Header(default=None),
                            x_api_token: str = Header(default=None)):
-    token = x_api_token
-    if not token and authorization and authorization.lower().startswith("bearer "):
-        token = authorization[7:].strip()
-    if not token:
+    """Authenticate from the HttpOnly session cookie only.
+
+    The raw cookie value never touches the database — we look the session up by
+    its SHA-256 digest, so a database/backup leak yields no usable credential.
+    Sessions expire (auth.SESSION_TTL_SECONDS), so a captured cookie has a
+    bounded lifetime. The `authorization` / `x_api_token` parameters remain in
+    the signature only so callers and tests keep working; header credentials are
+    deliberately NOT accepted — accepting them would reintroduce the
+    XSS-readable, never-expiring token this replaced.
+    """
+    raw = request.cookies.get(auth.SESSION_COOKIE)
+    if not raw:
         raise HTTPException(status_code=401, detail="missing session token")
     user = await request.app.state.db.fetchone(
-        "SELECT * FROM users WHERE api_token = ?", (token,))
+        "SELECT * FROM users WHERE api_token = ?", (auth.hash_session_token(raw),))
     if not user:
         raise HTTPException(status_code=401, detail="invalid session")
+    if auth.parse_session_expiry(user.get("api_token_expires_at")) <= time.time():
+        raise HTTPException(status_code=401, detail="session expired — sign in again")
     return user
 
 

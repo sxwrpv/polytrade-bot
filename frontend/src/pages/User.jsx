@@ -178,7 +178,7 @@ export default function User({ onLogout }) {
         </div>
       </Folder>
 
-      <button className="btn" style={{ marginTop: 16 }} onClick={() => { clearWallet(); onLogout?.() }}>
+      <button className="btn" style={{ marginTop: 16 }} onClick={async () => { await api.logout().catch(() => {}); clearWallet(); onLogout?.() }}>
         LOG OUT
       </button>
 
