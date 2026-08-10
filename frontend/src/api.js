@@ -27,7 +27,9 @@ async function req(path, opts = {}) {
   const r = await fetch(`/api${path}`, { ...opts, headers, credentials: 'same-origin' })
   if (!r.ok) {
     const body = await r.json().catch(() => ({}))
-    throw new Error(body.detail || r.statusText)
+    const error = new Error(body.detail || r.statusText)
+    error.status = r.status
+    throw error
   }
   return r.json()
 }

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
-import { api, getSession, saveSession } from './api'
+import { api, clearWallet, getSession, saveSession } from './api'
+import { bootstrapSession } from './authBootstrap'
 import Onboarding from './pages/Onboarding'
 import Home from './pages/Home'
 import Positions from './pages/Positions'
@@ -14,13 +15,13 @@ const TABS = [
 const tg = window.Telegram?.WebApp
 
 export default function App() {
-  const [session, setSession] = useState(getSession())
+  const [session, setSession] = useState(() => getSession())
   // Always launch on HOME — don't restore whatever tab the hash held from a
   // previous session (owner request). Hash still tracks tab within a session.
   const [tab, setTab] = useState('home')
-  // Inside Telegram with no stored session: try initData login before showing
-  // onboarding — a returning Telegram user signs straight back in.
-  const [tgAuthing, setTgAuthing] = useState(Boolean(!getSession() && tg?.initData))
+  // A cached address is not authentication. Validate its HttpOnly cookie before
+  // rendering account pages; if it is stale, re-auth from Telegram initData.
+  const [authChecking, setAuthChecking] = useState(Boolean(getSession() || tg?.initData))
 
   useEffect(() => {
     if (!tg) return
@@ -35,27 +36,23 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    if (session || !tg?.initData) return
-    api
-      .telegramAuth(tg.initData)
-      .then((r) => {
-        if (r.address) {
-          // the session itself arrived as an HttpOnly cookie; cache only the
-          // public address so the UI can paint before /me resolves
-          saveSession({ address: r.address })
-          setSession(getSession())
-        }
-      })
-      .catch(() => {})
-      .finally(() => setTgAuthing(false))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (!getSession() && !tg?.initData) return
+    bootstrapSession({
+      cachedSession: getSession(),
+      initData: tg?.initData || '',
+      api,
+      saveSession,
+      clearSession: clearWallet,
+    })
+      .then(setSession)
+      .finally(() => setAuthChecking(false))
   }, [])
 
   useEffect(() => {
     window.location.hash = tab
   }, [tab])
 
-  if (tgAuthing) {
+  if (authChecking) {
     return (
       <div className="onboard">
         <div className="logo">&gt; POLYMARKET COPYBOT</div>
