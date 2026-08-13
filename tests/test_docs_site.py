@@ -19,6 +19,8 @@ def test_interactive_api_reference_lives_under_api_namespace():
 
     assert response.status_code == 200
     assert "swagger-ui" in response.text.lower()
+    assert "Build on PolyTrade" in response.text
+    assert "/docs/assets/api-docs.css" in response.text
 
 
 def test_docs_markdown_is_available_to_the_documentation_site():

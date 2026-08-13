@@ -16,7 +16,8 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.openapi.docs import get_swagger_ui_html
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from backend.config import CORS_ALLOW_ORIGINS, DB_PATH, ENCRYPTION_SECRET, TELEGRAM_BOT_TOKEN
@@ -225,7 +226,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="PolyTrade API",
     lifespan=lifespan,
-    docs_url="/api/docs",
+    docs_url=None,
     redoc_url="/api/redoc",
     openapi_url="/api/openapi.json",
 )
@@ -242,6 +243,48 @@ app.include_router(routes_auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(routes_user.router, prefix="/api/user", tags=["user"])
 app.include_router(routes_traders.router, prefix="/api/traders", tags=["traders"])
 app.include_router(routes_positions.router, prefix="/api/positions", tags=["positions"])
+
+
+@app.get("/api/docs", include_in_schema=False)
+async def api_documentation():
+    """Serve FastAPI's live schema in a PolyTrade-branded Swagger shell."""
+    response = get_swagger_ui_html(
+        openapi_url="/api/openapi.json",
+        title="PolyTrade API — Developer Reference",
+        swagger_ui_parameters={
+            "deepLinking": True,
+            "displayRequestDuration": True,
+            "docExpansion": "list",
+            "filter": True,
+            "operationsSorter": "method",
+            "persistAuthorization": True,
+            "syntaxHighlight.theme": "arta",
+            "tagsSorter": "alpha",
+            "tryItOutEnabled": True,
+        },
+    )
+    html = bytes(response.body).decode("utf-8").replace(
+        "</head>",
+        '<meta name="theme-color" content="#eef2ef">\n'
+        '<link rel="preconnect" href="https://fonts.googleapis.com">\n'
+        '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>\n'
+        '<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">\n'
+        '<link rel="stylesheet" href="/docs/assets/api-docs.css">\n'
+        "</head>",
+    ).replace(
+        '<body>\n    <div id="swagger-ui">',
+        '<body>\n'
+        '<header class="api-shell-header">\n'
+        '  <a class="api-brand" href="/docs"><span class="api-brand-mark">P</span><span>PolyTrade</span><span class="api-brand-divider"></span><strong>API</strong></a>\n'
+        '  <nav><a href="/docs/api-reference">Guides</a><a href="/api/openapi.json">OpenAPI JSON</a><a class="api-app-link" href="/">Open app <span>↗</span></a></nav>\n'
+        '</header>\n'
+        '<section class="api-hero">\n'
+        '  <div><span class="api-kicker"><i></i> Developer reference</span><h1>Build on PolyTrade.</h1><p>Explore the live API schema, authenticate, and test requests without leaving the page.</p></div>\n'
+        '  <div class="api-meta"><span>REST</span><span>OpenAPI 3.1</span><span class="api-live"><i></i> Live schema</span></div>\n'
+        '</section>\n'
+        '<main class="api-reference"><div id="swagger-ui">',
+    ).replace("</body>", "</main></body>")
+    return HTMLResponse(html)
 
 
 @app.get("/api/health")
