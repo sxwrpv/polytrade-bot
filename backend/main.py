@@ -269,21 +269,26 @@ async def api_documentation():
         '<link rel="preconnect" href="https://fonts.googleapis.com">\n'
         '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>\n'
         '<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">\n'
+        '<link rel="stylesheet" href="/docs/assets/styles.css">\n'
         '<link rel="stylesheet" href="/docs/assets/api-docs.css">\n'
         "</head>",
     ).replace(
         '<body>\n    <div id="swagger-ui">',
         '<body>\n'
-        '<header class="api-shell-header">\n'
-        '  <a class="api-brand" href="/docs"><span class="api-brand-mark">P</span><span>PolyTrade</span><span class="api-brand-divider"></span><strong>API</strong></a>\n'
-        '  <nav><a href="/docs/api-reference">Guides</a><a href="/api/openapi.json">OpenAPI JSON</a><a class="api-app-link" href="/">Open app <span>↗</span></a></nav>\n'
+        '<div class="risk-banner"><span>Real-money copy trading</span><a href="/docs/risk-and-security">Read the risk disclosure <span aria-hidden="true">→</span></a></div>\n'
+        '<header class="topbar api-topbar">\n'
+        '  <a class="brand" href="/docs"><span class="brand-mark">P</span><span>PolyTrade</span><span class="brand-divider"></span><span class="brand-docs">API Reference</span></a>\n'
+        '  <div class="top-actions"><nav class="header-links" aria-label="Header links"><a href="/">Open app</a><a href="/docs">Documentation</a><a href="/api/openapi.json">OpenAPI JSON</a><a href="https://github.com/sxwrpv/polytrade-bot">GitHub</a></nav>'
+        '  <button class="theme-toggle" id="api-theme-toggle" aria-label="Toggle color theme"><svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v2m0 14v2M3 12h2m14 0h2M5.64 5.64l1.42 1.42m9.88 9.88 1.42 1.42m0-12.72-1.42 1.42M7.06 16.94l-1.42 1.42M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0Z"/></svg><svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 15.5A8.5 8.5 0 0 1 8.5 4 8.5 8.5 0 1 0 20 15.5Z"/></svg></button></div>\n'
         '</header>\n'
-        '<section class="api-hero">\n'
-        '  <div><span class="api-kicker"><i></i> Developer reference</span><h1>Build on PolyTrade.</h1><p>Explore the live API schema, authenticate, and test requests without leaving the page.</p></div>\n'
-        '  <div class="api-meta"><span>REST</span><span>OpenAPI 3.1</span><span class="api-live"><i></i> Live schema</span></div>\n'
-        '</section>\n'
-        '<main class="api-reference"><div id="swagger-ui">',
-    ).replace("</body>", "</main></body>")
+        '<main class="api-reference">\n'
+        '  <section class="api-intro"><div class="api-eyebrow">Developers</div><h1>API Reference</h1><p>Explore PolyTrade’s live OpenAPI schema and test requests directly from your browser.</p><div class="api-quicklinks"><a href="/docs/api-reference">Read the integration guide</a><span>·</span><a href="/api/openapi.json">Download OpenAPI JSON</a></div></section>\n'
+        '  <div id="swagger-ui">',
+    ).replace(
+        "</body>",
+        '<footer class="api-footer"><span>PolyTrade Documentation</span><span>Live schema · OpenAPI 3.1</span></footer></main>'
+        '<script src="/docs/assets/api-docs.js"></script></body>',
+    )
     return HTMLResponse(html)
 
 
