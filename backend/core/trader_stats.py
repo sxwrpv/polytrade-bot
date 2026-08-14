@@ -115,7 +115,8 @@ _REALIZED_CLOSING_RULES = (
     "and win when payout > cost; redeemable held positions only when size > 0.01, "
     "using cash_pnl and win when cur_price >= 0.5; expired-away losses only when "
     "shares > 0.01, cost > 0.005, the asset is not held, and the positions list is "
-    "not truncated."
+    "not truncated. Resolved holdings without a fetched last-trade timestamp remain "
+    "undated: they contribute to fetched aggregate PnL/win rate but not daily or rolling windows."
 )
 
 
@@ -286,7 +287,7 @@ for _window, _days in _PERIODS.items():
             f"{_days}d Sell Exits", "Fetched SELL activity-row count; redemptions are not included.", False, False),
         "fill_exit_ratio": (
             "round(SELL TRADE row count / BUY TRADE row count * 100, 2); null when there are no BUY rows",
-            f"{_days}d Exit/Fill Ratio", "Fetched SELL-to-BUY activity-row ratio as a percentage.", True, True),
+            f"{_days}d Exit/Fill Ratio", "Fetched SELL-to-BUY activity-row count ratio as a percentage, not an order, position, share, or capital close rate.", True, True),
     }
     for _stem, (_formula, _label, _tooltip, _sortable, _filterable) in _defs.items():
         _trade_only = _stem in {"volume", "fills", "exits", "fill_exit_ratio"}
@@ -362,7 +363,7 @@ def realized_closings(trades, redeems=(), positions=(), *,
     for r in redeems:
         events.append((int(r.get("timestamp") or 0), 1, r))
     events.sort(key=lambda e: (e[0], e[1]))      # redeem after same-second trades
-    out: list[tuple[str, float, bool]] = []
+    out: list[tuple[str | None, float, bool]] = []
     for ts, kind, obj in events:
         if kind == 0:                            # TRADE
             b = books.setdefault(obj.asset, [0.0, 0.0])
@@ -391,15 +392,17 @@ def realized_closings(trades, redeems=(), positions=(), *,
     # 3. resolved-but-held positions (the missing loss leg). cash_pnl from the
     #    API is authoritative; date to the last trade on the token (proxy for
     #    the resolution date — these are fast markets that resolve near the last
-    #    buy) or now if the buys predate the fetched window.
+    #    buy). If the buys predate the fetched window, keep the result undated:
+    #    inventing "today" would leak an old outcome into every rolling window.
     held_assets: set = set()
     for p in positions:
         if getattr(p, "size", 0) <= 0.01:
             continue
         if p.redeemable:
             books[p.asset] = [0.0, 0.0]          # consumed -> no expired double-count
-            ts = last_ts.get(p.asset, time.time())
-            out.append((_day(ts), p.cash_pnl, p.cur_price >= 0.5))
+            ts = last_ts.get(p.asset)
+            out.append((_day(ts) if ts is not None else None,
+                        p.cash_pnl, p.cur_price >= 0.5))
         else:
             held_assets.add(p.asset)             # genuinely open -> leave basis
 
@@ -410,14 +413,15 @@ def realized_closings(trades, redeems=(), positions=(), *,
             if sh > 0.01 and c > 0.005 and a not in held_assets:
                 out.append((_day(last_ts.get(a, 0)), -c, False))
 
-    out.sort(key=lambda e: e[0])
+    out.sort(key=lambda e: e[0] or "")
     return out
 
 
 def daily_realized_pnl(closings) -> dict[str, float]:
     daily: dict[str, float] = defaultdict(float)
     for day, realized, _ in closings:
-        daily[day] += realized
+        if day is not None:
+            daily[day] += realized
     return dict(daily)
 
 
@@ -432,16 +436,15 @@ def _period_metrics(closings: list[tuple], trades: list, days: int) -> dict:
     window) filtered down to the window, and the full trade list (for volume /
     fill / exit counts, which don't need cost-basis continuity).
 
-    `fill_exit_ratio` = exits / fills * 100 (%): how much of what a trader opens
-    within the window they actually close out again, vs. hold to resolution or
-    let ride. Low % + high `pnl_quality` skew towards unrealized/paper gains;
-    high % means the trader actively locks in outcomes.
+    `fill_exit_ratio` is exactly SELL activity-row count / BUY activity-row
+    count * 100 within the window (null with no BUY rows). It is an activity
+    frequency ratio, not a share, capital, or position close rate.
     """
     cutoff_ts = time.time() - days * 86400
     cutoff_day = dt.datetime.fromtimestamp(
         cutoff_ts, dt.timezone.utc).strftime("%Y-%m-%d")
 
-    in_window = [c for c in closings if c[0] >= cutoff_day]
+    in_window = [c for c in closings if c[0] is not None and c[0] >= cutoff_day]
     total_closes = len(in_window)
     wins = sum(1 for _, _, is_win in in_window if is_win)
     winrate = wins / total_closes if total_closes else None
@@ -640,7 +643,9 @@ async def refresh_trader_stats(address: str, db, pm) -> dict:
     daily_all = daily_realized_pnl(closings)
     series = [v for _, v in sorted(daily_all.items())]
     score = consistency_score(series)
-    total_realized = sum(series)
+    # Undated resolved holdings remain valid fetched realized outcomes for the
+    # aggregate fallback, but are intentionally absent from calendar windows.
+    total_realized = sum(realized for _, realized, _ in closings)
 
     # how far back the fetched history actually reaches: 90 = the whole window
     # is covered; less = the page budget ran out first (hyper-active wallet),

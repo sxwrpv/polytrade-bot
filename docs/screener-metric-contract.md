@@ -154,7 +154,7 @@ Every metric below exists for `7d`, `30d`, and `90d`. TRADE rows use an exact ro
 ### `daily_pnl_90d` — **90d Daily PnL**
 
 - **Formula:** compact JSON object `{UTC date: sum(reconstructed realized PnL)}` retaining dates on or after (inclusive) the UTC date 90 days before refresh. Dates with no closing are omitted.
-- **Source/window/provenance:** shared reconstructed sources and limits. The inclusive cutoff can span 91 UTC date labels (the cutoff date through the refresh date), although omitted no-closing dates usually produce fewer keys; it is therefore not exactly 90 date labels. Redeemable positions with no fetched token trade are dated to refresh time, while other reconstructed outcomes use event or last-trade dates.
+- **Source/window/provenance:** shared reconstructed sources and limits. The inclusive cutoff can span 91 UTC date labels (the cutoff date through the refresh date), although omitted no-closing dates usually produce fewer keys; it is therefore not exactly 90 date labels. A resolved holding with a missing fetched trade timestamp remains undated and is excluded from daily and rolling windows, though aggregate observed/fallback PnL and win rate include it. Other reconstructed outcomes use event or last-trade dates.
 - **Sort/filter:** neither.
 - **Tooltip:** “Reconstructed daily realized PnL points for the sparkline; missing dates are not zero-PnL claims.”
 

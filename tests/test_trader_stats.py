@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from backend.core import trader_stats
+from tests.fixtures import trader_activity as activity
 
 
 WINDOWS = ("7d", "30d", "90d")
@@ -348,6 +349,200 @@ class OfficialLookupFallbackTests(unittest.IsolatedAsyncioTestCase):
         fields = await self.refresh_fields(None, {"total_pnl": 12.0, "volume_usd": 34.0})
         self.assertNotIn("total_pnl", fields)
         self.assertNotIn("volume_usd", fields)
+
+
+class DeterministicMetricFixtureTests(unittest.TestCase):
+    def period_metrics(self, closings, trades, days=7):
+        with patch.object(trader_stats.time, "time", return_value=activity.NOW_TS):
+            return trader_stats._period_metrics(closings, trades, days)
+
+    def test_sell_buy_event_ratio_is_not_a_capital_close_rate(self):
+        trades = activity.ONE_LARGE_BUY_SEVERAL_SMALL_SELLS
+        metrics = self.period_metrics([], trades)
+        self.assertEqual(1, metrics["fills"])
+        self.assertEqual(4, metrics["exits"])
+        self.assertEqual(400.0, metrics["fill_exit_ratio"])
+        capital_close_rate = sum(t.size for t in trades if t.side == "SELL") / trades[0].size
+        self.assertEqual(0.004, capital_close_rate)
+        self.assertNotEqual(capital_close_rate * 100, metrics["fill_exit_ratio"])
+        contract = trader_stats.SCREENER_METRIC_CONTRACT["fill_exit_ratio_7d"]
+        self.assertIn("row count", contract["formula"].lower())
+        self.assertIn("not an order, position, share, or capital close rate", contract["tooltip"].lower())
+        period_docs = " ".join((trader_stats._period_metrics.__doc__ or "").lower().split())
+        self.assertIn("sell activity-row count / buy activity-row count", period_docs)
+        self.assertIn("not a share, capital, or position close rate", period_docs)
+        self.assertNotIn("how much of what a trader opens", period_docs)
+
+    def test_sell_with_basis_older_than_fetched_history_is_not_fabricated(self):
+        closings = trader_stats.realized_closings(
+            activity.OLD_BUY_BASIS_OUTSIDE_FETCH, positions=[], positions_truncated=True,
+        )
+        self.assertEqual([], closings)
+        self.assertIsNone(trader_stats.win_rate_of(closings))
+
+    def test_partial_sell_realizes_only_sold_shares_at_average_cost(self):
+        closings = trader_stats.realized_closings(
+            activity.PARTIAL_SELL_TRADES,
+            positions=[activity.PARTIAL_SELL_REMAINDER],
+        )
+        self.assertEqual(activity.day_ago(4), closings[0][0])
+        self.assertAlmostEqual(0.8, closings[0][1])
+        self.assertTrue(closings[0][2])
+
+    def test_redeem_uses_known_condition_cost_basis(self):
+        closings = trader_stats.realized_closings(
+            activity.REDEEM_TRADES, activity.REDEEM_EVENTS, positions=[],
+        )
+        self.assertEqual([(activity.day_ago(6), 7.0, True)], closings)
+
+    def test_resolved_holding_without_true_date_is_not_invented_into_windows(self):
+        with patch.object(trader_stats.time, "time", return_value=activity.NOW_TS):
+            closings = trader_stats.realized_closings(
+                [], positions=[activity.RESOLVED_HOLDING_WITHOUT_RESOLUTION_DATE],
+            )
+        self.assertEqual([(None, 12, True)], closings)
+        self.assertEqual(1.0, trader_stats.win_rate_of(closings))
+        self.assertEqual({}, trader_stats.daily_realized_pnl(closings))
+        metrics = self.period_metrics(closings, [])
+        self.assertEqual(0.0, metrics["pnl"])
+        self.assertIsNone(metrics["winrate"])
+
+    def test_consistency_requires_seven_observed_days(self):
+        six = [pnl for _, pnl, _ in activity.SIX_PROFITABLE_CLOSING_DAYS]
+        seven = [pnl for _, pnl, _ in activity.SEVEN_PROFITABLE_CLOSING_DAYS]
+        self.assertEqual(0.0, trader_stats.consistency_score(six))
+        self.assertGreater(trader_stats.consistency_score(seven), 0.0)
+
+    def test_flat_days_are_neither_green_nor_red(self):
+        metrics = self.period_metrics(activity.FLAT_AND_DIRECTIONAL_DAYS, [])
+        self.assertEqual(1, metrics["green_days"])
+        self.assertEqual(1, metrics["red_days"])
+        self.assertEqual(0.5, metrics["consistency_ratio"])
+
+    def test_partial_coverage_does_not_turn_30d_or_90d_into_all_time(self):
+        history_days = 20.0
+        self.assertGreaterEqual(history_days, 7)
+        self.assertLess(history_days, 30)
+        for window in ("30d", "90d"):
+            for stem in ("pnl", "winrate", "volume"):
+                metadata = trader_stats.SCREENER_METRIC_CONTRACT[f"{stem}_{window}"]
+                claims = " ".join(str(metadata[k]).lower()
+                                  for k in ("formula", "time_window", "label", "tooltip"))
+                self.assertEqual("partial", metadata["partial_behavior"]["status"])
+                self.assertNotIn("all-time", claims)
+                self.assertNotIn("all time", claims)
+                self.assertNotIn("lifetime", claims)
+
+    def test_30d_and_90d_boundaries_exclude_older_fetched_events(self):
+        trades = activity.OLDER_AND_BOUNDARY_TRADES
+        closings = trader_stats.realized_closings(
+            trades, positions=[], positions_truncated=True,
+        )
+
+        metrics_30d = self.period_metrics(closings, trades, days=30)
+        self.assertEqual(4.0, metrics_30d["pnl"])
+        self.assertEqual(1.0, metrics_30d["winrate"])
+        self.assertEqual(16.0, metrics_30d["volume"])
+
+        metrics_90d = self.period_metrics(closings, trades, days=90)
+        self.assertEqual(4.0, metrics_90d["pnl"])
+        self.assertEqual(0.75, metrics_90d["winrate"])
+        self.assertEqual(36.0, metrics_90d["volume"])
+
+
+class DeterministicRefreshFixtureTests(unittest.IsolatedAsyncioTestCase):
+    async def refresh_fields(self, *, official, trades, redeems=(), positions=(),
+                             trades_covered=True):
+        async def fetchone(sql, _params):
+            if "SELECT *" in sql:
+                return {"address": "0xfixture"}
+            return None
+
+        db = SimpleNamespace(fetchone=AsyncMock(side_effect=fetchone))
+        pm = SimpleNamespace(
+            get_positions=AsyncMock(return_value=list(positions)),
+            get_leaderboard_user=AsyncMock(return_value=official),
+        )
+        with (
+            patch.object(
+                trader_stats, "_fetch_activity_window",
+                new=AsyncMock(side_effect=[
+                    (list(trades), trades_covered), (list(redeems), True),
+                ]),
+            ),
+            patch.object(trader_stats.time, "time", return_value=activity.NOW_TS),
+            patch.object(trader_stats, "_upsert", new=AsyncMock()) as upsert,
+        ):
+            await trader_stats.refresh_trader_stats("0xfixture", db, pm)
+        return upsert.await_args.args[2]
+
+    async def test_official_leaderboard_pnl_wins_over_local_reconstruction(self):
+        fields = await self.refresh_fields(
+            official=activity.OFFICIAL_LEADERBOARD_PNL,
+            trades=activity.PARTIAL_SELL_TRADES,
+            positions=[activity.PARTIAL_SELL_REMAINDER],
+        )
+        self.assertEqual(activity.OFFICIAL_LEADERBOARD_PNL.pnl, fields["total_pnl"])
+        self.assertEqual(activity.OFFICIAL_LEADERBOARD_PNL.vol, fields["volume_usd"])
+
+    async def test_absent_official_pnl_uses_only_fetch_bounded_reconstruction(self):
+        trades = [
+            *activity.OLD_BUY_BASIS_OUTSIDE_FETCH,
+            *activity.PARTIAL_SELL_TRADES,
+            *activity.REDEEM_TRADES,
+        ]
+        fields = await self.refresh_fields(
+            official=activity.OFFICIAL_PNL_ABSENT, trades=trades,
+            redeems=activity.REDEEM_EVENTS,
+            positions=[activity.PARTIAL_SELL_REMAINDER],
+        )
+        self.assertEqual(7.8, fields["total_pnl"])
+        self.assertEqual(round(sum(t.usd_size for t in trades), 2), fields["volume_usd"])
+        self.assertNotEqual(activity.OFFICIAL_LEADERBOARD_PNL.pnl, fields["total_pnl"])
+
+    async def test_undated_resolved_holding_stays_in_fallback_but_out_of_windows(self):
+        fields = await self.refresh_fields(
+            official=activity.OFFICIAL_PNL_ABSENT,
+            trades=[],
+            positions=[activity.RESOLVED_HOLDING_WITHOUT_RESOLUTION_DATE],
+        )
+        self.assertEqual(12.0, fields["total_pnl"])
+        self.assertEqual(1.0, fields["win_rate"])
+        for window in ("7d", "30d", "90d"):
+            self.assertEqual(0.0, fields[f"pnl_{window}"])
+            self.assertIsNone(fields[f"winrate_{window}"])
+
+    async def test_history_days_exposes_page_budget_limited_30d_and_90d_coverage(self):
+        fields = await self.refresh_fields(
+            official=activity.OFFICIAL_PNL_ABSENT,
+            trades=activity.PARTIAL_30D_90D_TRADES,
+            trades_covered=False,
+        )
+        self.assertEqual(20.0, fields["history_days"])
+
+    async def test_fetched_aggregate_can_include_events_older_than_rolling_windows(self):
+        fields = await self.refresh_fields(
+            official=activity.OFFICIAL_PNL_ABSENT,
+            trades=activity.OLDER_AND_BOUNDARY_TRADES,
+        )
+        self.assertEqual(2.0, fields["total_pnl"])
+        self.assertEqual(0.6, fields["win_rate"])
+        self.assertEqual(50.0, fields["volume_usd"])
+        self.assertEqual(4.0, fields["pnl_30d"])
+        self.assertEqual(1.0, fields["winrate_30d"])
+        self.assertEqual(16.0, fields["volume_30d"])
+        self.assertEqual(4.0, fields["pnl_90d"])
+        self.assertEqual(0.75, fields["winrate_90d"])
+        self.assertEqual(36.0, fields["volume_90d"])
+
+
+class ScreenerMetricDocsTests(unittest.TestCase):
+    def test_undated_resolved_holding_is_aggregate_only(self):
+        docs = (Path(__file__).parents[1] / "docs/screener-metric-contract.md").read_text().lower()
+        self.assertIn("missing fetched trade timestamp", docs)
+        self.assertIn("remains undated", docs)
+        self.assertIn("excluded from daily and rolling windows", docs)
+        self.assertIn("aggregate observed/fallback pnl and win rate", docs)
 
 
 if __name__ == "__main__":
