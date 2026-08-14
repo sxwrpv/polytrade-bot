@@ -1,15 +1,7 @@
-import { useState } from 'react'
-import { api, haptic } from '../api'
-import Modal from './Modal'
-
 const short = (a) => (a ? `${a.slice(0, 6)}…${a.slice(-4)}` : '')
 const cents = (v) => (v == null ? '—' : `${(v * 100).toFixed(1)}¢`)
 
-export default function PositionCard({ p, closed, onClose }) {
-  const [confirm, setConfirm] = useState(false)
-  const [busy, setBusy] = useState(false)
-  const [msg, setMsg] = useState('')
-  const [closeSlippage, setCloseSlippage] = useState(2)
+export default function PositionCard({ p, closed, onRequestClose }) {
   const value = closed ? p.realized_pnl || 0 : p.unrealized_pnl
   const refPrice = closed ? p.exit_price : p.current_price
   const movePct = p.entry_price && refPrice != null
@@ -21,24 +13,6 @@ export default function PositionCard({ p, closed, onClose }) {
     || p.status === 'closing'
     || p.status === 'reconciliation_required'
 
-  async function doClose() {
-    setBusy(true)
-    setMsg('')
-    try {
-      const r = p.external
-        ? await api.closeExternal(p.token_id, closeSlippage)
-        : await api.closePosition(p.id, closeSlippage)
-      setMsg(r.ok ? 'CLOSED ✓' : r.reason || 'failed')
-      if (r.ok) {
-        haptic('success')
-        setTimeout(() => { setConfirm(false); onClose?.() }, 800)
-      }
-    } catch (e) {
-      setMsg(String(e.message || e))
-    } finally {
-      setBusy(false)
-    }
-  }
 
   return (
     <div className="card pos-card">
@@ -112,41 +86,10 @@ export default function PositionCard({ p, closed, onClose }) {
           <span className="badge pos">RESOLVED</span> winnings redeem automatically — nothing to sell
         </div>
       ) : (
-        <button className="btn btn-danger" style={{ marginTop: 8 }} onClick={() => setConfirm(true)}>
+        <button className="btn btn-danger" style={{ marginTop: 8 }} onClick={() => onRequestClose(p)}>
           CLOSE
         </button>
       ))}
-
-      {confirm && (
-        <Modal title="CONFIRM CLOSE" accent="red" onClose={() => setConfirm(false)}>
-          <p className="muted">
-            Sell {(p.shares || 0).toFixed(0)} shares at market
-            {p.current_price != null ? ` (~$${((p.shares || 0) * p.current_price).toFixed(2)} at ${cents(p.current_price)})` : ''}?
-          </p>
-          <label className="fld">
-            Acceptable slippage: <strong>{closeSlippage.toFixed(1)}%</strong>
-            <div className="slider-row">
-              <input
-                type="range"
-                min="0"
-                max="10"
-                step="0.5"
-                value={closeSlippage}
-                onChange={(e) => setCloseSlippage(Number(e.target.value))}
-                disabled={busy}
-                aria-label="Acceptable close slippage percentage"
-              />
-            </div>
-          </label>
-          <div className="muted" style={{ marginBottom: 10 }}>
-            The order will not fill below the selected price tolerance.
-          </div>
-          {msg && <div className="muted">{msg}</div>}
-          <button className="btn btn-danger" disabled={busy} onClick={doClose}>
-            {busy ? 'CLOSING…' : 'CONFIRM CLOSE'}
-          </button>
-        </Modal>
-      )}
     </div>
   )
 }

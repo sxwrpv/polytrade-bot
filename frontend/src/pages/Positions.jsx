@@ -1,7 +1,17 @@
-import { useEffect, useState, useCallback, useMemo } from 'react'
-import { api } from '../api'
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
+import { api, haptic } from '../api'
 import PositionCard from '../components/PositionCard'
 import ActivityFeed from '../components/ActivityFeed'
+import Modal from '../components/Modal'
+import {
+  CLOSE_POSITION_EVENT,
+  CLOSE_POSITION_STATE,
+  createCloseSubmissionGuard,
+  dismissClosePosition,
+  executeCloseSubmission,
+  reduceClosePosition,
+  requestClosePosition,
+} from '../closePositionState'
 
 const signed = (v) => `${v >= 0 ? '+' : '-'}$${Math.abs(v).toFixed(2)}`
 
@@ -32,6 +42,12 @@ export default function Positions() {
   const [tab, setTab] = useState('open')
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
+  const [closeTarget, setCloseTarget] = useState(null)
+  const [closeState, setCloseState] = useState(CLOSE_POSITION_STATE.IDLE)
+  const [closeSlippage, setCloseSlippage] = useState(2)
+  const [closeDetail, setCloseDetail] = useState('')
+  const closeStateRef = useRef(CLOSE_POSITION_STATE.IDLE)
+  const submissionGuard = useRef(createCloseSubmissionGuard())
 
   const load = useCallback(() => {
     if (tab === 'activity') return   // ActivityFeed fetches its own data
@@ -57,6 +73,63 @@ export default function Positions() {
   }, [tab, load])
 
   const cells = useMemo(() => summarize(rows, tab === 'closed'), [rows, tab])
+
+  const transitionClose = useCallback((event) => {
+    const next = reduceClosePosition(closeStateRef.current, event)
+    closeStateRef.current = next
+    setCloseState(next)
+    return next
+  }, [])
+
+  const handleRequestClose = useCallback((position) => {
+    const requested = requestClosePosition(closeStateRef.current, closeTarget, position)
+    if (requested.state === closeStateRef.current) return
+    closeStateRef.current = requested.state
+    setCloseTarget(requested.target)
+    setCloseDetail('')
+    setCloseSlippage(2)
+    setCloseState(requested.state)
+  }, [closeTarget])
+
+  const handleDismissClose = useCallback(() => {
+    const next = dismissClosePosition(closeStateRef.current, 'backdrop')
+    if (next === closeStateRef.current) return
+    closeStateRef.current = next
+    setCloseState(next)
+    setCloseTarget(null)
+    setCloseDetail('')
+  }, [])
+
+  const handleConfirmClose = useCallback(async () => {
+    const current = closeStateRef.current
+    let event
+    if (current === CLOSE_POSITION_STATE.CONFIRMING) {
+      event = CLOSE_POSITION_EVENT.CONFIRM
+    } else if (current === CLOSE_POSITION_STATE.REJECTED || current === CLOSE_POSITION_STATE.FAILED) {
+      event = CLOSE_POSITION_EVENT.RETRY
+    } else {
+      return
+    }
+
+    transitionClose(event)
+    setCloseDetail('')
+    const result = await executeCloseSubmission({
+      guard: submissionGuard.current,
+      target: closeTarget,
+      slippage: closeSlippage,
+      closeTracked: api.closePosition,
+      closeExternal: api.closeExternal,
+      haptic,
+      refresh: load,
+    })
+    if (!result.accepted) return
+    setCloseDetail(result.value.detail)
+    transitionClose(result.value.event)
+  }, [closeSlippage, closeTarget, load, transitionClose])
+
+  const canSubmitClose = closeState === CLOSE_POSITION_STATE.CONFIRMING
+    || closeState === CLOSE_POSITION_STATE.REJECTED
+    || closeState === CLOSE_POSITION_STATE.FAILED
 
   return (
     <div>
@@ -89,10 +162,53 @@ export default function Positions() {
             <div className="muted">no {tab} positions</div>
           ) : (
             rows.map((r) => (
-              <PositionCard key={r.id || r.token_id} p={r} closed={tab === 'closed'} onClose={load} />
+              <PositionCard
+                key={r.id || r.token_id}
+                p={r}
+                closed={tab === 'closed'}
+                onRequestClose={handleRequestClose}
+              />
             ))
           )}
         </>
+      )}
+
+      {closeTarget && closeState !== CLOSE_POSITION_STATE.IDLE && (
+        <Modal title="CONFIRM CLOSE" accent="red" onClose={handleDismissClose}>
+          <p className="muted">
+            Sell {(closeTarget.shares || 0).toFixed(0)} shares at market
+            {closeTarget.current_price != null
+              ? ` (~$${((closeTarget.shares || 0) * closeTarget.current_price).toFixed(2)} at ${(closeTarget.current_price * 100).toFixed(1)}¢)`
+              : ''}?
+          </p>
+          <label className="fld">
+            Acceptable slippage: <strong>{closeSlippage.toFixed(1)}%</strong>
+            <div className="slider-row">
+              <input
+                type="range"
+                min="0"
+                max="10"
+                step="0.5"
+                value={closeSlippage}
+                onChange={(e) => setCloseSlippage(Number(e.target.value))}
+                disabled={closeState === CLOSE_POSITION_STATE.SUBMITTING}
+                aria-label="Acceptable close slippage percentage"
+              />
+            </div>
+          </label>
+          <div className="muted" style={{ marginBottom: 10 }}>
+            The order will not fill below the selected price tolerance.
+          </div>
+          {closeDetail && <div className="muted">{closeDetail}</div>}
+          {canSubmitClose && (
+            <button className="btn btn-danger" onClick={handleConfirmClose}>
+              {closeState === CLOSE_POSITION_STATE.CONFIRMING ? 'CONFIRM CLOSE' : 'TRY CLOSE AGAIN'}
+            </button>
+          )}
+          {closeState === CLOSE_POSITION_STATE.SUBMITTING && (
+            <button className="btn btn-danger" disabled>CLOSING…</button>
+          )}
+        </Modal>
       )}
     </div>
   )

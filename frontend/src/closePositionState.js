@@ -90,3 +90,117 @@ export function dismissClosePosition(state, source) {
     ? reduceClosePosition(state, E.DISMISS)
     : state
 }
+
+function snapshotValue(value) {
+  if (Array.isArray(value)) return Object.freeze(value.map(snapshotValue))
+  if (value && typeof value === 'object') {
+    return Object.freeze(Object.fromEntries(
+      Object.entries(value).map(([key, child]) => [key, snapshotValue(child)]),
+    ))
+  }
+  return value
+}
+
+/**
+ * Capture the row shown in a confirmation. A later polling response can update
+ * or replace its source row without changing this operation's target.
+ */
+export function createCloseTarget(position) {
+  if (!position || typeof position !== 'object') {
+    throw new TypeError('A position is required to request close')
+  }
+  return snapshotValue(position)
+}
+
+/** Request a close only from idle; active operations retain their exact target. */
+export function requestClosePosition(state, currentTarget, position) {
+  const nextState = reduceClosePosition(state, E.REQUEST_CLOSE)
+  if (nextState === state) return { state, target: currentTarget }
+  return { state: nextState, target: createCloseTarget(position) }
+}
+
+/** A synchronous latch around an async operation, independent of React renders. */
+export function createCloseSubmissionGuard() {
+  let active = false
+  return Object.freeze({
+    async run(operation) {
+      if (active) return { accepted: false }
+      active = true
+      try {
+        return { accepted: true, value: await operation() }
+      } finally {
+        active = false
+      }
+    },
+  })
+}
+
+/**
+ * Execute one close attempt with injected side effects. API outcome
+ * classification is completed before any post-success UI work, so a verified
+ * server response can never be downgraded by haptic or refresh failures.
+ */
+export function executeCloseSubmission({
+  guard,
+  target,
+  slippage,
+  closeTracked,
+  closeExternal,
+  haptic,
+  refresh,
+}) {
+  return guard.run(async () => {
+    let response
+    try {
+      response = target.external
+        ? await closeExternal(target.token_id, slippage)
+        : await closeTracked(target.id, slippage)
+    } catch (error) {
+      // A transport exception can happen after the SELL reached the server.
+      // Never invite a duplicate submission when execution is ambiguous.
+      return {
+        event: E.UNCERTAIN_EXECUTION,
+        detail: 'Execution status unknown. The close is being reconciled; do not retry.',
+        error,
+      }
+    }
+
+    if (response?.ok === true) {
+      try {
+        await haptic('success')
+      } catch {
+        // Haptics are cosmetic and must not affect a verified financial result.
+      }
+
+      let refreshError
+      try {
+        await refresh()
+      } catch (error) {
+        refreshError = error
+      }
+
+      return {
+        event: E.VERIFIED_SUCCESS,
+        detail: refreshError
+          ? 'CLOSED ✓ Position refresh unavailable; reload to update the list.'
+          : 'CLOSED ✓',
+        response,
+        ...(refreshError ? { refreshError } : {}),
+      }
+    }
+
+    if (response?.ok === false && response.reconciliation_required === false) {
+      return {
+        event: E.EXCHANGE_REJECTED,
+        detail: response.reason || 'Close rejected before execution.',
+        response,
+      }
+    }
+
+    return {
+      event: E.UNCERTAIN_EXECUTION,
+      detail: 'Execution status unknown. The close is being reconciled; do not retry.',
+      response,
+    }
+  })
+}
