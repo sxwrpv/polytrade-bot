@@ -83,7 +83,7 @@ export default function PositionCard({ p, closed, onRequestClose }) {
         </div>
       ) : p.redeemable ? (
         <div className="muted" style={{ marginTop: 8 }}>
-          <span className="badge pos">RESOLVED</span> winnings redeem automatically — nothing to sell
+          <span className="badge pos">RESOLVED</span> winnings must be redeemed on polymarket.com — nothing to sell
         </div>
       ) : (
         <button className="btn btn-danger" style={{ marginTop: 8 }} onClick={() => onRequestClose(p)}>

@@ -91,5 +91,34 @@ test('Positions supplies a stable focus fallback and state-machine dismissal pol
   assert.match(source, /const pageContainerRef\s*=\s*useRef\(null\)/)
   assert.match(source, /ref=\{pageContainerRef\}[\s\S]*tabIndex=\{-1\}/)
   assert.match(source, /returnFocusRef=\{pageContainerRef\}/)
-  assert.match(source, /canClose=\{canDismissClosePosition\(closeState\)\}/)
+  assert.match(source, /canDismissClosePosition\([\s\S]*closeState,[\s\S]*closeTarget,[\s\S]*rows,[\s\S]*tab,[\s\S]*reconciliationRefreshOk/)
+  assert.match(source, /canClose=\{canDismissModal\}/)
+})
+
+test('Positions close handler permits retry only for explicit rejection', async () => {
+  const source = await readSource('../src/pages/Positions.jsx')
+  const handler = source.match(
+    /const handleConfirmClose\s*=\s*useCallback\(async\s*\(\)\s*=>\s*\{([\s\S]*?)\n\s*\},\s*\[closeSlippage/,
+  )?.[1]
+
+  assert.ok(handler, 'expected to find the handleConfirmClose callback body')
+  assert.match(
+    handler,
+    /if\s*\(current\s*===\s*CLOSE_POSITION_STATE\.CONFIRMING\)[\s\S]*else if\s*\(current\s*===\s*CLOSE_POSITION_STATE\.REJECTED\)[\s\S]*else\s*\{\s*return\s*\}/,
+  )
+  assert.doesNotMatch(handler, /CLOSE_POSITION_STATE\.FAILED/)
+  assert.match(
+    handler,
+    /executeFreshCloseAttempt\s*\(\s*\{[\s\S]*openPositions:\s*api\.openPositions[\s\S]*updateRows:[\s\S]*setRows\(freshRows\)[\s\S]*updateTarget:[\s\S]*setCloseTarget\(target\)/,
+  )
+  assert.doesNotMatch(handler, /executeCloseSubmission|executeFreshCloseRetry/)
+
+  const rejectionGate = handler.indexOf('current === CLOSE_POSITION_STATE.REJECTED')
+  const earlyReturn = handler.indexOf('return', rejectionGate)
+  for (const sellPath of ['transitionClose(event)', 'executeFreshCloseAttempt']) {
+    assert.ok(
+      earlyReturn < handler.indexOf(sellPath),
+      `FAILED/stale invocation must return before ${sellPath}`,
+    )
+  }
 })

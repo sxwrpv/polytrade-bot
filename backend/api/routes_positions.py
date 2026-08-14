@@ -192,8 +192,8 @@ async def close_external_position(body: CloseExternalBody, request: Request,
     if p is None or p.size <= 0.01:
         raise HTTPException(404, "wallet does not hold this token")
     if p.redeemable:
-        raise HTTPException(400, "market already resolved — winnings redeem automatically, "
-                                 "there is nothing to sell")
+        raise HTTPException(400, "market already resolved — winnings must be redeemed manually "
+                                 "on polymarket.com; there is nothing to sell")
     position_id = uuid.uuid4().hex
     ts = now_iso()
     # Serialize on the same user row as BUY reservation. The claim/position
@@ -262,7 +262,8 @@ async def close_external_position(body: CloseExternalBody, request: Request,
         await db.execute("DELETE FROM copy_positions WHERE id=? AND status='closing'",
                          (position_id,))
     return {"ok": result.ok, "reason": result.reason, "order_id": result.order_id,
-            "avg_price": result.avg_price, "reconciliation_required": result.submission_uncertain}
+            "position_id": position_id, "avg_price": result.avg_price,
+            "reconciliation_required": result.submission_uncertain}
 
 
 @router.post("/{position_id}/close")
@@ -329,5 +330,5 @@ async def close_position(position_id: str, request: Request, body: CloseBody | N
     elif not result.submission_uncertain:
         await db.try_transition(row["id"], "closing", "open")
     return {"ok": result.ok, "reason": result.reason, "order_id": result.order_id,
-            "avg_price": result.avg_price,
+            "position_id": row["id"], "avg_price": result.avg_price,
             "reconciliation_required": result.submission_uncertain}
