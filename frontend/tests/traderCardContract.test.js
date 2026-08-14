@@ -135,11 +135,8 @@ test('TraderCard primary surface stays focused and ANALYZE reveals evidence plus
   assert.match(source, /\{expanded \? 'HIDE ANALYSIS' : 'ANALYZE'\}/)
   assert.match(source, /useId\(\)\.replace\(\/\[\^a-zA-Z0-9_-\]\/g, ''\)/)
   assert.doesNotMatch(source, /analysisRegionId\s*=.*t\.address/)
-  assert.match(source, /\{expanded &&[\s\S]*id=\{analysisRegionId\}[\s\S]*role="region"[\s\S]*aria-label="Trader analysis"[\s\S]*<TraderProfile address=\{t\.address\}/)
+  assert.match(source, /\{expanded &&[\s\S]*id=\{analysisRegionId\}[\s\S]*role="region"[\s\S]*aria-label="Trader analysis"[\s\S]*<TraderAnalysis address=\{t\.address\} trader=\{t\} period=\{period\}/)
   assert.match(source, /\{expanded &&[\s\S]*>COPY SETTINGS</)
-  assert.match(source, /RECONSTRUCTED FROM FETCHED CLOSING EVENTS/)
-  assert.match(source, /TRADE, REDEEM, AND POSITIONS SOURCES CAN EACH BE PARTIAL/)
-  assert.match(source, /GROSS VOLUME USES FETCHED TRADE ROWS/)
 })
 
 test('mobile CSS stacks the card heading and permits the period label to wrap', async () => {

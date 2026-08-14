@@ -1,7 +1,7 @@
 import { useId, useState } from 'react'
 import { api, haptic } from '../api'
 import Modal from './Modal'
-import TraderProfile from './TraderProfile'
+import TraderAnalysis from './TraderAnalysis'
 import { discoveryMetrics, formatActivePositions, formatMoney } from './traderCardModel'
 
 const short = (address) => (address ? `${address.slice(0, 6)}…${address.slice(-4)}` : '—')
@@ -113,13 +113,7 @@ export default function TraderCard({ t, period = '30d', onFollowed, balance }) {
           role="region"
           aria-label="Trader analysis"
         >
-          <div className="tc-source-note muted small">
-            <strong>METRIC SOURCES</strong>
-            <span>PNL AND WIN RATE ARE RECONSTRUCTED FROM FETCHED CLOSING EVENTS.</span>
-            <span>TRADE, REDEEM, AND POSITIONS SOURCES CAN EACH BE PARTIAL.</span>
-            <span>GROSS VOLUME USES FETCHED TRADE ROWS.</span>
-          </div>
-          <TraderProfile address={t.address} />
+          <TraderAnalysis address={t.address} trader={t} period={period} />
           <button className="btn btn-ghost tc-copy-settings" onClick={() => setOpen(true)}>COPY SETTINGS</button>
         </div>
       )}
