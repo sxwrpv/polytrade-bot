@@ -6,6 +6,7 @@ import Modal from '../components/Modal'
 import {
   CLOSE_POSITION_EVENT,
   CLOSE_POSITION_STATE,
+  canDismissClosePosition,
   createCloseSubmissionGuard,
   dismissClosePosition,
   executeCloseSubmission,
@@ -48,6 +49,7 @@ export default function Positions() {
   const [closeDetail, setCloseDetail] = useState('')
   const closeStateRef = useRef(CLOSE_POSITION_STATE.IDLE)
   const submissionGuard = useRef(createCloseSubmissionGuard())
+  const pageContainerRef = useRef(null)
 
   const load = useCallback(() => {
     if (tab === 'activity') return   // ActivityFeed fetches its own data
@@ -132,7 +134,7 @@ export default function Positions() {
     || closeState === CLOSE_POSITION_STATE.FAILED
 
   return (
-    <div>
+    <div ref={pageContainerRef} tabIndex={-1} data-modal-focus-fallback>
       <div className="toggle-row">
         {TABS.map(([k, label]) => (
           <button key={k} className={`chip ${tab === k ? 'active' : ''}`} onClick={() => setTab(k)}>
@@ -174,7 +176,13 @@ export default function Positions() {
       )}
 
       {closeTarget && closeState !== CLOSE_POSITION_STATE.IDLE && (
-        <Modal title="CONFIRM CLOSE" accent="red" onClose={handleDismissClose}>
+        <Modal
+          title="CONFIRM CLOSE"
+          accent="red"
+          onClose={handleDismissClose}
+          canClose={canDismissClosePosition(closeState)}
+          returnFocusRef={pageContainerRef}
+        >
           <p className="muted">
             Sell {(closeTarget.shares || 0).toFixed(0)} shares at market
             {closeTarget.current_price != null
