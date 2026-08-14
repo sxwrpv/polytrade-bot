@@ -6,6 +6,7 @@ import os
 import tempfile
 import unittest
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -59,6 +60,29 @@ class PositionOriginTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(rows[0]["external"])
         self.assertEqual("bot_history", rows[0]["origin"])
         self.assertEqual("0xleader", rows[0]["trader_address"])
+
+
+class ClosedPositionHistoryRetentionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_closed_view_only_queries_the_most_recent_twelve_hours(self):
+        class DB:
+            async def fetchall(self, sql, params=()):
+                self.sql = sql
+                self.params = params
+                return []
+
+        db = DB()
+        pm = SimpleNamespace(get_positions=AsyncMock(return_value=[]))
+        before = datetime.now(timezone.utc)
+
+        rows = await closed_positions(user={"id": "user"}, db=db, pmc=pm)
+
+        after = datetime.now(timezone.utc)
+        self.assertEqual([], rows)
+        self.assertIn("p.closed_at >= ?", db.sql)
+        self.assertEqual("user", db.params[0])
+        cutoff = datetime.fromisoformat(db.params[1].replace("Z", "+00:00"))
+        self.assertGreaterEqual(cutoff, before - timedelta(hours=12, seconds=1))
+        self.assertLessEqual(cutoff, after - timedelta(hours=12) + timedelta(seconds=1))
 
 
 class CloseSlippageContractTests(unittest.IsolatedAsyncioTestCase):

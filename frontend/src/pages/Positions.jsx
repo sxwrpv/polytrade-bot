@@ -301,6 +301,18 @@ export default function Positions() {
               />
             ))
           )}
+          {tab === 'closed' && !loading && (
+            <div className="muted" style={{ marginTop: 18, textAlign: 'center' }}>
+              <div>Showing position history from the last 12 hours.</div>
+              <a
+                href="https://polymarket.com/portfolio"
+                target="_blank"
+                rel="noreferrer"
+              >
+                More position history on Polymarket
+              </a>
+            </div>
+          )}
         </>
       )}
 

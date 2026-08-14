@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import aiosqlite
 
@@ -32,6 +33,7 @@ async def _notify_position(request: Request, event: dict) -> None:
 # they were never copied from anyone, but the row keeps them in closed history
 # and in the per-wallet PnL breakdown (shown as MANUAL in the UI).
 MANUAL_TRADER = "manual"
+CLOSED_HISTORY_HOURS = 12
 
 
 @router.get("/open")
@@ -132,13 +134,15 @@ async def open_positions(user=Depends(get_current_user), db=Depends(get_db), pmc
 @router.get("/closed")
 async def closed_positions(user=Depends(get_current_user), db=Depends(get_db),
                            pmc=Depends(get_pm)):
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=CLOSED_HISTORY_HOURS)).isoformat()
     rows = await db.fetchall(
         "SELECT p.*, CASE WHEN "
         "(SELECT COUNT(e.pnl) FROM trade_events e WHERE e.position_id=p.id) > 0 THEN "
         "(SELECT COALESCE(SUM(e.pnl),0) FROM trade_events e WHERE e.position_id=p.id) "
         "ELSE p.realized_pnl END AS realized_pnl "
-        "FROM copy_positions p WHERE p.user_id = ? AND p.status IN ('closed','resolved') "
-        "ORDER BY p.closed_at DESC", (user["id"],))
+        "FROM copy_positions p WHERE p.user_id = ? AND p.closed_at >= ? "
+        "AND p.status IN ('closed','resolved') ORDER BY p.closed_at DESC",
+        (user["id"], cutoff))
     # Settled markets whose winnings were never redeemed still sit in the wallet
     # as `redeemable` tokens. The engine normally flips its own rows to
     # 'resolved', but a holding it never opened (or one whose follow was removed
