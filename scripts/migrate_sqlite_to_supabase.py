@@ -23,6 +23,9 @@ import sqlite3
 # IDENTITY column in Postgres, so it's excluded and re-generated on insert.
 _TABLES = [
     ("users", None),
+    ("user_consents", None),
+    ("funding_acknowledgements", None),
+    ("wallet_creation_claims", None),
     ("trader_cache", None),
     ("followed_traders", None),
     ("copy_positions", None),

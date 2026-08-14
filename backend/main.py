@@ -57,6 +57,9 @@ _DOCS_PAGES = {
     "deployment.md",
     "troubleshooting.md",
     "glossary.md",
+    "developers.md",
+    "operators.md",
+    "links.md",
 }
 _DOCS_SLUGS = {
     "overview",
@@ -275,18 +278,17 @@ async def api_documentation():
     ).replace(
         '<body>\n    <div id="swagger-ui">',
         '<body>\n'
-        '<div class="risk-banner"><span>Real-money copy trading</span><a href="/docs/risk-and-security">Read the risk disclosure <span aria-hidden="true">→</span></a></div>\n'
         '<header class="topbar api-topbar">\n'
         '  <a class="brand" href="/docs"><span class="brand-mark">P</span><span>PolyTrade</span><span class="brand-divider"></span><span class="brand-docs">API Reference</span></a>\n'
-        '  <div class="top-actions"><nav class="header-links" aria-label="Header links"><a href="/">Open app</a><a href="/docs">Documentation</a><a href="/api/openapi.json">OpenAPI JSON</a><a href="https://github.com/sxwrpv/polytrade-bot">GitHub</a></nav>'
+        '  <div class="top-actions"><nav class="header-links" aria-label="Header links"><a href="https://t.me/cpolytrade_bot">Open Telegram bot</a><a href="/docs/developers">Developers</a><a href="/api/openapi.json">OpenAPI JSON</a><a href="https://github.com/sxwrpv/polytrade-bot">GitHub</a></nav>'
         '  <button class="theme-toggle" id="api-theme-toggle" aria-label="Toggle color theme"><svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v2m0 14v2M3 12h2m14 0h2M5.64 5.64l1.42 1.42m9.88 9.88 1.42 1.42m0-12.72-1.42 1.42M7.06 16.94l-1.42 1.42M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0Z"/></svg><svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 15.5A8.5 8.5 0 0 1 8.5 4 8.5 8.5 0 1 0 20 15.5Z"/></svg></button></div>\n'
         '</header>\n'
         '<main class="api-reference">\n'
-        '  <section class="api-intro"><div class="api-eyebrow">Developers</div><h1>API Reference</h1><p>Explore PolyTrade’s live OpenAPI schema and test requests directly from your browser.</p><div class="api-quicklinks"><a href="/docs/api-reference">Read the integration guide</a><span>·</span><a href="/api/openapi.json">Download OpenAPI JSON</a></div></section>\n'
+        '  <section class="api-intro"><div class="api-eyebrow">Developers</div><h1>API Reference</h1><p>Explore PolyTrade’s live OpenAPI schema and test requests directly from your browser.</p><p class="api-risk-note">PolyTrade operates custodial wallets for real-money prediction-market trading. Integrations should treat wallet actions as financially consequential and preserve explicit user consent.</p><div class="api-quicklinks"><a href="/docs/api-reference">Read the integration guide</a><span>·</span><a href="/api/openapi.json">Download OpenAPI JSON</a></div></section>\n'
         '  <div id="swagger-ui">',
     ).replace(
         "</body>",
-        '<footer class="api-footer"><span>PolyTrade Documentation</span><span>Live schema · OpenAPI 3.1</span></footer></main>'
+        '<footer class="api-footer"><span><a href="/docs/developers">Developer documentation</a> · <a href="/docs/links">Official links</a></span><span>Live schema · OpenAPI 3.1</span></footer></main>'
         '<script src="/docs/assets/api-docs.js"></script></body>',
     )
     return HTMLResponse(html)

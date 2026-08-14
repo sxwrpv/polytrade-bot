@@ -12,15 +12,18 @@ const groups = [
     ['risk-and-security', 'Risk and Security', 'risk-and-security.md'],
   ]},
   { title: 'Developers', pages: [
+    ['developers', 'Developers Hub', 'developers.md'],
     ['api-reference', 'API Reference', 'api-reference.md'],
-    ['configuration', 'Configuration', 'configuration.md'],
   ]},
   { title: 'Operations', pages: [
+    ['operators', 'Operators Hub', 'operators.md'],
+    ['configuration', 'Configuration', 'configuration.md'],
     ['deployment', 'Deployment', 'deployment.md'],
     ['troubleshooting', 'Troubleshooting', 'troubleshooting.md'],
   ]},
   { title: 'Reference', pages: [
     ['glossary', 'Glossary', 'glossary.md'],
+    ['links', 'Official Links', 'links.md'],
   ]},
 ];
 

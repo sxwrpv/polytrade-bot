@@ -192,6 +192,144 @@ class Database:
             await self._conn.commit()
             return cur.rowcount
 
+    async def claim_wallet_creation(self, telegram_user_id: int, claim_token: str,
+                                    *, stale_before: str) -> bool:
+        """Acquire the durable pre-side-effect fence for one Telegram identity.
+
+        A fresh ``claimed`` row belongs to a live request. Only an aged claim
+        that never advanced to ``side_effect_started`` may be taken over. Every
+        later state is fail-closed and requires operator reconciliation.
+        """
+        now = now_iso()
+        async with self.transaction(write=True) as tx:
+            inserted = await tx.execute(
+                "INSERT INTO wallet_creation_claims(telegram_user_id,claim_token,state,"
+                "claimed_at,updated_at) VALUES(?,?,'claimed',?,?) "
+                "ON CONFLICT(telegram_user_id) DO NOTHING",
+                (telegram_user_id, claim_token, now, now),
+            )
+            if inserted == 1:
+                return True
+            recovered = await tx.execute(
+                "UPDATE wallet_creation_claims SET claim_token=?,claimed_at=?,updated_at=?,"
+                "last_error=NULL WHERE telegram_user_id=? AND state='claimed' "
+                "AND updated_at < ?",
+                (claim_token, now, now, telegram_user_id, stale_before),
+            )
+            return recovered == 1
+
+    async def acquire_wallet_creation_lease(
+            self, telegram_user_id: int, owner: str, *, stale_before: str,
+            lease_expires_at: str) -> dict | None:
+        """Acquire exclusive work ownership, including safe signer resumes.
+
+        ``claimed`` has no durable signer and is recoverable only when stale.
+        ``side_effect_started`` is recoverable only when its prior owner
+        explicitly released it after an SDK call returned a caught failure.
+        Expiry is informational: an owner may still have opaque, unfenceable
+        external work running. The durable signer is never replaced.
+        """
+        now = now_iso()
+        async with self.transaction(write=True) as tx:
+            inserted = await tx.execute(
+                "INSERT INTO wallet_creation_claims(telegram_user_id,claim_token,state,"
+                "claimed_at,updated_at,lease_owner,lease_expires_at) "
+                "VALUES(?,?,'claimed',?,?,?,?) ON CONFLICT(telegram_user_id) DO NOTHING",
+                (telegram_user_id, owner, now, now, owner, lease_expires_at),
+            )
+            if inserted != 1:
+                select_sql = "SELECT * FROM wallet_creation_claims WHERE telegram_user_id=?" + (
+                    " FOR UPDATE" if self.is_pg else "")
+                claim = await tx.fetchone(select_sql, (telegram_user_id,))
+                if not claim:
+                    return None
+                changed = 0
+                if claim["state"] == "claimed" and claim["updated_at"] < stale_before:
+                    changed = await tx.execute(
+                        "UPDATE wallet_creation_claims SET claim_token=?,claimed_at=?,updated_at=?,"
+                        "last_error=NULL,lease_owner=?,lease_expires_at=? "
+                        "WHERE telegram_user_id=? AND state='claimed' AND updated_at < ?",
+                        (owner, now, now, owner, lease_expires_at,
+                         telegram_user_id, stale_before),
+                    )
+                elif (claim["state"] == "side_effect_started" and
+                      claim.get("signer_address") and claim.get("private_key_enc") and
+                      not claim.get("lease_owner")):
+                    changed = await tx.execute(
+                        "UPDATE wallet_creation_claims SET lease_owner=?,lease_expires_at=?,"
+                        "updated_at=? WHERE telegram_user_id=? AND state='side_effect_started' "
+                        "AND lease_owner IS NULL",
+                        (owner, lease_expires_at, now, telegram_user_id),
+                    )
+                if changed != 1:
+                    return None
+            return await tx.fetchone(
+                "SELECT * FROM wallet_creation_claims WHERE telegram_user_id=? AND lease_owner=?",
+                (telegram_user_id, owner),
+            )
+
+    async def prepare_wallet_creation_signer(
+            self, telegram_user_id: int, owner: str, signer_address: str,
+            private_key_enc: str) -> dict | None:
+        """Persist the sole signer before any opaque SDK call is permitted."""
+        async with self.transaction(write=True) as tx:
+            changed = await tx.execute(
+                "UPDATE wallet_creation_claims SET state='side_effect_started',"
+                "signer_address=?,private_key_enc=?,updated_at=? "
+                "WHERE telegram_user_id=? AND state='claimed' AND lease_owner=? "
+                "AND signer_address IS NULL AND private_key_enc IS NULL",
+                (signer_address, private_key_enc, now_iso(), telegram_user_id, owner),
+            )
+            if changed != 1:
+                return None
+            return await tx.fetchone(
+                "SELECT * FROM wallet_creation_claims WHERE telegram_user_id=? AND lease_owner=?",
+                (telegram_user_id, owner),
+            )
+
+    async def release_wallet_creation_after_sdk_failure(
+            self, telegram_user_id: int, owner: str) -> bool:
+        """Explicitly permit exact-signer resume after a caught SDK failure."""
+        changed = await self.execute(
+            "UPDATE wallet_creation_claims SET lease_owner=NULL,lease_expires_at=NULL,updated_at=? "
+            "WHERE telegram_user_id=? AND lease_owner=? AND state='side_effect_started'",
+            (now_iso(), telegram_user_id, owner),
+        )
+        return changed == 1
+
+    async def abandon_wallet_preparation(self, telegram_user_id: int, owner: str) -> bool:
+        """Abandon pre-SDK preparation without making a durable signer resumable.
+
+        The signer-persist UPDATE may have committed even if its acknowledgement
+        was lost. Inspect and mutate in one transaction: delete only a still-
+        ``claimed`` row. A prepared row retains its owner because unknown state
+        requires operator reconciliation.
+        """
+        async with self.transaction(write=True) as tx:
+            select_sql = "SELECT state FROM wallet_creation_claims WHERE telegram_user_id=?" + (
+                " FOR UPDATE" if self.is_pg else "")
+            claim = await tx.fetchone(select_sql, (telegram_user_id,))
+            if not claim:
+                return False
+            if claim["state"] != "claimed":
+                return False
+            changed = await tx.execute(
+                "DELETE FROM wallet_creation_claims WHERE telegram_user_id=? "
+                "AND lease_owner=? AND state='claimed'",
+                (telegram_user_id, owner),
+            )
+            return changed == 1
+
+    async def record_wallet_creation_error(self, telegram_user_id: int,
+                                           claim_token: str, error: str) -> bool:
+        """Annotate a retained post-boundary fence with non-secret diagnostics."""
+        changed = await self.execute(
+            "UPDATE wallet_creation_claims SET last_error=?,updated_at=? "
+            "WHERE telegram_user_id=? AND lease_owner=? AND state='side_effect_started'",
+            (error[:500], now_iso(), telegram_user_id, claim_token),
+        )
+        return changed == 1
+
     async def claim_managed_sell(self, user_id: str, token_id: str,
                                  position_id: str) -> bool:
         """Serialize a SELL claim with BUY reservations on the per-user DB lock.

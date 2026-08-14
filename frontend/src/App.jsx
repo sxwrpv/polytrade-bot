@@ -1,27 +1,20 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { api, clearWallet, getSession, saveSession } from './api'
-import { bootstrapSession } from './authBootstrap'
+import { bootstrapLaunch } from './authBootstrap'
+import PublicHome from './pages/PublicHome'
 import Onboarding from './pages/Onboarding'
+import LegacyLink from './pages/LegacyLink'
 import Home from './pages/Home'
 import Positions from './pages/Positions'
 import User from './pages/User'
 
-const TABS = [
-  ['home', 'HOME'],
-  ['positions', 'POSITIONS'],
-  ['user', 'USER'],
-]
-
+const TABS = [['home', 'HOME'], ['positions', 'POSITIONS'], ['user', 'USER']]
 const tg = window.Telegram?.WebApp
 
 export default function App() {
-  const [session, setSession] = useState(() => getSession())
-  // Always launch on HOME — don't restore whatever tab the hash held from a
-  // previous session (owner request). Hash still tracks tab within a session.
+  const [launch, setLaunch] = useState({ mode: 'loading', session: getSession() })
   const [tab, setTab] = useState('home')
-  // A cached address is not authentication. Validate its HttpOnly cookie before
-  // rendering account pages; if it is stale, re-auth from Telegram initData.
-  const [authChecking, setAuthChecking] = useState(Boolean(getSession() || tg?.initData))
+  const [attempt, setAttempt] = useState(0)
 
   useEffect(() => {
     if (!tg) return
@@ -30,58 +23,75 @@ export default function App() {
     try {
       tg.setHeaderColor('#eef2ef')
       tg.setBackgroundColor('#eef2ef')
-    } catch {
-      /* older Telegram clients */
-    }
+    } catch { /* older Telegram clients */ }
   }, [])
 
   useEffect(() => {
-    if (!getSession() && !tg?.initData) return
-    bootstrapSession({
+    let current = true
+    bootstrapLaunch({
       cachedSession: getSession(),
       initData: tg?.initData || '',
       api,
       saveSession,
       clearSession: clearWallet,
-    })
-      .then(setSession)
-      .finally(() => setAuthChecking(false))
-  }, [])
+    }).then((result) => { if (current) setLaunch(result) })
+    return () => { current = false }
+  }, [attempt])
 
   useEffect(() => {
-    window.location.hash = tab
-  }, [tab])
+    if (launch.mode === 'authenticated') window.location.hash = tab
+  }, [tab, launch.mode])
 
-  if (authChecking) {
+  const finishOnboarding = useCallback((address) => {
+    setLaunch({ mode: 'authenticated', session: { address } })
+    setTab('home')
+  }, [])
+
+  if (launch.mode === 'loading') return <LaunchLoading />
+  if (launch.mode === 'public') return <PublicHome />
+  if (launch.mode === 'telegram-error') {
     return (
-      <div className="onboard">
-        <div className="logo">&gt; POLYMARKET COPYBOT</div>
-        <div className="muted">signing in with telegram…</div>
+      <div className="onboard launch-state card">
+        <div className="logo"><span>P</span> PolyTrade</div>
+        <div className="section-header">TELEGRAM SIGN-IN</div>
+        <h1>We couldn’t verify this launch.</h1>
+        <p className="muted">{launch.message} Return to @cpolytrade_bot and open the app again, or retry below.</p>
+        <button className="btn" onClick={() => { setLaunch({ mode: 'loading', session: null }); setAttempt((n) => n + 1) }}>RETRY TELEGRAM SIGN-IN</button>
+        <a className="btn btn-ghost center-link" href="https://t.me/cpolytrade_bot">RETURN TO BOT</a>
       </div>
     )
   }
-
-  if (!session) return <Onboarding onDone={() => setSession(getSession())} />
+  if (launch.mode === 'session-error') {
+    return (
+      <div className="onboard launch-state card" role="alert">
+        <div className="logo"><span>P</span> PolyTrade</div>
+        <div className="section-header">SESSION CHECK</div>
+        <h1>We couldn’t verify your session.</h1>
+        <p className="muted">{launch.message}</p>
+        <button className="btn" onClick={() => { setLaunch({ mode: 'loading', session: launch.session }); setAttempt((n) => n + 1) }}>RETRY SESSION CHECK</button>
+      </div>
+    )
+  }
+  if (launch.mode === 'telegram-onboarding') return <Onboarding onDone={finishOnboarding} />
+  if (launch.mode === 'legacy-link') return (
+    <LegacyLink initData={launch.initData} address={launch.session.address} onDone={finishOnboarding} />
+  )
 
   return (
     <div className="app">
-      <header className="app-header">&gt; POLYMARKET COPYBOT</header>
+      <header className="app-header"><span className="brand-mark mini">P</span> POLYTRADE</header>
       <div className="content">
         {tab === 'home' && <Home />}
         {tab === 'positions' && <Positions />}
-        {tab === 'user' && <User onLogout={() => setSession(null)} />}
+        {tab === 'user' && <User onLogout={() => setLaunch({ mode: 'public', session: null })} />}
       </div>
-      <nav className="tab-bar">
-        {TABS.map(([k, label]) => (
-          <button
-            key={k}
-            className={`tab-btn ${tab === k ? 'active' : ''}`}
-            onClick={() => setTab(k)}
-          >
-            {label}
-          </button>
-        ))}
+      <nav className="tab-bar" aria-label="Account navigation">
+        {TABS.map(([key, label]) => <button key={key} className={`tab-btn ${tab === key ? 'active' : ''}`} aria-current={tab === key ? 'page' : undefined} onClick={() => setTab(key)}>{label}</button>)}
       </nav>
     </div>
   )
+}
+
+function LaunchLoading() {
+  return <div className="onboard launch-loading" role="status" aria-live="polite"><div className="logo"><span>P</span> PolyTrade</div><div className="muted">Checking your session…</div></div>
 }

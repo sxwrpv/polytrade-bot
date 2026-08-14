@@ -6,7 +6,8 @@ import PnLChart from '../components/PnLChart'
 import DotStrip from '../components/DotStrip'
 import Modal from '../components/Modal'
 import Folder from '../components/Folder'
-import DepositAddresses from '../components/DepositAddresses'
+import { FundingAccess } from '../components/DepositAddresses'
+import { performLogout } from '../authBootstrap'
 
 export default function User({ onLogout }) {
   const [me, setMe] = useState(null)
@@ -19,6 +20,8 @@ export default function User({ onLogout }) {
   const [exp, setExp] = useState(false)
   const [key, setKey] = useState('')
   const [expErr, setExpErr] = useState('')
+  const [logoutErr, setLogoutErr] = useState('')
+  const [loggingOut, setLoggingOut] = useState(false)
   const addr = getWallet()
 
   useEffect(() => {
@@ -59,6 +62,18 @@ export default function User({ onLogout }) {
       setKey(r.private_key)
     } catch (e) {
       setExpErr(String(e.message || e))
+    }
+  }
+
+  async function logOut() {
+    setLoggingOut(true)
+    setLogoutErr('')
+    try {
+      await performLogout({ api, clearSession: clearWallet, onLogout })
+    } catch {
+      setLogoutErr('Could not log out. Your session is still active; please retry.')
+    } finally {
+      setLoggingOut(false)
     }
   }
 
@@ -107,7 +122,7 @@ export default function User({ onLogout }) {
       </Folder>
 
       <Folder id="user-fund" title="FUND WALLET">
-        <DepositAddresses gasless={me?.gasless} />
+        <FundingAccess gasless={me?.gasless} />
       </Folder>
 
       <Folder id="user-performance" title="PERFORMANCE" open>
@@ -178,8 +193,10 @@ export default function User({ onLogout }) {
         </div>
       </Folder>
 
-      <button className="btn" style={{ marginTop: 16 }} onClick={async () => { await api.logout().catch(() => {}); clearWallet(); onLogout?.() }}>
-        LOG OUT
+      <p className="muted logout-note">Logging out ends this session. Reopening PolyTrade from Telegram signs you in automatically.</p>
+      {logoutErr && <div className="warn-box" role="alert">{logoutErr}</div>}
+      <button className="btn" style={{ marginTop: 16 }} disabled={loggingOut} onClick={logOut}>
+        {loggingOut ? 'LOGGING OUT…' : 'LOG OUT'}
       </button>
 
       {exp && (

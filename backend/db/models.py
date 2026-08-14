@@ -36,6 +36,36 @@ CREATE TABLE IF NOT EXISTS users (
     created_at              TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS user_consents (
+    user_id          TEXT NOT NULL REFERENCES users(id),
+    terms_version    TEXT NOT NULL,
+    telegram_user_id INTEGER NOT NULL,
+    accepted_at      TEXT NOT NULL,
+    PRIMARY KEY(user_id, terms_version)
+);
+
+-- Funding terms are distinct from wallet-creation consent and gate address disclosure.
+CREATE TABLE IF NOT EXISTS funding_acknowledgements (
+    user_id     TEXT NOT NULL REFERENCES users(id),
+    version     TEXT NOT NULL,
+    accepted_at TEXT NOT NULL,
+    PRIMARY KEY(user_id, version)
+);
+
+-- Identity-scoped fence acquired before any signer or relayer work.
+CREATE TABLE IF NOT EXISTS wallet_creation_claims (
+    telegram_user_id INTEGER PRIMARY KEY,
+    claim_token      TEXT NOT NULL,
+    state            TEXT NOT NULL CHECK(state IN ('claimed','side_effect_started','complete')),
+    claimed_at       TEXT NOT NULL,
+    updated_at       TEXT NOT NULL,
+    last_error       TEXT,
+    signer_address   TEXT,
+    private_key_enc  TEXT,
+    lease_owner      TEXT,
+    lease_expires_at TEXT
+);
+
 CREATE TABLE IF NOT EXISTS followed_traders (
     id               TEXT PRIMARY KEY,
     user_id          TEXT NOT NULL REFERENCES users(id),
@@ -196,7 +226,9 @@ CREATE INDEX IF NOT EXISTS idx_trader_cache_consistency_ratio_30d ON trader_cach
 CREATE INDEX IF NOT EXISTS idx_trader_cache_fill_exit_ratio_30d ON trader_cache(fill_exit_ratio_30d);
 """
 
-TABLES = ("users", "followed_traders", "copy_positions", "copy_open_claims", "trade_events", "trader_cache")
+TABLES = ("users", "user_consents", "funding_acknowledgements",
+          "wallet_creation_claims", "followed_traders", "copy_positions",
+          "copy_open_claims", "trade_events", "trader_cache")
 
 # Idempotent ALTERs for DBs created before a column existed (CREATE TABLE IF NOT
 # EXISTS won't add columns to an existing table). Applied at startup; "duplicate
@@ -296,6 +328,13 @@ MIGRATIONS = (
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_active_position_per_token "
     "ON copy_positions(user_id,token_id) WHERE status IN ('open','closing')",
     "ALTER TABLE copy_positions ADD COLUMN closing_at TEXT",
+    # Resumable wallet identity. The encrypted signer key is retained only while
+    # a creation claim is incomplete; lease columns serialize opaque SDK work
+    # across processes/connections.
+    "ALTER TABLE wallet_creation_claims ADD COLUMN signer_address TEXT",
+    "ALTER TABLE wallet_creation_claims ADD COLUMN private_key_enc TEXT",
+    "ALTER TABLE wallet_creation_claims ADD COLUMN lease_owner TEXT",
+    "ALTER TABLE wallet_creation_claims ADD COLUMN lease_expires_at TEXT",
 )
 
 
@@ -333,6 +372,38 @@ CREATE TABLE IF NOT EXISTS users (
     daily_loss_limit_usd     DOUBLE PRECISION,
     created_at               TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS user_consents (
+    user_id          TEXT NOT NULL REFERENCES users(id),
+    terms_version    TEXT NOT NULL,
+    telegram_user_id BIGINT NOT NULL,
+    accepted_at      TEXT NOT NULL,
+    PRIMARY KEY(user_id, terms_version)
+);
+
+CREATE TABLE IF NOT EXISTS funding_acknowledgements (
+    user_id     TEXT NOT NULL REFERENCES users(id),
+    version     TEXT NOT NULL,
+    accepted_at TEXT NOT NULL,
+    PRIMARY KEY(user_id, version)
+);
+
+CREATE TABLE IF NOT EXISTS wallet_creation_claims (
+    telegram_user_id BIGINT PRIMARY KEY,
+    claim_token      TEXT NOT NULL,
+    state            TEXT NOT NULL CHECK(state IN ('claimed','side_effect_started','complete')),
+    claimed_at       TEXT NOT NULL,
+    updated_at       TEXT NOT NULL,
+    last_error       TEXT,
+    signer_address   TEXT,
+    private_key_enc  TEXT,
+    lease_owner      TEXT,
+    lease_expires_at TEXT
+);
+ALTER TABLE wallet_creation_claims ADD COLUMN IF NOT EXISTS signer_address TEXT;
+ALTER TABLE wallet_creation_claims ADD COLUMN IF NOT EXISTS private_key_enc TEXT;
+ALTER TABLE wallet_creation_claims ADD COLUMN IF NOT EXISTS lease_owner TEXT;
+ALTER TABLE wallet_creation_claims ADD COLUMN IF NOT EXISTS lease_expires_at TEXT;
 
 CREATE TABLE IF NOT EXISTS followed_traders (
     id                     TEXT PRIMARY KEY,
@@ -508,6 +579,9 @@ ALTER TABLE copy_open_claims ALTER COLUMN updated_at SET NOT NULL;
 -- deny policies live in supabase/migrations/0002_rls_lockdown.sql (they name
 -- Supabase-only roles, so they're kept out of this boot-time script).
 ALTER TABLE users            ENABLE ROW LEVEL SECURITY;
+ALTER TABLE user_consents    ENABLE ROW LEVEL SECURITY;
+ALTER TABLE funding_acknowledgements ENABLE ROW LEVEL SECURITY;
+ALTER TABLE wallet_creation_claims ENABLE ROW LEVEL SECURITY;
 ALTER TABLE followed_traders ENABLE ROW LEVEL SECURITY;
 ALTER TABLE copy_positions   ENABLE ROW LEVEL SECURITY;
 ALTER TABLE copy_open_claims ENABLE ROW LEVEL SECURITY;

@@ -12,6 +12,7 @@
 --                               "RLS enabled, no policy" notice
 
 ALTER TABLE public.users            ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.user_consents    ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.followed_traders ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.copy_positions   ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.trade_events     ENABLE ROW LEVEL SECURITY;
@@ -22,6 +23,7 @@ REVOKE ALL ON ALL TABLES IN SCHEMA public FROM anon, authenticated;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM anon, authenticated;
 
 CREATE POLICY no_api_access ON public.users            FOR ALL TO anon, authenticated USING (false) WITH CHECK (false);
+CREATE POLICY no_api_access ON public.user_consents    FOR ALL TO anon, authenticated USING (false) WITH CHECK (false);
 CREATE POLICY no_api_access ON public.followed_traders FOR ALL TO anon, authenticated USING (false) WITH CHECK (false);
 CREATE POLICY no_api_access ON public.copy_positions   FOR ALL TO anon, authenticated USING (false) WITH CHECK (false);
 CREATE POLICY no_api_access ON public.trade_events     FOR ALL TO anon, authenticated USING (false) WITH CHECK (false);

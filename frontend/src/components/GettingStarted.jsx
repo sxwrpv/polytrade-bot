@@ -8,9 +8,9 @@ export default function GettingStarted({ balance, followingCount }) {
   if (funded && copying) return null
 
   const steps = [
-    ['1. FUND WALLET', funded, 'USER tab > FUND WALLET — send USDC/USDT from any chain'],
+    ['1. FUND WALLET', funded, 'USER tab > FUND WALLET — choose a listed network and supported asset'],
     ['2. COPY A WALLET', copying, 'pick a trader below and hit COPY TRADER'],
-    ['3. BOT TRADES FOR YOU', false, 'the engine mirrors every trade they make, 24/7'],
+    ['3. MONITOR ACTIVITY', false, 'eligible trades are attempted within your limits; timing and execution can differ'],
   ]
 
   return (
@@ -23,6 +23,7 @@ export default function GettingStarted({ balance, followingCount }) {
           <span className="muted small">{done ? '' : hint}</span>
         </div>
       ))}
+      {!funded && <p className="muted small funding-note">No in-app withdrawals or automatic redemption. Moving funds may require external tools and network fees.</p>}
     </div>
   )
 }

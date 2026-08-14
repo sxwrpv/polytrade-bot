@@ -39,11 +39,24 @@ Validates Telegram `initData`, finds the linked user, and issues a fresh session
 
 ### `POST /api/auth/logout`
 
-Clears the client cookie. Current behavior does not immediately revoke the persisted server session.
+Revokes the exact persisted session identified by the cookie hash, then clears the cookie. A failed response must be treated as still logged in and retried.
 
 ### `POST /api/user/create-wallet`
 
-Creates a signer/wallet, optionally links valid Telegram data, and issues a session. Rate limiting is process-local and resets on restart.
+Creates a signer/wallet and issues a session. New wallet creation is Telegram-only: the request must carry fresh, valid signed `init_data`, `terms_accepted: true`, and the exact current `terms_version` (`2026-08-14`). Missing proof, an unconfigured Telegram token, invalid/expired proof, or stale/missing consent is rejected before signer generation. The accepted version, Telegram identity, and timestamp are persisted with the new user in one transaction. An already-linked Telegram user receives the existing wallet rather than a duplicate.
+
+Request shape:
+
+```json
+{
+  "init_data": "<fresh Telegram Mini App initData>",
+  "terms_accepted": true,
+  "terms_version": "2026-08-14",
+  "display_name": null
+}
+```
+
+Rate limiting is process-local and resets on restart. Never submit wallet creation from a public browser form or fabricate Telegram proof.
 
 ## User routes
 

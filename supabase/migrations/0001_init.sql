@@ -21,6 +21,14 @@ CREATE TABLE IF NOT EXISTS users (
     created_at               TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS user_consents (
+    user_id          TEXT NOT NULL REFERENCES users(id),
+    terms_version    TEXT NOT NULL,
+    telegram_user_id BIGINT NOT NULL,
+    accepted_at      TEXT NOT NULL,
+    PRIMARY KEY(user_id, terms_version)
+);
+
 CREATE TABLE IF NOT EXISTS followed_traders (
     id                     TEXT PRIMARY KEY,
     user_id                TEXT NOT NULL REFERENCES users(id),

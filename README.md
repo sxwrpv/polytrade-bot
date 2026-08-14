@@ -1,20 +1,23 @@
 # PolyTrade
 
-Copy real Polymarket positions from wallets you choose, with your own allocation and risk limits.
+Copy real Polymarket positions from wallets you choose, with your own allocation and risk limits. The supported consumer experience starts in Telegram.
 
-[Open PolyTrade](https://polytradebot.live) · [Documentation](https://polytradebot.live/docs) · [API reference](https://polytradebot.live/docs/api-reference) · [Risk disclosure](https://polytradebot.live/docs/risk-and-security)
+**[Open Telegram bot](https://t.me/cpolytrade_bot)** · [Product homepage](https://polytradebot.live/) · [Help Center](https://polytradebot.live/docs) · [Official links](https://polytradebot.live/docs/links)
 
-> [!WARNING]
-> PolyTrade is custodial, executes real orders, and can lose all funds deposited to it. Copying a profitable wallet does not reproduce that wallet's returns. Delay, liquidity, price movement, market resolution, infrastructure failure, and custody risk all matter.
+## Before you fund
+
+PolyTrade is custodial, executes real orders, and can lose all funds deposited to it. Copying a profitable wallet does not reproduce that wallet's returns. Delay, liquidity, price movement, market resolution, infrastructure failure, and custody risk all matter.
 
 ## Start here
 
-- **Use the app:** [Create and fund a wallet](docs/getting-started.md)
-- **Understand execution:** [How copy trading works](docs/copy-trading.md)
-- **Configure limits:** [Risk and security](docs/risk-and-security.md)
-- **Run the service:** [Deployment guide](docs/deployment.md)
-- **Integrate with the backend:** [API reference](docs/api-reference.md)
-- **Resolve a problem:** [Troubleshooting](docs/troubleshooting.md)
+- **Consumers:** [Open `@cpolytrade_bot`](https://t.me/cpolytrade_bot), then follow the [bot-first Getting Started guide](docs/getting-started.md).
+- **Understand execution:** [How copy trading works](docs/copy-trading.md).
+- **Review material facts:** [Risk and Security](docs/risk-and-security.md) and [Wallet and Funding](docs/wallet-and-funding.md).
+- **Developers:** [Developers hub](docs/developers.md).
+- **Operators:** [Operators hub](docs/operators.md).
+- **Verify destinations:** [Official Links](docs/links.md).
+
+The website is the **Product homepage**, not the recommended wallet-creation path. Consumer wallet setup and recovery are tied to verified Telegram identity.
 
 ## What PolyTrade does
 
@@ -22,7 +25,7 @@ PolyTrade watches selected Polymarket wallets, detects changes in their position
 
 The platform includes:
 
-- a React web app and Telegram Mini App;
+- a React product homepage and Telegram Mini App;
 - a FastAPI backend;
 - a durable copy engine with duplicate-execution fences and reconciliation;
 - per-trader and account-level risk controls;
@@ -35,6 +38,7 @@ The platform includes:
 - It does not guarantee that every source trade will be copied.
 - It does not guarantee the same entry price, size, timing, or return as the source wallet.
 - Pausing or unfollowing does not liquidate existing positions.
+- It has no in-app withdrawal workflow.
 - Resolved winnings are not automatically redeemed by PolyTrade.
 - The public health endpoint is not proof that the copy engine or upstream services are healthy.
 
@@ -60,7 +64,7 @@ The 30-second full-position reconciliation path remains the correctness layer ev
 
 ```text
 backend/
-  main.py              FastAPI app and background task lifecycle
+  main.py              FastAPI app, documentation routes, and task lifecycle
   api/                 auth, user, trader and position routes
   core/                detection, execution, copy engine, wallet and PnL logic
   db/                  SQLite/Postgres access and schema
@@ -70,7 +74,7 @@ frontend/
 supabase/migrations/    Postgres schema and security migrations
 deploy/macmini/         legacy local deployment tooling
 tests/                  backend, safety and deployment contracts
-docs/                   user, API and operator documentation
+docs/                   consumer help, developer, and operator documentation
 compose.yaml            production service topology
 Caddyfile               HTTPS reverse proxy and security headers
 ```
@@ -96,13 +100,13 @@ cd ..
 uvicorn backend.main:app --host 127.0.0.1 --port 8080
 ```
 
-Before creating a wallet, configure a strong `ENCRYPTION_SECRET`. Builder credentials are required for the intended gasless wallet path. See [Configuration](docs/configuration.md).
+Before any wallet test, configure a strong `ENCRYPTION_SECRET`. Builder credentials are required for the intended gasless wallet path, and a Telegram bot token is required for supported consumer onboarding. See [Configuration](docs/configuration.md).
 
 ## Tests
 
 ```bash
 source .venv/bin/activate
-python -m pytest -q
+PYTHONPATH=. python -m pytest -q
 
 cd frontend
 npm run build
@@ -110,19 +114,21 @@ npm run build
 
 ## Documentation
 
-The documentation is arranged like a product guide rather than a build log:
-
-1. [Getting Started](docs/getting-started.md)
-2. [Core Concepts](docs/core-concepts.md)
-3. [Copy Trading](docs/copy-trading.md)
-4. [Wallet and Funding](docs/wallet-and-funding.md)
-5. [Risk and Security](docs/risk-and-security.md)
-6. [API Reference](docs/api-reference.md)
-7. [Configuration](docs/configuration.md)
-8. [Deployment](docs/deployment.md)
-9. [Troubleshooting](docs/troubleshooting.md)
-10. [Glossary](docs/glossary.md)
+- [Consumer Help Center](docs/README.md)
+- [Getting Started](docs/getting-started.md)
+- [Core Concepts](docs/core-concepts.md)
+- [Copy Trading](docs/copy-trading.md)
+- [Wallet and Funding](docs/wallet-and-funding.md)
+- [Risk and Security](docs/risk-and-security.md)
+- [Developers hub](docs/developers.md)
+- [API Reference](docs/api-reference.md)
+- [Operators hub](docs/operators.md)
+- [Configuration](docs/configuration.md)
+- [Deployment](docs/deployment.md)
+- [Troubleshooting](docs/troubleshooting.md)
+- [Glossary](docs/glossary.md)
+- [Official Links](docs/links.md)
 
 ## License and responsibility
 
-No license is granted unless a license file says otherwise. Operators are responsible for access controls, secrets, legal eligibility, backups, monitoring, incident response, and all real-money trading consequences.
+No license is granted unless a license file says otherwise. Do not infer an open-source license from public source visibility. Operators are responsible for access controls, secrets, legal eligibility, backups, monitoring, incident response, and all real-money trading consequences.

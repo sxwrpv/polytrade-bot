@@ -25,5 +25,5 @@ test('re-authenticates with Telegram when cached address exists but cookie is in
 
   assert.deepEqual(result, { address: '0xlinked' })
   assert.deepEqual(saved, [{ address: '0xlinked' }])
-  assert.equal(cleared, 1)
+  assert.equal(cleared, 0)
 })

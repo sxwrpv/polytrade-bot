@@ -6,6 +6,8 @@
 // token was removed. Only the public wallet address is cached locally, purely
 // so the UI can render before /me returns; it grants nothing on its own.
 const KEY = 'session' // JSON {address} — public data only, never a secret
+export const CURRENT_TERMS_VERSION = '2026-08-14'
+export const CURRENT_FUNDING_ACK_VERSION = '2026-08-14'
 
 function load() {
   try {
@@ -48,6 +50,8 @@ export const api = {
   logout: () => req('/auth/logout', { method: 'POST' }),
   telegramAuth: (initData) =>
     req('/auth/telegram', { method: 'POST', body: JSON.stringify({ init_data: initData }) }),
+  linkTelegram: (initData) =>
+    req('/auth/link-telegram', { method: 'POST', body: JSON.stringify({ init_data: initData }) }),
   // user
   createWallet: (body) => req('/user/create-wallet', { method: 'POST', body: JSON.stringify(body) }),
   me: (balance = false) => req(`/user/me${balance ? '?balance=true' : ''}`),
@@ -57,6 +61,9 @@ export const api = {
   getSettings: () => req('/user/settings'),
   activity: (limit = 30) => req(`/user/activity?limit=${limit}`),
   depositAddress: () => req('/user/deposit-address'),
+  acknowledgeFunding: (body) => req('/user/funding-acknowledgement', {
+    method: 'POST', body: JSON.stringify(body),
+  }),
   settings: (body) => req('/user/settings', { method: 'POST', body: JSON.stringify(body) }),
   // Key export needs a fresh Telegram step-up proof, not just the session —
   // pass the CURRENT initData so the backend can re-verify the human.
