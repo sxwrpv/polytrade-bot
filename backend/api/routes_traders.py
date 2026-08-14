@@ -124,12 +124,10 @@ async def trader_profile(address: str, user=Depends(get_current_user),
     address = address.lower()
     if not _ADDR_RE.match(address):
         raise HTTPException(400, "invalid wallet address (expected 0x + 40 hex)")
-    stats = await trader_stats.refresh_trader_stats(address, db, pmc)
-    positions = await pmc.get_positions(address, size_threshold=0)
-    trades = await pmc.get_trade_history(address, limit=25)
-    return {**stats,
-            "positions": [asdict(p) for p in positions],
-            "recent_trades": [asdict(t) for t in trades]}
+    analysis = await trader_stats.refresh_trader_analysis(address, db, pmc)
+    return {**analysis.stats,
+            "positions": [asdict(p) for p in analysis.positions],
+            "recent_trades": [asdict(t) for t in analysis.recent_trades]}
 
 
 @router.post("/{address}/follow")

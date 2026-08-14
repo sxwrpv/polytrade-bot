@@ -30,8 +30,13 @@ import statistics
 import time
 from collections import defaultdict
 from copy import deepcopy
+from dataclasses import asdict, dataclass, is_dataclass
+from typing import TYPE_CHECKING, Any
 
 from backend.db.database import now_iso
+
+if TYPE_CHECKING:
+    from backend.core.polymarket import Position, Trade
 
 log = logging.getLogger("trader_stats")
 
@@ -587,6 +592,50 @@ _MAX_REDEEM_PAGES = 2
 _POSITIONS_LIMIT = 500
 
 
+@dataclass(frozen=True)
+class TraderAnalysis:
+    """One wallet-analysis result backed by a single bounded upstream walk.
+
+    ``trades`` contains every fetched TRADE row used by the calculations.
+    ``recent_trades`` reuses those rows and is sorted newest-first, capped at 25;
+    no separate preview request is made. ``frozen=True`` prevents attribute
+    rebinding only; the route contract intentionally keeps the contained rows
+    as mutable lists and does not promise deep immutability.
+    """
+
+    stats: dict[str, Any]
+    positions: list[Position]
+    trades: list[Trade]
+    recent_trades: list[Trade]
+
+
+def _freeze_activity_row(value: Any) -> Any:
+    """Return a hashable, recursive identity for a complete activity row.
+
+    Dataclasses use their full ``asdict`` representation. Container/type tags
+    keep otherwise-equal primitive values (for example ``True`` and ``1``)
+    distinct. This deliberately does not use ``tx_hash``: one transaction may
+    legitimately contain multiple different fills.
+    """
+    if is_dataclass(value) and not isinstance(value, type):
+        return _freeze_activity_row(asdict(value))
+    if isinstance(value, dict):
+        return (
+            "dict",
+            frozenset(
+                (_freeze_activity_row(key), _freeze_activity_row(item))
+                for key, item in value.items()
+            ),
+        )
+    if isinstance(value, list):
+        return ("list", tuple(_freeze_activity_row(item) for item in value))
+    if isinstance(value, tuple):
+        return ("tuple", tuple(_freeze_activity_row(item) for item in value))
+    if isinstance(value, (set, frozenset)):
+        return ("set", frozenset(_freeze_activity_row(item) for item in value))
+    return (type(value), value)
+
+
 async def _fetch_activity_window(fetch, days: int, max_pages: int) -> tuple[list, bool]:
     """Page through a most-recent-first activity fetcher until the window is
     covered or the page budget runs out. Returns (rows, covered): covered=False
@@ -595,9 +644,14 @@ async def _fetch_activity_window(fetch, days: int, max_pages: int) -> tuple[list
     via history_days)."""
     cutoff = time.time() - days * 86400
     rows: list = []
+    seen: set[Any] = set()
     for page in range(max_pages):
         batch = await fetch(limit=_PAGE_SIZE, offset=page * _PAGE_SIZE)
-        rows.extend(batch)
+        for row in batch:
+            identity = _freeze_activity_row(row)
+            if identity not in seen:
+                seen.add(identity)
+                rows.append(row)
         if len(batch) < _PAGE_SIZE:
             return rows, True                    # feed exhausted — full coverage
         oldest = batch[-1] if not isinstance(batch[-1], dict) else None
@@ -608,7 +662,7 @@ async def _fetch_activity_window(fetch, days: int, max_pages: int) -> tuple[list
     return rows, False
 
 
-async def refresh_trader_stats(address: str, db, pm) -> dict:
+async def refresh_trader_analysis(address: str, db, pm) -> TraderAnalysis:
     """Enrich one trader: consistency, win rate, trade count, open positions, and
     the windowed screener metrics (winrate/pnl/volume/consistency/fill-exit ratio
     at 7d/30d/90d) + pnl_quality. 3-8 API calls (paginated trades + redeems +
@@ -723,7 +777,21 @@ async def refresh_trader_stats(address: str, db, pm) -> dict:
 
     await _upsert(db, address, stats)
     row = await db.fetchone("SELECT * FROM trader_cache WHERE address = ?", (address,))
-    return {**row, "tier": assign_tier(score)}
+    stats_row = {**row, "tier": assign_tier(score)}
+    recent_trades = sorted(
+        trades, key=lambda trade: trade.timestamp, reverse=True,
+    )[:25]
+    return TraderAnalysis(
+        stats=stats_row,
+        positions=positions,
+        trades=trades,
+        recent_trades=recent_trades,
+    )
+
+
+async def refresh_trader_stats(address: str, db, pm) -> dict:
+    """Backward-compatible stats-only facade for background refresh callers."""
+    return (await refresh_trader_analysis(address, db, pm)).stats
 
 
 async def refresh_all(db, pm, *, limit: int = 200, concurrency: int = 8) -> int:
