@@ -5,7 +5,7 @@ Env toggles (useful for tests/dev):
   COPY_ENGINE_AUTOSTART=0      don't start the background copy engine
   STATS_REFRESH_AUTOSTART=0    don't start the windowed wallet-screener stats refresh loop
   TRADER_STATS_REFRESH_SECONDS interval between refresh passes (default 900 = 15min)
-  TRADER_STATS_REFRESH_LIMIT   how many cached traders to refresh per pass (default 100)
+  TRADER_STATS_REFRESH_LIMIT   how many cached traders to refresh per pass (default 200)
 """
 from __future__ import annotations
 

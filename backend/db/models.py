@@ -164,17 +164,17 @@ CREATE TABLE IF NOT EXISTS trader_cache (
     win_rate          REAL,
     consistency_score REAL,
     total_trades      INTEGER,
-    open_positions    INTEGER NOT NULL DEFAULT 0,      -- avoid following flat market-makers
+    open_positions    INTEGER NOT NULL DEFAULT 0,      -- snapshot count; before enrichment, use stats_refreshed_at to treat this legacy default as unavailable
     volume_usd        REAL,
     unrealized_pnl    REAL,                            -- mark-to-market on currently open positions (snapshot)
-    pnl_quality       REAL,                            -- realized_pnl_all_time - unrealized_pnl_now: banked vs paper gains
+    pnl_quality       REAL,                            -- fetched reconstructed realized PnL - current open-position cash PnL (mixed horizons)
     -- windowed screener metrics (7d/30d/90d) — see backend/core/trader_stats.py _period_metrics.
-    -- winrate_Xd / pnl_Xd: closing-trade win rate and realized pnl within the window (avg-cost basis).
+    -- winrate_Xd / pnl_Xd: reconstructed closing-event win rate and realized pnl within the window (SELL/REDEEM/resolved outcomes).
     -- volume_Xd: sum of trade usd_size within the window.
     -- green_days_Xd/red_days_Xd/consistency_ratio_Xd: count of days with positive/negative realized pnl
-    --   within the window, and green/(green+red).
+    --   within the window, and green/(green+red) (NULL when the denominator is zero).
     -- fills_Xd/exits_Xd/fill_exit_ratio_Xd: BUY count, SELL count, and exits/fills*100 (%) within the
-    --   window — how much of what they open they actually close out, vs. hold to resolution.
+    --   window (ratio NULL with no BUY rows) — how much they SELL relative to BUY activity.
     winrate_7d              REAL,
     winrate_30d             REAL,
     winrate_90d             REAL,

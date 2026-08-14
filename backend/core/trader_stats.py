@@ -28,6 +28,7 @@ import logging
 import statistics
 import time
 from collections import defaultdict
+from copy import deepcopy
 
 from backend.db.database import now_iso
 
@@ -35,6 +36,268 @@ log = logging.getLogger("trader_stats")
 
 _PERIODS = {"7d": 7, "30d": 30, "90d": 90}
 
+# Canonical, machine-readable meaning of every metric currently presented by
+# the wallet screener. Keep this beside the calculations: UI copy and external
+# documentation may consume it, but neither is allowed to give a metric a
+# stronger provenance than the implementation below actually provides.
+_TRADE_ENDPOINT = "GET https://data-api.polymarket.com/activity?user={address}&type=TRADE"
+_REDEEM_ENDPOINT = "GET https://data-api.polymarket.com/activity?user={address}&type=REDEEM"
+_POSITIONS_ENDPOINT = "GET https://data-api.polymarket.com/positions?user={address}"
+_LEADERBOARD_USER_ENDPOINT = (
+    "GET https://data-api.polymarket.com/v1/leaderboard?category=OVERALL&"
+    "timePeriod=ALL&orderBy=PNL&user={address}"
+)
+_ACTIVITY_ENDPOINTS = (_TRADE_ENDPOINT, _REDEEM_ENDPOINT, _POSITIONS_ENDPOINT)
+_FETCH_LIMITS = {
+    "activity_page_size": 1000,
+    "trade_max_pages": 4,
+    "redeem_max_pages": 2,
+    "positions_limit": 500,
+}
+_TRADE_LIMITS = {"activity_page_size": 1000, "trade_max_pages": 4}
+_POSITIONS_LIMITS = {"positions_limit": 500}
+_REFRESH_CADENCE = {
+    "default_interval_seconds": 900,
+    "default_batch_size": 200,
+    "stale_first_rotation": True,
+    "scheduled_enabled_by_default": True,
+    "runs_immediately_on_startup": True,
+    "interval_env_var": "TRADER_STATS_REFRESH_SECONDS",
+    "batch_size_env_var": "TRADER_STATS_REFRESH_LIMIT",
+    "interval_and_batch_configurable": True,
+    "autostart_env_var": "STATS_REFRESH_AUTOSTART",
+    "disable_value": "0",
+    "on_demand_refresh_endpoint": "GET /traders/{address}",
+    "on_demand_refreshes_immediately": True,
+    "guarantee": "No per-wallet SLA: each pass refreshes only the stalest batch.",
+}
+_NULL = {
+    "value": "null",
+    "reason": (
+        "Cache null means not fetched or not computable and is unavailable, not numeric "
+        "zero (except the legacy open_positions DEFAULT 0 before stats_refreshed_at). "
+        "Current TraderCard rendering and tier assignment coerce some missing values to "
+        "zero/bronze; that consumer behavior is unsafe and remains a current limitation."
+    ),
+}
+_COMBINED_PARTIAL = {
+    "status": "partial",
+    "truncation_risks": ["TRADE", "REDEEM", "positions"],
+    "reason": (
+        "Page budgets can truncate TRADE/REDEEM history and the 500-row positions "
+        "snapshot. history_days detects only truncated TRADE coverage."
+    ),
+}
+_TRADE_PARTIAL = {
+    "status": "partial",
+    "truncation_risks": ["TRADE"],
+    "reason": "The four-page TRADE budget can truncate fetched activity.",
+}
+_POSITIONS_PARTIAL = {
+    "status": "partial",
+    "truncation_risks": ["positions"],
+    "reason": "The 500-row positions snapshot can be truncated.",
+}
+_UNAVAILABLE_PARTIAL = {
+    "status": "unavailable",
+    "truncation_risks": [],
+    "reason": "Null until the first successful enrichment.",
+}
+_LEGACY_TRANSITION = (
+    "Existing cache rows written before nullable ratio metrics may contain numeric zero "
+    "sentinels indistinguishable from genuine observed zero until each wallet is refreshed; "
+    "stale-first rotation has no per-wallet completion SLA."
+)
+_REALIZED_CLOSING_RULES = (
+    "Closing events are reconstructed as: SELL only with known basis (held shares > 0), "
+    "using min(SELL size, held shares), PnL=(SELL price-average cost)*sold shares, and win "
+    "when SELL price > average cost; REDEEM only with known cost > 0, PnL=payout-cost, "
+    "and win when payout > cost; redeemable held positions only when size > 0.01, "
+    "using cash_pnl and win when cur_price >= 0.5; expired-away losses only when "
+    "shares > 0.01, cost > 0.005, the asset is not held, and the positions list is "
+    "not truncated."
+)
+
+
+def _metric_contract(*, formula, source_endpoint=_ACTIVITY_ENDPOINTS,
+                     time_window, provenance="reconstructed", sortable=False,
+                     filterable=False, label, tooltip, limits=_FETCH_LIMITS,
+                     partial_behavior=_COMBINED_PARTIAL):
+    return {
+        "formula": formula,
+        "source_endpoint": source_endpoint,
+        "time_window": time_window,
+        "row_page_limits": deepcopy(limits),
+        "refresh_cadence": deepcopy(_REFRESH_CADENCE),
+        "null_behavior": deepcopy(_NULL),
+        "partial_behavior": deepcopy(partial_behavior),
+        "legacy_transition": _LEGACY_TRANSITION,
+        "provenance": provenance,
+        "safe_for_sorting": sortable,
+        "safe_for_filtering": filterable,
+        "label": label,
+        "tooltip": tooltip,
+    }
+
+
+SCREENER_METRIC_CONTRACT = {
+    "total_pnl": _metric_contract(
+        formula=(
+            "Official pnl from the first user-filtered ALL leaderboard row; after an "
+            "explicit no-row result, preserve an existing non-null cached value of "
+            "unknown/legacy provenance, or if missing use reconstructed "
+            "sum(realized closings in fetched history) + current open-position cashPnl."
+        ),
+        source_endpoint=(_LEADERBOARD_USER_ENDPOINT, *_ACTIVITY_ENDPOINTS),
+        time_window=(
+            "ALL only for the official leaderboard value; fallback is fetch-bounded "
+            "history plus a current positions snapshot and must not be described as lifetime."
+        ),
+        provenance="official_with_reconstructed_fallback",
+        sortable=True, filterable=True, label="Total PnL",
+        tooltip=(
+            "Polymarket's official ALL-period PnL when returned. Only an explicit "
+            "no-row result may fill a missing value with a fetch-bounded estimate; "
+            "lookup failure preserves the cache."
+        ),
+        limits={
+            "official_requests": 1, "official_request_row_limit": None,
+            "official_rows_used": 1,
+            **_FETCH_LIMITS,
+        },
+        partial_behavior={
+            "status": "partial",
+            "truncation_risks": ["TRADE", "REDEEM", "positions"],
+            "reason": "The reconstructed fallback is page-bounded and is explicitly not official.",
+        },
+    ),
+    "volume_usd": _metric_contract(
+        formula=(
+            "Official vol from the first user-filtered ALL leaderboard row; after an "
+            "explicit no-row result, preserve an existing non-null cached value of "
+            "unknown/legacy provenance, or if missing sum(usd_size) over fetched TRADE rows."
+        ),
+        source_endpoint=(_LEADERBOARD_USER_ENDPOINT, _TRADE_ENDPOINT),
+        time_window=(
+            "ALL only for the official leaderboard value; fallback is fetch-bounded "
+            "activity and has no broader coverage claim."
+        ),
+        provenance="official_with_reconstructed_fallback",
+        sortable=True, filterable=True, label="Total Volume",
+        tooltip=(
+            "Polymarket's official ALL-period volume when returned; after explicit "
+            "no-row, a missing value may use a partial sum of fetched TRADE rows."
+        ),
+        limits={
+            "official_requests": 1, "official_request_row_limit": None,
+            "official_rows_used": 1, **_TRADE_LIMITS,
+        },
+        partial_behavior={
+            "status": "partial",
+            "truncation_risks": ["TRADE"],
+            "reason": "The reconstructed fallback is page-bounded and is explicitly not official.",
+        },
+    ),
+    "win_rate": _metric_contract(
+        formula=(
+            "count(reconstructed realized closing events marked win) / count(all "
+            "reconstructed realized closing events fetched); null when there are no "
+            f"closing events. {_REALIZED_CLOSING_RULES}"
+        ),
+        time_window="Fetched history used by the 90-day activity walk; page boundaries may include older events and coverage may be partial.",
+        sortable=True, filterable=True, label="Observed Win Rate",
+        tooltip="Share of reconstructed fetched closing events that won; coverage is fetch-bounded.",
+    ),
+    "open_positions": _metric_contract(
+        formula="count(positions where size > 0 and redeemable is false)",
+        source_endpoint=(_POSITIONS_ENDPOINT,), limits=_POSITIONS_LIMITS,
+        partial_behavior=_POSITIONS_PARTIAL,
+        time_window="Current point-in-time positions snapshot.",
+        sortable=False, filterable=True, label="Open Positions",
+        tooltip="Open non-redeemable positions in the fetched snapshot; 500 is a lower-bound truncation risk.",
+    ),
+    "consistency_score": _metric_contract(
+        formula=(
+            "If fewer than 7 observed PnL days: 0; otherwise 0.4*(positive days/observed days) + "
+            "0.4*clamp((mean daily PnL/sample stdev)/3,0,1), where sample stdev == 0 "
+            "means the component is 0, + 0.2*clamp(mean daily PnL/100,0,1), rounded to 4 decimals."
+        ),
+        time_window="Observed realized-PnL days in the fetched activity walk; absent calendar days are omitted.",
+        sortable=True, filterable=True, label="Consistency",
+        tooltip="Reconstructed steadiness score over observed PnL days; 0 can mean fewer than 7 observed days, not poor performance.",
+    ),
+    "pnl_quality": _metric_contract(
+        formula="sum(reconstructed realized closings in fetched history) - sum(cashPnl of current open non-redeemable positions)",
+        time_window="Fetch-bounded realized history minus a current point-in-time unrealized snapshot.",
+        sortable=True, filterable=True, label="PnL Quality",
+        tooltip="Reconstructed fetched realized PnL minus current open-position PnL; realized and snapshot terms use different horizons.",
+    ),
+    "daily_pnl_90d": _metric_contract(
+        formula="JSON object mapping UTC closing day to sum(reconstructed realized PnL), retaining keys on or after (inclusive) the UTC date 90 days ago; days with no closing are omitted",
+        time_window="Inclusive cutoff spans 91 possible UTC date labels (cutoff date through refresh date), though omitted no-closing dates mean fewer keys.",
+        label="90d Daily PnL",
+        tooltip="Reconstructed daily realized PnL points for the sparkline; missing dates are not zero-PnL claims.",
+    ),
+    "history_days": _metric_contract(
+        formula="90.0 when the TRADE fetch exhausted or crossed the 90-day cutoff; otherwise round((refresh time - oldest fetched TRADE timestamp)/86400, 1)",
+        source_endpoint=(_TRADE_ENDPOINT,), limits=_TRADE_LIMITS,
+        partial_behavior=_TRADE_PARTIAL,
+        time_window="TRADE coverage indicator capped at 90 days; it does not certify REDEEM or positions completeness.",
+        label="History Coverage",
+        tooltip="Approximate fetched TRADE coverage used to flag partial windows; it does not prove every source is complete.",
+    ),
+    "stats_refreshed_at": _metric_contract(
+        formula="UTC ISO-8601 timestamp recorded when reconstructed stats are computed, before the cache upsert",
+        source_endpoint="Internal application clock (backend.db.database.now_iso); no external endpoint.",
+        time_window="Point in time when this cached reconstruction was computed.",
+        label="Stats Updated",
+        tooltip="When reconstructed screener statistics were last computed; discovery-only cache writes do not change it.",
+        limits={"external_rows": 0, "external_pages": 0},
+        partial_behavior=_UNAVAILABLE_PARTIAL,
+    ),
+}
+
+for _window, _days in _PERIODS.items():
+    _window_text = f"Rolling {_days} days using a seconds cutoff for trades and a UTC-date cutoff for closings."
+    _defs = {
+        "winrate": (
+            "count(reconstructed closing events in window marked win) / count(reconstructed closing events in window); null when there are no closing events",
+            f"{_days}d Win Rate", "Share of reconstructed closing events that won.", True, True),
+        "pnl": (
+            "sum(reconstructed realized PnL of closing events in window)",
+            f"{_days}d Realized PnL", "Reconstructed realized PnL from fetched closing events.", True, True),
+        "volume": (
+            "sum(usd_size for fetched TRADE rows whose timestamp is in window)",
+            f"{_days}d Volume", "Fetched traded notional; page truncation can undercount it.", True, True),
+        "green_days": (
+            "count(UTC dates where summed reconstructed realized PnL > 0)",
+            f"{_days}d Green Days", "Observed UTC closing days with positive reconstructed realized PnL.", False, False),
+        "red_days": (
+            "count(UTC dates where summed reconstructed realized PnL < 0)",
+            f"{_days}d Red Days", "Observed UTC closing days with negative reconstructed realized PnL.", False, False),
+        "consistency_ratio": (
+            "green_days / (green_days + red_days); zero-PnL and absent days are excluded; null when there are no green or red days",
+            f"{_days}d Green-Day Ratio", "Green days as a share of observed non-zero PnL days.", False, True),
+        "fills": (
+            "count(fetched TRADE rows in window where side == BUY)",
+            f"{_days}d Buy Fills", "Fetched BUY activity-row count, not order or position count.", False, False),
+        "exits": (
+            "count(fetched TRADE rows in window where side == SELL)",
+            f"{_days}d Sell Exits", "Fetched SELL activity-row count; redemptions are not included.", False, False),
+        "fill_exit_ratio": (
+            "round(SELL TRADE row count / BUY TRADE row count * 100, 2); null when there are no BUY rows",
+            f"{_days}d Exit/Fill Ratio", "Fetched SELL-to-BUY activity-row ratio as a percentage.", True, True),
+    }
+    for _stem, (_formula, _label, _tooltip, _sortable, _filterable) in _defs.items():
+        _trade_only = _stem in {"volume", "fills", "exits", "fill_exit_ratio"}
+        SCREENER_METRIC_CONTRACT[f"{_stem}_{_window}"] = _metric_contract(
+            formula=_formula, time_window=_window_text, sortable=_sortable,
+            filterable=_filterable, label=_label,
+            tooltip=f"{_tooltip} Partial when source page budgets truncate coverage.",
+            source_endpoint=(_TRADE_ENDPOINT,) if _trade_only else _ACTIVITY_ENDPOINTS,
+            limits=_TRADE_LIMITS if _trade_only else _FETCH_LIMITS,
+            partial_behavior=_TRADE_PARTIAL if _trade_only else _COMBINED_PARTIAL,
+        )
 
 def consistency_score(daily_pnl_series: list[float]) -> float:
     """0..1. Rewards win rate + risk-adjusted return + average daily PnL."""
@@ -158,9 +421,9 @@ def daily_realized_pnl(closings) -> dict[str, float]:
     return dict(daily)
 
 
-def win_rate_of(closings) -> float:
+def win_rate_of(closings) -> float | None:
     wins = sum(1 for _, _, is_win in closings if is_win)
-    return wins / len(closings) if closings else 0.0
+    return wins / len(closings) if closings else None
 
 
 def _period_metrics(closings: list[tuple], trades: list, days: int) -> dict:
@@ -181,7 +444,7 @@ def _period_metrics(closings: list[tuple], trades: list, days: int) -> dict:
     in_window = [c for c in closings if c[0] >= cutoff_day]
     total_closes = len(in_window)
     wins = sum(1 for _, _, is_win in in_window if is_win)
-    winrate = wins / total_closes if total_closes else 0.0
+    winrate = wins / total_closes if total_closes else None
     pnl = sum(r for _, r, _ in in_window)
 
     daily: dict[str, float] = defaultdict(float)
@@ -189,21 +452,23 @@ def _period_metrics(closings: list[tuple], trades: list, days: int) -> dict:
         daily[day] += r
     green_days = sum(1 for v in daily.values() if v > 0)
     red_days = sum(1 for v in daily.values() if v < 0)
-    consistency_ratio = green_days / (green_days + red_days) if (green_days + red_days) else 0.0
+    consistency_ratio = (green_days / (green_days + red_days)
+                         if (green_days + red_days) else None)
 
     recent = [t for t in trades if t.timestamp >= cutoff_ts]
     volume = sum(t.usd_size for t in recent)
     fills = sum(1 for t in recent if t.side == "BUY")
     exits = sum(1 for t in recent if t.side == "SELL")
-    fill_exit_ratio = round(exits / fills * 100, 2) if fills else 0.0
+    fill_exit_ratio = round(exits / fills * 100, 2) if fills else None
 
     return {
-        "winrate": round(winrate, 4),
+        "winrate": round(winrate, 4) if winrate is not None else None,
         "pnl": round(pnl, 2),
         "volume": round(volume, 2),
         "green_days": green_days,
         "red_days": red_days,
-        "consistency_ratio": round(consistency_ratio, 4),
+        "consistency_ratio": (round(consistency_ratio, 4)
+                              if consistency_ratio is not None else None),
         "fills": fills,
         "exits": exits,
         "fill_exit_ratio": fill_exit_ratio,
@@ -234,17 +499,24 @@ async def _upsert(db, address: str, fields: dict) -> None:
 
 
 async def seed_from_leaderboard(db, pm, *, period="MONTH", order_by="PNL", limit=50) -> int:
-    """Upsert pnl/vol/profile for the top traders (one API call). Cheap; run often."""
+    """Discover top traders with one cheap API call.
+
+    Every period contributes identity/profile fields. Only ALL entries may
+    populate total_pnl/volume_usd: values from MONTH/WEEK/DAY must never be
+    cached in columns whose public contract identifies them as ALL-period.
+    """
     entries = await pm.get_leaderboard(period=period, order_by=order_by, limit=limit)
     for e in entries:
-        await _upsert(db, e.proxy_wallet, {
+        fields = {
             "display_name": e.user_name,
             "profile_image": e.profile_image,
             "x_username": e.x_username,
             "verified": int(e.verified),
-            "total_pnl": e.pnl,
-            "volume_usd": e.vol,
-        })
+        }
+        if period.upper() == "ALL":
+            fields["total_pnl"] = e.pnl
+            fields["volume_usd"] = e.vol
+        await _upsert(db, e.proxy_wallet, fields)
     return len(entries)
 
 
@@ -339,10 +611,12 @@ async def refresh_trader_stats(address: str, db, pm) -> dict:
     positions) — run for the traders shown on the board, and periodically for
     the whole cache (see `refresh_all`).
 
-    total_pnl/volume_usd come from the leaderboard's per-user filter — the
-    official lifetime numbers polymarket.com shows, fetched fresh on every
-    refresh. The trade-walk approximation is only the fallback for wallets the
-    leaderboard endpoint doesn't know at all.
+    total_pnl/volume_usd prefer the leaderboard's per-user filter — the
+    official ALL-period numbers Polymarket shows. An explicit no-row result may
+    fill missing cache values with fetch-bounded reconstructions; a lookup
+    exception preserves both totals. Existing non-null values are also
+    preserved on no-row and have unknown/legacy provenance without a source
+    column.
     """
     trades, trades_covered = await _fetch_activity_window(
         lambda limit, offset: pm.get_trade_history(address, limit=limit, offset=offset),
@@ -380,10 +654,12 @@ async def refresh_trader_stats(address: str, db, pm) -> dict:
                   - dt.timedelta(days=90)).strftime("%Y-%m-%d")
     daily_90d = {day: round(v, 2) for day, v in sorted(daily_all.items())
                  if day >= cutoff_90d}
+    observed_win_rate = win_rate_of(closings)
 
     stats = {
         "consistency_score": score,
-        "win_rate": round(win_rate_of(closings), 4),
+        "win_rate": (round(observed_win_rate, 4)
+                     if observed_win_rate is not None else None),
         "total_trades": len(trades),
         "open_positions": open_positions,
         "unrealized_pnl": round(unrealized, 2),
@@ -400,10 +676,15 @@ async def refresh_trader_stats(address: str, db, pm) -> dict:
     # numbers (what polymarket.com shows) for ANY wallet, ranked or not — use
     # them whenever available; fall back to our walk approximation only when
     # the endpoint doesn't know the wallet.
+    # The fallback state is intentionally tri-valued. An explicit successful
+    # no-row response permits a reconstructed value for a missing cache field;
+    # an exception proves nothing and must leave both cached totals untouched.
+    official_lookup_succeeded = False
     try:
         official = await pm.get_leaderboard_user(address)
+        official_lookup_succeeded = True
     except Exception:
-        log.exception("official pnl lookup failed for %s (using approximation)", address)
+        log.exception("official pnl lookup failed for %s (preserving cached totals)", address)
         official = None
     if official is not None:
         stats["total_pnl"] = official.pnl
@@ -412,7 +693,10 @@ async def refresh_trader_stats(address: str, db, pm) -> dict:
             stats["display_name"] = official.user_name
         if official.x_username:
             stats["x_username"] = official.x_username
-    else:
+    elif official_lookup_succeeded:
+        # No provenance column exists. A pre-existing non-null value may be an
+        # official seed, a former fallback, or legacy data, so preserve it but
+        # never describe it as official. Only fill genuinely missing values.
         existing = await db.fetchone(
             "SELECT total_pnl, volume_usd FROM trader_cache WHERE address = ?", (address,))
         if existing is None or existing["total_pnl"] is None:
