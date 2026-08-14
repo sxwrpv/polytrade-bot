@@ -162,7 +162,7 @@ Every metric below exists for `7d`, `30d`, and `90d`. TRADE rows use an exact ro
 
 - **Formula:** `90.0` when TRADE activity exhausts or crosses the 90-day cutoff; otherwise `round((refresh_time - oldest_fetched_trade_timestamp) / 86,400, 1)`.
 - **Source/window/provenance:** reconstructed TRADE coverage indicator capped at 90. It says nothing definitive about REDEEM or positions completeness.
-- **Sort/filter:** neither.
+- **Sort/filter:** numeric minimum/maximum filtering is supported; sorting is not supported. Disabling partial-history inclusion applies `history_days >= selected period`, so null and shorter-coverage rows are excluded. This only checks fetched TRADE history and does not certify REDEEM or positions completeness.
 - **Tooltip:** “Approximate fetched TRADE coverage used to flag partial windows; it does not prove every source is complete.”
 
 ### `stats_refreshed_at` — **Stats Updated**

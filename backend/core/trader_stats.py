@@ -25,6 +25,7 @@ import asyncio
 import datetime as dt
 import json
 import logging
+import math
 import statistics
 import time
 from collections import defaultdict
@@ -244,7 +245,7 @@ SCREENER_METRIC_CONTRACT = {
         source_endpoint=(_TRADE_ENDPOINT,), limits=_TRADE_LIMITS,
         partial_behavior=_TRADE_PARTIAL,
         time_window="TRADE coverage indicator capped at 90 days; it does not certify REDEEM or positions completeness.",
-        label="History Coverage",
+        filterable=True, label="History Coverage",
         tooltip="Approximate fetched TRADE coverage used to flag partial windows; it does not prove every source is complete.",
     ),
     "stats_refreshed_at": _metric_contract(
@@ -773,10 +774,11 @@ _SORT_COLS = {
     "fill_exit_ratio_90d": "fill_exit_ratio_90d",
 }
 
-# Whitelist of columns the screener is allowed to filter on — every windowed
-# metric plus the original all-time ones. Query params are `<column>_min` /
-# `<column>_max`; anything not in this set is ignored (defense against
-# injection AND against filtering on arbitrary/internal columns).
+# Whitelist of numeric columns the screener is allowed to filter on — windowed
+# metrics, the fetched TRADE-history coverage indicator, and legacy all-time
+# fields. Query params are `<column>_min` / `<column>_max`; anything not in this
+# set is ignored (defense against injection and against filtering on arbitrary
+# or internal columns).
 _FILTERABLE_COLUMNS = frozenset({
     "winrate_7d", "winrate_30d", "winrate_90d",
     "pnl_7d", "pnl_30d", "pnl_90d",
@@ -784,7 +786,7 @@ _FILTERABLE_COLUMNS = frozenset({
     "consistency_ratio_7d", "consistency_ratio_30d", "consistency_ratio_90d",
     "fill_exit_ratio_7d", "fill_exit_ratio_30d", "fill_exit_ratio_90d",
     "pnl_quality", "total_pnl", "win_rate", "volume_usd", "consistency_score",
-    "open_positions",
+    "open_positions", "history_days",
 })
 
 
@@ -802,7 +804,9 @@ def parse_screener_filters(query_params) -> dict[str, tuple[str, str, float]]:
                 col = key[: -len(suffix)]
                 if col in _FILTERABLE_COLUMNS:
                     try:
-                        out[key] = (col, op, float(raw))
+                        value = float(raw)
+                        if math.isfinite(value):
+                            out[key] = (col, op, value)
                     except (TypeError, ValueError):
                         pass
                 break
@@ -811,7 +815,7 @@ def parse_screener_filters(query_params) -> dict[str, tuple[str, str, float]]:
 
 async def get_leaderboard(
     db,
-    sort_by: str = "consistency",
+    sort_by: str = "pnl_30d",
     limit: int = 50,
     offset: int = 0,
     filters: dict[str, tuple[str, str, float]] | None = None,
@@ -822,7 +826,7 @@ async def get_leaderboard(
     single indexed query over precomputed columns, so cost doesn't grow with
     the number of active filters. `search` substring-matches the wallet
     address, display name, or X username (case-insensitive, parameterized)."""
-    col = _SORT_COLS.get(sort_by, "consistency_score")   # whitelist (no injection)
+    col = _SORT_COLS.get(sort_by, "pnl_30d")   # whitelist (no injection)
     clauses: list[str] = []
     params: list = []
     if filters:
@@ -836,8 +840,12 @@ async def get_leaderboard(
                        "OR LOWER(x_username) LIKE ?)")
         params += [term, term, term]
     where_sql = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    order_sql = (
+        f"CASE WHEN {col} IS NULL THEN 1 ELSE 0 END ASC, "
+        f"{col} DESC, address ASC"
+    )
     rows = await db.fetchall(
-        f"SELECT * FROM trader_cache {where_sql} ORDER BY {col} DESC LIMIT ? OFFSET ?",
+        f"SELECT * FROM trader_cache {where_sql} ORDER BY {order_sql} LIMIT ? OFFSET ?",
         [*params, limit, offset])
     for r in rows:
         r["tier"] = assign_tier(r.get("consistency_score") or 0.0)

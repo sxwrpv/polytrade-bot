@@ -74,7 +74,7 @@ export const api = {
   // backend/core/trader_stats.py _FILTERABLE_COLUMNS); they all combine with AND.
   leaderboard: (params = {}) => {
     const q = new URLSearchParams()
-    Object.entries({ sort: 'consistency', limit: 50, ...params }).forEach(([k, v]) => {
+    Object.entries({ sort: 'pnl_30d', limit: 50, ...params }).forEach(([k, v]) => {
       if (v !== '' && v != null) q.set(k, v)
     })
     return req(`/traders/leaderboard?${q.toString()}`)
