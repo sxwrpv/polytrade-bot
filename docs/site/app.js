@@ -195,14 +195,27 @@ function renderPager(slug) {
   `;
 }
 
+/* Documentation language. Russian pages live beside the English ones as
+   `<name>.ru.md`; a page without a translation falls back to English rather
+   than failing, so the switch never leaves the reader on an error screen. */
+let docsLang = localStorage.getItem('polytrade-docs-lang') === 'ru' ? 'ru' : 'en';
+
+async function fetchDoc(file) {
+  if (docsLang === 'ru') {
+    const translated = await fetch(`/docs/content/${file.replace(/\.md$/, '.ru.md')}`, { cache: 'no-cache' });
+    if (translated.ok) return translated.text();
+  }
+  const response = await fetch(`/docs/content/${file}`, { cache: 'no-cache' });
+  if (!response.ok) throw new Error(`Documentation returned ${response.status}`);
+  return response.text();
+}
+
 async function loadPage() {
   const slug = currentSlug();
   const page = pageMap[slug];
   renderSidebar(slug);
   try {
-    const response = await fetch(`/docs/content/${page.file}`, { cache: 'no-cache' });
-    if (!response.ok) throw new Error(`Documentation returned ${response.status}`);
-    const markdown = await response.text();
+    const markdown = await fetchDoc(page.file);
     const prose = document.getElementById('prose');
     prose.innerHTML = renderMarkdown(markdown);
     prose.hidden = false;
@@ -222,7 +235,7 @@ const searchData = new Map();
 async function buildSearchIndex() {
   await Promise.all(pages.map(async page => {
     try {
-      const response = await fetch(`/docs/content/${page.file}`);
+      const response = { ok: true, text: () => fetchDoc(page.file) };
       if (!response.ok) throw new Error(`Search source returned ${response.status}`);
       const text = await response.text();
       searchData.set(page.slug, text.replace(/```[\s\S]*?```/g, ' ').replace(/[#>*_`\[\]()-]/g, ' ').replace(/\s+/g, ' ').trim());
@@ -271,13 +284,15 @@ function setupInteractions() {
     sidebar.classList.remove('open'); menu.setAttribute('aria-expanded', 'false');
   });
 
-  const savedTheme = localStorage.getItem('polytrade-docs-theme');
-  if (savedTheme) document.documentElement.dataset.theme = savedTheme;
-  else if (matchMedia('(prefers-color-scheme: dark)').matches) document.documentElement.dataset.theme = 'dark';
-  document.getElementById('theme-toggle').addEventListener('click', () => {
-    const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
-    document.documentElement.dataset.theme = next;
-    localStorage.setItem('polytrade-docs-theme', next);
+  const langButton = document.getElementById('lang-toggle');
+  langButton.textContent = docsLang === 'ru' ? 'EN' : 'RU';
+  langButton.addEventListener('click', () => {
+    docsLang = docsLang === 'ru' ? 'en' : 'ru';
+    localStorage.setItem('polytrade-docs-lang', docsLang);
+    langButton.textContent = docsLang === 'ru' ? 'EN' : 'RU';
+    document.documentElement.lang = docsLang;
+    searchData.clear();
+    loadPage();
   });
 
   document.getElementById('search-trigger').addEventListener('click', openSearch);

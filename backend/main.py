@@ -65,6 +65,13 @@ _DOCS_SLUGS = {
     "overview",
     *(name.removesuffix(".md") for name in _DOCS_PAGES if name != "README.md"),
 }
+# Russian translations sit beside the English files. Only pages that actually
+# have one are served; the docs site falls back to English for the rest.
+_DOCS_PAGES |= {
+    name.removesuffix(".md") + ".ru.md"
+    for name in _DOCS_PAGES
+    if os.path.isfile(os.path.join(_DOCS_DIR, name.removesuffix(".md") + ".ru.md"))
+}
 
 
 async def _stats_refresh_loop(db, pm, stop: asyncio.Event) -> None:
