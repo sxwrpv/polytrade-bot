@@ -3,164 +3,202 @@ import { api } from '../api'
 import FilterSlider from './FilterSlider'
 import Folder from './Folder'
 import TraderCard from './TraderCard'
+import {
+  DEFAULT_FILTERS,
+  DEFAULT_PERIOD,
+  DEFAULT_SORT,
+  PERIODS,
+  SORTS,
+  activeFilterChips,
+  buildScreenerQuery,
+} from './walletScreenerModel'
 
-const PERIODS = ['7d', '30d', '90d']
-const SORTS = [
-  ['consistency', 'CONSISTENCY'],
-  ['pnl', 'PNL'],
-  ['winrate', 'WINRATE'],
-  ['volume', 'VOLUME'],
-  ['pnl_quality', 'PNL QUALITY'],
-]
-
-const EMPTY = {
-  winrateMin: '', pnlMin: '', volumeMin: '', consistencyMin: '',
-  fillExitMin: '', fillExitMax: '', pnlQualityMin: '',
-}
-
-// Wallet parser / screener — every filter below combines with the others via
-// AND (see backend GET /api/traders/leaderboard), all scoped to the selected
-// period (7d/30d/90d) except PNL QUALITY, which is a point-in-time snapshot
-// (realized pnl minus current unrealized pnl — see TraderCard tooltip).
 export default function WalletScreener({ onFollowed, balance }) {
-  const [period, setPeriod] = useState('30d')
-  const [sort, setSort] = useState('consistency')
-  const [f, setF] = useState(EMPTY)
+  const [period, setPeriod] = useState(DEFAULT_PERIOD)
+  const [sort, setSort] = useState(DEFAULT_SORT)
+  const [filters, setFilters] = useState(() => ({ ...DEFAULT_FILTERS }))
+  const [includePartialHistory, setIncludePartialHistory] = useState(true)
   const [search, setSearch] = useState('')
   const [traders, setTraders] = useState([])
   const [loading, setLoading] = useState(true)
-  // paste-any-wallet stats checker: a full 0x address that isn't cached yet is
-  // fetched live via GET /traders/{address} (2 Polymarket calls, ~seconds) and
-  // rendered as a normal TraderCard; the backend caches it for next time.
+  // A full 0x address that is not cached is still fetched live and shown as a card.
   const [checked, setChecked] = useState(null)
   const [checking, setChecking] = useState(false)
-  const [checkErr, setCheckErr] = useState('')
+  const [checkErr, setCheckErr] = useState(null)
   const searchAddr = /^0x[0-9a-fA-F]{40}$/.test(search.trim()) ? search.trim().toLowerCase() : null
 
-  const clearField = (k) => setF((p) => ({ ...p, [k]: '' }))
-  const clearAll = () => setF(EMPTY)
+  const setFilter = (key, value) => setFilters((current) => ({ ...current, [key]: value }))
+  const clearChip = (key) => {
+    if (key === 'includePartialHistory') setIncludePartialHistory(true)
+    else setFilter(key, '')
+  }
+  const clearAll = () => {
+    setFilters({ ...DEFAULT_FILTERS })
+    setIncludePartialHistory(true)
+  }
 
-  const params = useMemo(() => {
-    const p = { sort, limit: 50 }
-    if (search.trim() !== '') p.search = search.trim()
-    if (f.winrateMin !== '') p[`winrate_${period}_min`] = Number(f.winrateMin) / 100
-    if (f.pnlMin !== '') p[`pnl_${period}_min`] = Number(f.pnlMin)
-    if (f.volumeMin !== '') p[`volume_${period}_min`] = Number(f.volumeMin)
-    if (f.consistencyMin !== '') p[`consistency_ratio_${period}_min`] = Number(f.consistencyMin) / 100
-    if (f.fillExitMin !== '') p[`fill_exit_ratio_${period}_min`] = Number(f.fillExitMin)
-    if (f.fillExitMax !== '') p[`fill_exit_ratio_${period}_max`] = Number(f.fillExitMax)
-    if (f.pnlQualityMin !== '') p.pnl_quality_min = Number(f.pnlQualityMin)
-    return p
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [f, period, sort, search])
+  const params = useMemo(
+    () => buildScreenerQuery({ period, sort, search, includePartialHistory, filters }),
+    [filters, includePartialHistory, period, search, sort],
+  )
 
   useEffect(() => {
     let alive = true
     setLoading(true)
-    const t = setTimeout(() => {
+    const timer = setTimeout(() => {
       api
         .leaderboard(params)
-        .then((r) => alive && setTraders(r))
+        .then((result) => alive && setTraders(result))
         .catch(() => alive && setTraders([]))
         .finally(() => alive && setLoading(false))
-    }, 300) // debounced auto-apply — no explicit "search" button
+    }, 300)
     return () => {
       alive = false
-      clearTimeout(t)
+      clearTimeout(timer)
     }
   }, [params])
 
-  // live wallet check — fires once the cache search settles empty for a pasted address
+  // Live wallet check fires once the debounced cache search settles empty.
   useEffect(() => {
+    // Clear synchronously before every early-return path, including when a full
+    // address is replaced with ordinary search text while a request is active.
+    setChecking(false)
     setChecked(null)
-    setCheckErr('')
+    setCheckErr(null)
     if (!searchAddr || loading) return
-    if (traders.some((t) => t.address?.toLowerCase() === searchAddr)) return
+    if (traders.some((trader) => trader.address?.toLowerCase() === searchAddr)) return
     let alive = true
     setChecking(true)
     api
       .trader(searchAddr)
-      .then((t) => alive && setChecked(t))
-      .catch((e) => alive && setCheckErr(String(e.message || e)))
+      .then((trader) => alive && setChecked({ requestedAddress: searchAddr, trader }))
+      .catch((error) => alive && setCheckErr({
+        requestedAddress: searchAddr,
+        message: String(error.message || error),
+      }))
       .finally(() => alive && setChecking(false))
     return () => {
       alive = false
     }
   }, [searchAddr, loading, traders])
 
-  const chips = useMemo(() => {
-    const P = period.toUpperCase()
-    const out = []
-    if (f.winrateMin !== '') out.push(['winrateMin', `WINRATE ${P} ≥ ${f.winrateMin}%`])
-    if (f.pnlMin !== '') out.push(['pnlMin', `PNL ${P} ≥ $${f.pnlMin}`])
-    if (f.volumeMin !== '') out.push(['volumeMin', `VOL ${P} ≥ $${f.volumeMin}`])
-    if (f.consistencyMin !== '') out.push(['consistencyMin', `GREEN DAYS ${P} ≥ ${f.consistencyMin}%`])
-    if (f.fillExitMin !== '') out.push(['fillExitMin', `EXIT/FILL ${P} ≥ ${f.fillExitMin}%`])
-    if (f.fillExitMax !== '') out.push(['fillExitMax', `EXIT/FILL ${P} ≤ ${f.fillExitMax}%`])
-    if (f.pnlQualityMin !== '') out.push(['pnlQualityMin', `PNL QUALITY ≥ $${f.pnlQualityMin}`])
-    return out
-  }, [f, period])
+  const currentChecked = checked?.requestedAddress === searchAddr ? checked.trader : null
+  const currentCheckErr = checkErr?.requestedAddress === searchAddr ? checkErr.message : ''
+
+  const chips = useMemo(
+    () => activeFilterChips({ period, includePartialHistory, filters }),
+    [filters, includePartialHistory, period],
+  )
 
   return (
     <div>
       <input
         className="search-box"
         value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        placeholder="&gt; search name / x handle, or paste any 0x address to check it…"
+        onChange={(event) => setSearch(event.target.value)}
+        placeholder="> search name / x handle, or paste any 0x address to check it…"
       />
 
-      <Folder id="screener-filters" title="FILTERS" open>
-        <div className="sort-row">
-          {PERIODS.map((p) => (
-            <button key={p} className={`chip ${period === p ? 'active' : ''}`} onClick={() => setPeriod(p)}>
-              {p.toUpperCase()}
-            </button>
-          ))}
+      <Folder title="FILTERS" open>
+        <div className="screener-control-group" aria-label="Metric period">
+          <span className="screener-control-label">PERIOD</span>
+          <div className="sort-row">
+            {PERIODS.map((value) => (
+              <button
+                key={value}
+                className={`chip ${period === value ? 'active' : ''}`}
+                onClick={() => setPeriod(value)}
+                aria-pressed={period === value}
+              >
+                {value.toUpperCase()}
+              </button>
+            ))}
+          </div>
         </div>
 
-        <div className="filter-grid">
-          <FilterSlider
-            label={`WIN RATE ${period.toUpperCase()} ≥ %`}
-            value={f.winrateMin} onChange={(v) => setF((p) => ({ ...p, winrateMin: v }))}
-            min={0} max={100} step={5} placeholder="off"
-          />
+        <div className="screener-control-group" aria-label="Sort wallets">
+          <span className="screener-control-label">SORT BY</span>
+          <div className="sort-row">
+            {SORTS.map(([key, label]) => (
+              <button
+                key={key}
+                className={`chip ${sort === key ? 'active' : ''}`}
+                onClick={() => setSort(key)}
+                aria-pressed={sort === key}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="filter-grid basic-filter-grid">
           <FilterSlider
             label={`PNL ${period.toUpperCase()} ≥ $`}
-            value={f.pnlMin} onChange={(v) => setF((p) => ({ ...p, pnlMin: v }))}
-            min={0} max={25000} step={250} placeholder="off"
+            value={filters.pnlMin} onChange={(value) => setFilter('pnlMin', value)}
+            min={-25000} max={25000} step={250} placeholder="off"
+          />
+          <FilterSlider
+            label={`WIN RATE ${period.toUpperCase()} ≥ %`}
+            value={filters.winrateMin} onChange={(value) => setFilter('winrateMin', value)}
+            min={0} max={100} step={5} placeholder="off"
           />
           <FilterSlider
             label={`VOLUME ${period.toUpperCase()} ≥ $`}
-            value={f.volumeMin} onChange={(v) => setF((p) => ({ ...p, volumeMin: v }))}
+            value={filters.volumeMin} onChange={(value) => setFilter('volumeMin', value)}
             min={0} max={250000} step={2500} placeholder="off"
-          />
-          <FilterSlider
-            label={`GREEN DAYS ${period.toUpperCase()} ≥ %`}
-            value={f.consistencyMin} onChange={(v) => setF((p) => ({ ...p, consistencyMin: v }))}
-            min={0} max={100} step={5} placeholder="off"
-          />
-          <FilterSlider
-            label={`EXIT/FILL ${period.toUpperCase()} ≥ %`}
-            value={f.fillExitMin} onChange={(v) => setF((p) => ({ ...p, fillExitMin: v }))}
-            min={0} max={100} step={5} placeholder="off"
-          />
-          <FilterSlider
-            label={`EXIT/FILL ${period.toUpperCase()} ≤ %`}
-            value={f.fillExitMax} onChange={(v) => setF((p) => ({ ...p, fillExitMax: v }))}
-            min={0} max={200} step={5} off="max" placeholder="off"
-          />
-          <FilterSlider
-            label="PNL QUALITY (RPNL − UPNL) ≥ $"
-            value={f.pnlQualityMin} onChange={(v) => setF((p) => ({ ...p, pnlQualityMin: v }))}
-            min={-25000} max={25000} step={250} placeholder="off"
           />
         </div>
 
+        <label className="coverage-control">
+          <input
+            type="checkbox"
+            checked={includePartialHistory}
+            onChange={(event) => setIncludePartialHistory(event.target.checked)}
+          />
+          <span>
+            <strong>INCLUDE PARTIAL TRADE HISTORY</strong>
+            <small>Includes wallets with less fetched TRADE history than the selected period; this does not describe other source coverage.</small>
+          </span>
+        </label>
+
+        <details className="advanced-filters">
+          <summary>ADVANCED FILTERS</summary>
+          <div className="filter-grid">
+            <div>
+              <FilterSlider
+                label={`POSITIVE CLOSE-DAY RATIO ${period.toUpperCase()} ≥ %`}
+                value={filters.consistencyRatioMin}
+                onChange={(value) => setFilter('consistencyRatioMin', value)}
+                min={0} max={100} step={5} placeholder="off"
+              />
+              <p className="filter-description">Positive / (positive + negative) realized close days; flat/no-close days omitted.</p>
+            </div>
+            <div>
+              <FilterSlider
+                label={`SELL / BUY EVENT COUNT ${period.toUpperCase()} ≥ %`}
+                value={filters.fillExitMin}
+                onChange={(value) => setFilter('fillExitMin', value)}
+                min={0} max={400} step={5} placeholder="off"
+              />
+              <p className="filter-description">SELL activity row count / BUY activity row count × 100; not capital, shares, or position close rate.</p>
+            </div>
+            <div>
+              <FilterSlider
+                label={`SELL / BUY EVENT COUNT ${period.toUpperCase()} ≤ %`}
+                value={filters.fillExitMax}
+                onChange={(value) => setFilter('fillExitMax', value)}
+                min={0} max={400} step={5} off="max" placeholder="off"
+              />
+              <p className="filter-description">SELL activity row count / BUY activity row count × 100; not capital, shares, or position close rate.</p>
+            </div>
+          </div>
+        </details>
+
         {chips.length > 0 && (
-          <div className="sort-row">
-            {chips.map(([k, label]) => (
-              <button key={k} className="chip active" onClick={() => clearField(k)} title="click to clear">
+          <div className="active-filter-row" aria-label="Active filters">
+            {chips.map(([key, label]) => (
+              <button key={key} className="chip active" onClick={() => clearChip(key)} title="Click to clear">
                 {label} ×
               </button>
             ))}
@@ -169,14 +207,6 @@ export default function WalletScreener({ onFollowed, balance }) {
         )}
       </Folder>
 
-      <div className="sort-row">
-        {SORTS.map(([k, l]) => (
-          <button key={k} className={`chip ${sort === k ? 'active' : ''}`} onClick={() => setSort(k)}>
-            {l}
-          </button>
-        ))}
-      </div>
-
       {loading ? (
         <>
           <div className="card skeleton" />
@@ -184,15 +214,20 @@ export default function WalletScreener({ onFollowed, balance }) {
           <div className="card skeleton" />
         </>
       ) : traders.length === 0 ? (
-        checking ? (
-          <>
-            <div className="muted">checking wallet stats live (computing win rate / pnl / consistency)…</div>
-            <div className="card skeleton" />
-          </>
-        ) : checked ? (
-          <TraderCard t={checked} period={period} onFollowed={onFollowed} balance={balance} />
-        ) : checkErr ? (
-          <div className="warn-box">wallet check failed: {checkErr}</div>
+        searchAddr && (checking || currentChecked || currentCheckErr) ? (
+          <section className="direct-wallet-lookup" aria-label="Direct wallet lookup">
+            <div className="warn-box">DIRECT WALLET LOOKUP · ACTIVE SCREENER FILTERS DO NOT APPLY</div>
+            {checking ? (
+              <>
+                <div className="muted">checking wallet stats live (computing selected-period metrics)…</div>
+                <div className="card skeleton" />
+              </>
+            ) : currentChecked ? (
+              <TraderCard t={currentChecked} period={period} onFollowed={onFollowed} balance={balance} />
+            ) : (
+              <div className="warn-box">wallet check failed: {currentCheckErr}</div>
+            )}
+          </section>
         ) : (
           <div className="muted">
             {search.trim()
@@ -201,8 +236,8 @@ export default function WalletScreener({ onFollowed, balance }) {
           </div>
         )
       ) : (
-        traders.map((t) => (
-          <TraderCard key={t.address} t={t} period={period} onFollowed={onFollowed} balance={balance} />
+        traders.map((trader) => (
+          <TraderCard key={trader.address} t={trader} period={period} onFollowed={onFollowed} balance={balance} />
         ))
       )}
     </div>

@@ -6,7 +6,10 @@ export default function FilterSlider({
   label, value, onChange, min, max, step = 1, off = 'min', placeholder = '',
 }) {
   const offValue = off === 'min' ? min : max
-  const sliderValue = value === '' || value == null ? offValue : Number(value)
+  const numericValue = Number(value)
+  const sliderValue = value === '' || value == null || !Number.isFinite(numericValue)
+    ? offValue
+    : Math.min(max, Math.max(min, numericValue))
 
   function fromSlider(e) {
     const v = Number(e.target.value)

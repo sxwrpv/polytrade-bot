@@ -6,6 +6,7 @@ import os
 import tempfile
 import unittest
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -61,7 +62,44 @@ class PositionOriginTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("0xleader", rows[0]["trader_address"])
 
 
+class ClosedPositionHistoryRetentionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_closed_view_only_queries_the_most_recent_twelve_hours(self):
+        class DB:
+            async def fetchall(self, sql, params=()):
+                self.sql = sql
+                self.params = params
+                return []
+
+        db = DB()
+        pm = SimpleNamespace(get_positions=AsyncMock(return_value=[]))
+        before = datetime.now(timezone.utc)
+
+        rows = await closed_positions(user={"id": "user"}, db=db, pmc=pm)
+
+        after = datetime.now(timezone.utc)
+        self.assertEqual([], rows)
+        self.assertIn("p.closed_at >= ?", db.sql)
+        self.assertEqual("user", db.params[0])
+        cutoff = datetime.fromisoformat(db.params[1].replace("Z", "+00:00"))
+        self.assertGreaterEqual(cutoff, before - timedelta(hours=12, seconds=1))
+        self.assertLessEqual(cutoff, after - timedelta(hours=12) + timedelta(seconds=1))
+
+
 class CloseSlippageContractTests(unittest.IsolatedAsyncioTestCase):
+    async def test_resolved_external_close_requires_manual_polymarket_redemption(self):
+        pm = SimpleNamespace(get_positions=AsyncMock(return_value=[SimpleNamespace(
+            asset="resolved-token", size=2.0, redeemable=True,
+        )]))
+
+        with self.assertRaises(HTTPException) as raised:
+            await close_external_position(
+                CloseExternalBody(token_id="resolved-token"), SimpleNamespace(),
+                user={"id": "user"}, db=SimpleNamespace(), pmc=pm)
+
+        self.assertEqual(400, raised.exception.status_code)
+        self.assertIn("redeemed manually on polymarket.com", raised.exception.detail)
+        self.assertNotIn("redeem automatically", raised.exception.detail)
+
     async def test_request_position_notifier_receives_event(self):
         notifier = AsyncMock()
         request = SimpleNamespace(app=SimpleNamespace(
@@ -95,6 +133,7 @@ class CloseSlippageContractTests(unittest.IsolatedAsyncioTestCase):
                 body, SimpleNamespace(), user={"id": "user"}, db=db, pmc=pm)
 
         self.assertFalse(response["ok"])
+        self.assertIsNotNone(response["position_id"])
         self.assertEqual(7.5, place.await_args.kwargs["max_slippage_pct"])
 
     async def test_managed_close_passes_selected_slippage_to_execution(self):
@@ -119,6 +158,7 @@ class CloseSlippageContractTests(unittest.IsolatedAsyncioTestCase):
                 user={"id": "user"}, db=db, pmc=FakePositionsPM())
 
         self.assertFalse(response["ok"])
+        self.assertEqual("position", response["position_id"])
         self.assertEqual(4.5, place.await_args.kwargs["max_slippage_pct"])
 
     def test_close_slippage_rejects_values_outside_zero_to_ten(self):

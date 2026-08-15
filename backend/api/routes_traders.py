@@ -83,14 +83,15 @@ async def _wait_for_trader_submissions(db, user_id: str, address: str) -> None:
 # handed out unmetered DB reads (and, on /{address}, 3-8 upstream API calls +
 # cache writes per hit) to anyone who found the tunnel URL.
 @router.get("/leaderboard")
-async def leaderboard(request: Request, sort: str = "consistency", limit: int = 50,
+async def leaderboard(request: Request, sort: str = "pnl_30d", limit: int = 50,
                       offset: int = 0, search: str | None = None,
                       user=Depends(get_current_user), db=Depends(get_db)):
     """Leaderboard / wallet screener. Any number of `<column>_min` / `<column>_max`
     query params (see `trader_stats._FILTERABLE_COLUMNS`) combine with AND — e.g.
     `?winrate_30d_min=0.6&pnl_30d_min=500&fill_exit_ratio_30d_min=50` filters
     simultaneously on 30d win rate, 30d pnl, and 30d exit-to-fill ratio.
-    `search` substring-matches address / display name / X username."""
+    Default sort: `pnl_30d`. `search` substring-matches address / display name /
+    X username."""
     limit = max(1, min(int(limit), 200))
     offset = max(0, int(offset))
     filters = trader_stats.parse_screener_filters(request.query_params)
@@ -123,12 +124,10 @@ async def trader_profile(address: str, user=Depends(get_current_user),
     address = address.lower()
     if not _ADDR_RE.match(address):
         raise HTTPException(400, "invalid wallet address (expected 0x + 40 hex)")
-    stats = await trader_stats.refresh_trader_stats(address, db, pmc)
-    positions = await pmc.get_positions(address, size_threshold=0)
-    trades = await pmc.get_trade_history(address, limit=25)
-    return {**stats,
-            "positions": [asdict(p) for p in positions],
-            "recent_trades": [asdict(t) for t in trades]}
+    analysis = await trader_stats.refresh_trader_analysis(address, db, pmc)
+    return {**analysis.stats,
+            "positions": [asdict(p) for p in analysis.positions],
+            "recent_trades": [asdict(t) for t in analysis.recent_trades]}
 
 
 @router.post("/{address}/follow")
