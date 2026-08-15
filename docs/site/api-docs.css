@@ -1,10 +1,10 @@
 /* API reference aligned to the main PolyTrade documentation system. */
 :root {
-  --api-get: #2563eb;
-  --api-post: #16a34a;
-  --api-delete: #dc2626;
-  --api-write: #b45309;
-  --api-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --api-get: #087a4b;
+  --api-post: #0b9e63;
+  --api-delete: #b02a38;
+  --api-write: #8a5d06;
+  --api-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
 .api-topbar { top: 0; }
