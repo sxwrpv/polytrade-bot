@@ -1,5 +1,6 @@
 import { useId, useState } from 'react'
 import { api, haptic } from '../api'
+import { trackTelemetry } from '../telemetry'
 import Modal from './Modal'
 import TraderAnalysis from './TraderAnalysis'
 import { discoveryMetrics, formatActivePositions, formatMoney } from './traderCardModel'
@@ -31,6 +32,18 @@ export default function TraderCard({ t, period = '30d', onFollowed, balance }) {
     ? t.display_name
     : 'UNNAMED TRADER'
   const freshness = refreshedLabel(metrics.refreshedAt)
+
+  const toggleAnalysis = () => {
+    if (!expanded) {
+      trackTelemetry('wallet_analysis_opened', { period, source: 'screener' })
+    }
+    setExpanded((current) => !current)
+  }
+
+  const openCopySettings = () => {
+    setOpen(true)
+    trackTelemetry('copy_settings_opened', { source: 'analysis' })
+  }
 
   async function follow() {
     setMsg('')
@@ -100,7 +113,7 @@ export default function TraderCard({ t, period = '30d', onFollowed, balance }) {
           className="btn"
           aria-expanded={expanded}
           aria-controls={analysisRegionId}
-          onClick={() => setExpanded((current) => !current)}
+          onClick={toggleAnalysis}
         >
           {expanded ? 'HIDE ANALYSIS' : 'ANALYZE'}
         </button>
@@ -114,7 +127,7 @@ export default function TraderCard({ t, period = '30d', onFollowed, balance }) {
           aria-label="Trader analysis"
         >
           <TraderAnalysis address={t.address} trader={t} period={period} />
-          <button className="btn btn-ghost tc-copy-settings" onClick={() => setOpen(true)}>COPY SETTINGS</button>
+          <button className="btn btn-ghost tc-copy-settings" onClick={openCopySettings}>COPY SETTINGS</button>
         </div>
       )}
 

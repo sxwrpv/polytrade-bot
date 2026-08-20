@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api'
+import { trackTelemetry } from '../telemetry'
 import FilterSlider from './FilterSlider'
 import Folder from './Folder'
 import TraderCard from './TraderCard'
@@ -25,8 +26,14 @@ export default function WalletScreener({ onFollowed, balance }) {
   const [checked, setChecked] = useState(null)
   const [checking, setChecking] = useState(false)
   const [checkErr, setCheckErr] = useState(null)
+  const lastTrackedSearchRef = useRef('')
   const searchAddr = /^0x[0-9a-fA-F]{40}$/.test(search.trim()) ? search.trim().toLowerCase() : null
 
+  const selectPeriod = (value) => {
+    if (value === period) return
+    setPeriod(value)
+    trackTelemetry('period_changed', { period: value, source: 'screener' })
+  }
   const setFilter = (key, value) => setFilters((current) => ({ ...current, [key]: value }))
   const clearChip = (key) => {
     if (key === 'includePartialHistory') setIncludePartialHistory(true)
@@ -57,6 +64,24 @@ export default function WalletScreener({ onFollowed, balance }) {
       clearTimeout(timer)
     }
   }, [params])
+
+  useEffect(() => {
+    const term = search.trim()
+    if (!term) {
+      lastTrackedSearchRef.current = ''
+      return undefined
+    }
+    const timer = setTimeout(() => {
+      if (lastTrackedSearchRef.current === term) return
+      lastTrackedSearchRef.current = term
+      trackTelemetry('screener_search_submitted', {
+        query_kind: /^0x[0-9a-fA-F]{40}$/.test(term) ? 'address' : 'text',
+        period,
+        active_filters: activeFilterChips({ period, includePartialHistory, filters }).length > 0,
+      })
+    }, 600)
+    return () => clearTimeout(timer)
+  }, [filters, includePartialHistory, period, search])
 
   // Live wallet check fires once the debounced cache search settles empty.
   useEffect(() => {
@@ -107,7 +132,7 @@ export default function WalletScreener({ onFollowed, balance }) {
               <button
                 key={value}
                 className={`chip ${period === value ? 'active' : ''}`}
-                onClick={() => setPeriod(value)}
+                onClick={() => selectPeriod(value)}
                 aria-pressed={period === value}
               >
                 {value.toUpperCase()}
@@ -162,7 +187,14 @@ export default function WalletScreener({ onFollowed, balance }) {
           </span>
         </label>
 
-        <details className="advanced-filters">
+        <details
+          className="advanced-filters"
+          onToggle={(event) => {
+            if (event.currentTarget.open) {
+              trackTelemetry('advanced_filters_opened', { period })
+            }
+          }}
+        >
           <summary>ADVANCED FILTERS</summary>
           <div className="filter-grid">
             <div>

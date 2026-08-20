@@ -84,6 +84,9 @@ export const api = {
   follow: (addr, body) => req(`/traders/${addr}/follow`, { method: 'POST', body: JSON.stringify(body) }),
   followSettings: (addr, body) => req(`/traders/${addr}/settings`, { method: 'POST', body: JSON.stringify(body) }),
   unfollow: (addr) => req(`/traders/${addr}/follow`, { method: 'DELETE' }),
+  telemetryEvent: (body) => req('/telemetry/events', {
+    method: 'POST', body: JSON.stringify(body),
+  }),
   // positions
   openPositions: () => req('/positions/open'),
   closedPositions: () => req('/positions/closed'),

@@ -154,6 +154,19 @@ CREATE TABLE IF NOT EXISTS equity_snapshots (
 CREATE INDEX IF NOT EXISTS idx_equity_snapshots_user_ts
     ON equity_snapshots(user_id, ts);
 
+-- Privacy-minimized product telemetry. Authentication gates ingestion, but no
+-- account, wallet, IP, Telegram, cookie, query text, or user-agent is retained.
+CREATE TABLE IF NOT EXISTS product_events (
+    id              TEXT PRIMARY KEY,
+    session_id      TEXT NOT NULL,
+    event_name      TEXT NOT NULL,
+    properties_json TEXT NOT NULL,
+    ts              TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_product_events_name_ts
+    ON product_events(event_name, ts);
+CREATE INDEX IF NOT EXISTS idx_product_events_ts ON product_events(ts);
+
 CREATE TABLE IF NOT EXISTS trader_cache (
     address           TEXT PRIMARY KEY,                -- proxyWallet
     display_name      TEXT,                            -- userName
@@ -228,7 +241,7 @@ CREATE INDEX IF NOT EXISTS idx_trader_cache_fill_exit_ratio_30d ON trader_cache(
 
 TABLES = ("users", "user_consents", "funding_acknowledgements",
           "wallet_creation_claims", "followed_traders", "copy_positions",
-          "copy_open_claims", "trade_events", "trader_cache")
+          "copy_open_claims", "trade_events", "product_events", "trader_cache")
 
 # Idempotent ALTERs for DBs created before a column existed (CREATE TABLE IF NOT
 # EXISTS won't add columns to an existing table). Applied at startup; "duplicate
@@ -481,6 +494,17 @@ CREATE TABLE IF NOT EXISTS equity_snapshots (
     realized_pnl    DOUBLE PRECISION,
     unrealized_pnl  DOUBLE PRECISION
 );
+
+CREATE TABLE IF NOT EXISTS product_events (
+    id              TEXT PRIMARY KEY,
+    session_id      TEXT NOT NULL,
+    event_name      TEXT NOT NULL,
+    properties_json TEXT NOT NULL,
+    ts              TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_product_events_name_ts
+    ON product_events(event_name, ts);
+CREATE INDEX IF NOT EXISTS idx_product_events_ts ON product_events(ts);
 
 CREATE TABLE IF NOT EXISTS trader_cache (
     address           TEXT PRIMARY KEY,
