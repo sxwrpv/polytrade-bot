@@ -79,7 +79,7 @@ export default function App() {
 
   return (
     <div className="app">
-      <header className="app-header"><span className="brand-mark mini">P</span> POLYTRADE</header>
+      <header className="app-header">POLYTRADE</header>
       <div className="content">
         {tab === 'home' && <Home />}
         {tab === 'positions' && <Positions />}
