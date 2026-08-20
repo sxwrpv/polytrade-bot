@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { api, haptic } from '../api'
+import { buildCloseOutcomeTelemetry, trackTelemetry } from '../telemetry'
 import PositionCard from '../components/PositionCard'
 import ActivityFeed from '../components/ActivityFeed'
 import Modal from '../components/Modal'
@@ -63,6 +64,7 @@ export default function Positions() {
   const mountedRef = useRef(false)
   const submissionGuard = useRef(createCloseSubmissionGuard())
   const pageContainerRef = useRef(null)
+  const closeSubmittedAtRef = useRef(null)
 
   useEffect(() => {
     mountedRef.current = true
@@ -117,6 +119,20 @@ export default function Positions() {
     return next
   }, [])
 
+  const trackCloseOutcome = useCallback((event) => {
+    const outcome = buildCloseOutcomeTelemetry(
+      event,
+      closeSubmittedAtRef.current,
+      Date.now(),
+    )
+    if (!outcome) {
+      if (event === CLOSE_POSITION_EVENT.TARGET_CHANGED) closeSubmittedAtRef.current = null
+      return
+    }
+    trackTelemetry(outcome.eventName, outcome.properties)
+    if (outcome.terminal) closeSubmittedAtRef.current = null
+  }, [])
+
   const handleRequestClose = useCallback((position) => {
     const requested = requestClosePosition(closeStateRef.current, closeTargetRef.current, position)
     if (requested.state === closeStateRef.current) return
@@ -130,9 +146,11 @@ export default function Positions() {
     setReconciliationRefreshOk(false)
     setCloseSlippage(2)
     setCloseState(requested.state)
+    trackTelemetry('close_modal_opened', { source: 'positions' })
   }, [])
 
   const handleDismissClose = useCallback(() => {
+    const dismissedState = closeStateRef.current
     const next = dismissClosePosition(
       closeStateRef.current,
       'backdrop',
@@ -142,6 +160,8 @@ export default function Positions() {
       reconciliationRefreshOk,
     )
     if (next === closeStateRef.current) return
+    trackTelemetry('modal_dismissed', { state: dismissedState, source: 'positions' })
+    closeSubmittedAtRef.current = null
     closeStateRef.current = next
     closeOperationGenerationRef.current += 1
     closeRefreshSequenceRef.current += 1
@@ -196,7 +216,10 @@ export default function Positions() {
       }
       setReconciliationRefreshOk(Boolean(result.allowDismiss))
       setCloseDetail(result.detail || UNCERTAIN_EXECUTION_DETAIL)
-      if (result.event) transitionClose(result.event)
+      if (result.event) {
+        transitionClose(result.event)
+        trackCloseOutcome(result.event)
+      }
       return result
     } finally {
       if (refreshSequence === closeRefreshSequenceRef.current && mountedRef.current) {
@@ -218,6 +241,8 @@ export default function Positions() {
     }
 
     transitionClose(event)
+    closeSubmittedAtRef.current = Date.now()
+    trackTelemetry('close_submitted', { source: 'positions' })
     setCloseDetail('')
     const result = await executeFreshCloseAttempt({
       guard: submissionGuard.current,
@@ -238,18 +263,22 @@ export default function Positions() {
       haptic,
       refresh: load,
     })
-    if (!result.accepted || !mountedRef.current) return
+    if (!result.accepted || !mountedRef.current) {
+      closeSubmittedAtRef.current = null
+      return
+    }
     if (result.value.target) {
       closeTargetRef.current = result.value.target
       setCloseTarget(result.value.target)
     }
     setCloseDetail(result.value.detail)
     transitionClose(result.value.event)
+    trackCloseOutcome(result.value.event)
     if (result.value.event === CLOSE_POSITION_EVENT.UNCERTAIN_EXECUTION) {
       setReconciliationRefreshOk(false)
       await refreshCloseStatus()
     }
-  }, [closeSlippage, closeTarget, load, refreshCloseStatus, transitionClose])
+  }, [closeSlippage, closeTarget, load, refreshCloseStatus, trackCloseOutcome, transitionClose])
 
   const canSubmitClose = closeState === CLOSE_POSITION_STATE.CONFIRMING
     || closeState === CLOSE_POSITION_STATE.REJECTED

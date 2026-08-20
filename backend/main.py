@@ -21,12 +21,14 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from backend.config import CORS_ALLOW_ORIGINS, DB_PATH, ENCRYPTION_SECRET, TELEGRAM_BOT_TOKEN
-from backend.core import auth, equity, runtime_security, trader_stats, wallet
+from backend.core import auth, equity, runtime_security, telemetry, trader_stats, wallet
 from backend.core.copy_engine import CopyEngine
 from backend.core.polymarket import PolymarketClient
 from backend.core.telegram_alerts import TelegramPositionNotifier
 from backend.db.database import Database
-from backend.api import routes_auth, routes_positions, routes_traders, routes_user
+from backend.api import (
+    routes_auth, routes_positions, routes_telemetry, routes_traders, routes_user,
+)
 
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO").upper(),
@@ -100,6 +102,24 @@ async def _stats_refresh_loop(db, pm, stop: asyncio.Event) -> None:
             pass
 
 
+async def _telemetry_retention_loop(db, stop: asyncio.Event) -> None:
+    """Enforce the 90-day privacy window throughout long-running deployments."""
+    interval = 60 * 60
+    while not stop.is_set():
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=interval)
+        except asyncio.TimeoutError:
+            pass
+        if stop.is_set():
+            break
+        try:
+            pruned = await telemetry.prune_product_events(db, retention_days=90)
+            if pruned:
+                log.info("product telemetry: pruned %d expired event(s)", pruned)
+        except Exception:
+            log.exception("product telemetry retention prune failed (continuing)")
+
+
 async def _equity_snapshot_loop(app, stop: asyncio.Event) -> None:
     """Snapshot every user's equity on a fixed cadence (default 5 min) so the
     Performance chart has a dense, market-moving time series. Reuses the API's
@@ -158,6 +178,10 @@ async def lifespan(app: FastAPI):
     db = Database()
     await db.connect()
     await db.init()
+    # Fail closed before accepting requests: a restarted deployment must not
+    # serve while expired privacy telemetry is still present. The hourly loop
+    # below bounds cleanup drift during normal uptime.
+    await telemetry.prune_product_events(db, retention_days=90)
     # One-way cutover to hashed, expiring sessions: any surviving plaintext or
     # non-expiring token is a credential that a DB leak could replay, so it is
     # destroyed rather than migrated. Everyone signs in again — Telegram users
@@ -181,6 +205,7 @@ async def lifespan(app: FastAPI):
 
     stop = asyncio.Event()
     tasks: list[asyncio.Task] = []
+    tasks.append(asyncio.create_task(_telemetry_retention_loop(db, stop)))
     if os.environ.get("COPY_ENGINE_AUTOSTART", "1") == "1":
         from backend.config import POLYGON_RPC_URL
         from backend.core import detection
@@ -246,6 +271,7 @@ app.include_router(routes_auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(routes_user.router, prefix="/api/user", tags=["user"])
 app.include_router(routes_traders.router, prefix="/api/traders", tags=["traders"])
 app.include_router(routes_positions.router, prefix="/api/positions", tags=["positions"])
+app.include_router(routes_telemetry.router, prefix="/api/telemetry", tags=["telemetry"])
 
 
 @app.get("/api/docs", include_in_schema=False)
