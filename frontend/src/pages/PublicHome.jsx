@@ -45,7 +45,7 @@ export default function PublicHome() {
     <div className="public-site">
       <header className="public-nav">
         <a className="public-brand" href="#top" aria-label="PolyTrade home">
-          <span className="brand-mark">P</span><span>PolyTrade</span>
+          <img className="brand-logo" src="/brand/polytrade-mark.png" alt="" /><span>PolyTrade</span>
         </a>
         <a className="public-nav-link" href="#speed">Speed</a>
         <a className="public-nav-link" href="#how-it-works">How it works</a>
@@ -188,7 +188,7 @@ export default function PublicHome() {
       </main>
 
       <footer className="public-footer public-wrap">
-        <a className="public-brand" href="#top"><span className="brand-mark">P</span><span>PolyTrade</span></a>
+        <a className="public-brand" href="#top"><img className="brand-logo" src="/brand/polytrade-mark.png" alt="" /><span>PolyTrade</span></a>
         <p>Copy trading infrastructure for Polymarket. Not financial advice.</p>
         <div><a href="/docs">Documentation</a><a href="/docs/risk-and-security">Risk &amp; security</a><a href={BOT_URL}>Telegram</a></div>
         <small>© {new Date().getFullYear()} PolyTrade</small>
@@ -217,7 +217,7 @@ function LiveDemo() {
       <div className="preview-label">ILLUSTRATIVE — NOT LIVE MARKET DATA</div>
       <div className="demo-shell">
         <div className="demo-head">
-          <span><b>P</b> PolyTrade</span>
+          <span><img className="brand-logo" src="/brand/polytrade-mark.png" alt="" /> PolyTrade</span>
           <i className="demo-live">COPY ENGINE</i>
         </div>
         <div className="demo-steps">

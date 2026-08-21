@@ -52,7 +52,7 @@ export default function App() {
   if (launch.mode === 'telegram-error') {
     return (
       <div className="onboard launch-state card">
-        <div className="logo"><span>P</span> PolyTrade</div>
+        <div className="logo"><img className="brand-logo" src="/brand/polytrade-mark.png" alt="" /> PolyTrade</div>
         <div className="section-header">TELEGRAM SIGN-IN</div>
         <h1>We couldn’t verify this launch.</h1>
         <p className="muted">{launch.message} Return to @cpolytrade_bot and open the app again, or retry below.</p>
@@ -64,7 +64,7 @@ export default function App() {
   if (launch.mode === 'session-error') {
     return (
       <div className="onboard launch-state card" role="alert">
-        <div className="logo"><span>P</span> PolyTrade</div>
+        <div className="logo"><img className="brand-logo" src="/brand/polytrade-mark.png" alt="" /> PolyTrade</div>
         <div className="section-header">SESSION CHECK</div>
         <h1>We couldn’t verify your session.</h1>
         <p className="muted">{launch.message}</p>
@@ -93,5 +93,5 @@ export default function App() {
 }
 
 function LaunchLoading() {
-  return <div className="onboard launch-loading" role="status" aria-live="polite"><div className="logo"><span>P</span> PolyTrade</div><div className="muted">Checking your session…</div></div>
+  return <div className="onboard launch-loading" role="status" aria-live="polite"><div className="logo"><img className="brand-logo" src="/brand/polytrade-mark.png" alt="" /> PolyTrade</div><div className="muted">Checking your session…</div></div>
 }

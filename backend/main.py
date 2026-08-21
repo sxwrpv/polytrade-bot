@@ -304,7 +304,7 @@ async def api_documentation():
         '<meta name="theme-color" content="#eef2ef">\n'
         '<link rel="preconnect" href="https://fonts.googleapis.com">\n'
         '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>\n'
-        '<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">\n'
+        '<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">\n'
         '<link rel="stylesheet" href="/docs/assets/styles.css">\n'
         '<link rel="stylesheet" href="/docs/assets/api-docs.css">\n'
         "</head>",
@@ -312,7 +312,7 @@ async def api_documentation():
         '<body>\n    <div id="swagger-ui">',
         '<body>\n'
         '<header class="topbar api-topbar">\n'
-        '  <a class="brand" href="/docs"><span class="brand-mark">P</span><span>PolyTrade</span><span class="brand-divider"></span><span class="brand-docs">API Reference</span></a>\n'
+        '  <a class="brand" href="/docs"><img class="brand-logo" src="/docs/assets/polytrade-mark.png" alt=""><span>PolyTrade</span><span class="brand-divider"></span><span class="brand-docs">API Reference</span></a>\n'
         '  <div class="top-actions"><nav class="header-links" aria-label="Header links"><a href="https://t.me/cpolytrade_bot">Open Telegram bot</a><a href="/docs/developers">Developers</a><a href="/api/openapi.json">OpenAPI JSON</a><a href="https://github.com/sxwrpv/polytrade-bot">GitHub</a></nav>'
         '  <button class="theme-toggle" id="api-theme-toggle" aria-label="Toggle color theme"><svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v2m0 14v2M3 12h2m14 0h2M5.64 5.64l1.42 1.42m9.88 9.88 1.42 1.42m0-12.72-1.42 1.42M7.06 16.94l-1.42 1.42M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0Z"/></svg><svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 15.5A8.5 8.5 0 0 1 8.5 4 8.5 8.5 0 1 0 20 15.5Z"/></svg></button></div>\n'
         '</header>\n'

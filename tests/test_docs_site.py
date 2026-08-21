@@ -112,6 +112,27 @@ def test_docs_assets_are_available_from_a_dedicated_mount():
     assert "--banner-h" not in styles.text
 
 
+def test_brand_mark_and_typography_are_consistent_across_docs_surfaces():
+    docs = client.get("/docs")
+    api_docs = client.get("/api/docs")
+    mark = client.get("/docs/assets/polytrade-mark.png")
+    navigation = client.get("/docs/assets/app.js").text
+
+    for response in (docs, api_docs):
+        assert 'src="/docs/assets/polytrade-mark.png"' in response.text
+        assert 'class="brand-mark">P<' not in response.text
+
+    assert "family=Instrument+Serif" in api_docs.text
+    assert mark.status_code == 200
+    assert mark.headers["content-type"] == "image/png"
+    assert len(mark.content) > 1_000
+
+    # Glossary remains useful reference material in the sidebar/search corpus;
+    # it does not need a competing top-header tab.
+    assert "['glossary', 'Glossary', 'glossary.md']" in navigation
+    assert '>Glossary</a>' not in docs.text
+
+
 def test_existing_documentation_urls_remain_available():
     existing_slugs = {
         "overview",
