@@ -225,7 +225,3 @@ resolving is a hard failure for those clients, not a silent one.
 - [ ] Engine, claims, disk, logs, DNS, and TLS are monitored.
 - [ ] Telegram menu targets production HTTPS.
 - [ ] Pause and rotation procedures are documented.
-
-## Legacy Mac mini path
-
-`deploy/macmini/` contains local launchd/ngrok tooling. It is not production. Never start it while the cloud engine is active.
