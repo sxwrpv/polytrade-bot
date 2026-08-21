@@ -122,6 +122,33 @@ test('landing explains the product with diagrams, not more generic cards', async
   assert.match(home, /\/docs\/system-design/)
 })
 
+test('public landing gives the standalone Wallet Screener its own discoverable section', async () => {
+  const home = await read('src/pages/PublicHome.jsx')
+  const start = home.indexOf('id="wallet-screener"')
+  const end = home.indexOf('</section>', start)
+
+  assert.ok(start > 0, 'missing dedicated Wallet Screener section')
+  const section = home.slice(start, end)
+  assert.match(section, /href="\/screener"/)
+  assert.match(section, /Open Wallet Screener/)
+  assert.match(section, /public history/i)
+
+  const nav = home.slice(home.indexOf('public-nav'), home.indexOf('</header>'))
+  assert.match(nav, /href="\/screener"/)
+  assert.doesNotMatch(section, /INSIDE THE APP/)
+})
+
+test('public landing makes the full System Design documentation easy to discover', async () => {
+  const home = await read('src/pages/PublicHome.jsx')
+  const nav = home.slice(home.indexOf('public-nav'), home.indexOf('</header>'))
+  const pipeline = home.slice(home.indexOf('id="how-it-works"'), home.indexOf('</section>', home.indexOf('id="how-it-works"')))
+
+  assert.match(nav, /href="\/docs\/system-design"[^>]*>System Design/)
+  assert.match(pipeline, /href="\/docs\/system-design"/)
+  assert.match(pipeline, /Explore full System Design/)
+  assert.match(pipeline, /seven architecture diagrams/i)
+})
+
 test('landing keeps the factual, risk-aware copy and illustrative labelling', async () => {
   const home = await read('src/pages/PublicHome.jsx')
 
