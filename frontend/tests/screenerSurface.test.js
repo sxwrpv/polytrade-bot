@@ -10,6 +10,7 @@ import {
   SORTS,
   SUPPORTS_WALLET_DEEP_LINK,
   botDeepLink,
+  activeFilterChips,
   buildPublicQuery,
   coverageLabel,
   formatMetric,
@@ -40,6 +41,89 @@ test('the public query is period-aware and omits inactive filters', () => {
   assert.equal(
     buildPublicQuery({ completeHistoryOnly: true }).complete_history_only, true,
   )
+})
+
+test('the advanced filters carried over from the retired in-app screener still work', () => {
+  // Both metrics are computed, stored and indexed by the stats loop; only the
+  // public surface previously lacked a way to filter on them.
+  assert.equal(DEFAULT_FILTERS.consistencyRatioMin, '')
+  assert.equal(DEFAULT_FILTERS.fillExitMin, '')
+  assert.equal(DEFAULT_FILTERS.fillExitMax, '')
+
+  // Positive close-day ratio: percent in the UI, 0..1 fraction on the wire.
+  assert.equal(
+    buildPublicQuery({ filters: { ...DEFAULT_FILTERS, consistencyRatioMin: '75' } })
+      .consistency_ratio_min,
+    0.75,
+  )
+  // Sell/buy event count is a percentage on both sides, so it is NOT rescaled.
+  const banded = buildPublicQuery({
+    filters: { ...DEFAULT_FILTERS, fillExitMin: '50', fillExitMax: '150' },
+  })
+  assert.equal(banded.fill_exit_ratio_min, 50)
+  assert.equal(banded.fill_exit_ratio_max, 150)
+
+  // Inactive advanced filters are omitted rather than sent as zero.
+  assert.deepEqual(buildPublicQuery(), { period: '30d', sort: 'pnl', limit: 50 })
+})
+
+test('the advanced filter chips describe the metric truthfully', () => {
+  const chips = activeFilterChips({
+    period: '90d',
+    filters: {
+      ...DEFAULT_FILTERS, consistencyRatioMin: '70', fillExitMin: '25', fillExitMax: '175',
+    },
+  })
+  const labels = Object.fromEntries(chips)
+
+  assert.equal(labels.consistencyRatioMin, 'Positive close-day ratio 90D ≥ 70%')
+  // "Event count", not "close rate": it counts activity rows, not positions.
+  assert.equal(labels.fillExitMin, 'Sell / buy event count 90D ≥ 25%')
+  assert.equal(labels.fillExitMax, 'Sell / buy event count 90D ≤ 175%')
+  // Every chip is individually clearable by its own state key.
+  for (const [key] of chips) assert.ok(key in DEFAULT_FILTERS, key)
+})
+
+test('a percentage already stored as a percentage is not multiplied again', () => {
+  // consistency_ratio arrives as 0..1; fill_exit_ratio arrives as 0..N percent.
+  assert.equal(formatMetric(0.75, 'percent'), '75%')
+  assert.equal(formatMetric(90, 'percentValue'), '90%')
+  // A ratio above 100% is legitimate — more SELL rows than BUY rows.
+  assert.equal(formatMetric(400, 'percentValue'), '400%')
+  assert.equal(formatMetric(null, 'percentValue'), '—')
+})
+
+test('the advanced metrics reach the rows behind their own filters', () => {
+  const [row] = walletRows({
+    period_days: 30,
+    wallets: [{
+      address: '0x' + 'a1'.repeat(20),
+      consistency_ratio: 0.75,
+      fill_exit_ratio: 90,
+      history_days: 30,
+    }],
+  })
+
+  assert.equal(row.consistencyRatio, 0.75)
+  assert.equal(row.fillExitRatio, 90)
+  // Absent stays absent rather than becoming zero.
+  const [bare] = walletRows({ period_days: 30, wallets: [{ address: '0x0' }] })
+  assert.equal(bare.consistencyRatio, null)
+  assert.equal(bare.fillExitRatio, null)
+})
+
+test('the screener page exposes the advanced filters and the values behind them', async () => {
+  const page = await read('src/screener/ScreenerPage.jsx')
+
+  assert.match(page, /consistencyRatioMin/)
+  assert.match(page, /fillExitMin/)
+  assert.match(page, /fillExitMax/)
+  // A threshold the reader cannot see the value behind asserts something they
+  // cannot check, so both metrics are shown on the selected wallet.
+  assert.match(page, /row\.consistencyRatio/)
+  assert.match(page, /row\.fillExitRatio/)
+  // And the page states what the sell/buy ratio is not.
+  assert.match(page, /not an order, position, share, or capital\s+close rate/)
 })
 
 test('a rejected sort or period never silently becomes a different query', () => {

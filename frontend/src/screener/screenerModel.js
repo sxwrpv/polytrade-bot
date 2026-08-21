@@ -21,6 +21,9 @@ export const DEFAULT_FILTERS = Object.freeze({
   pnlMin: '',
   winrateMin: '',
   volumeMin: '',
+  consistencyRatioMin: '',
+  fillExitMin: '',
+  fillExitMax: '',
 })
 
 const BOT_URL = 'https://t.me/cpolytrade_bot'
@@ -62,6 +65,16 @@ export function buildPublicQuery({
   if (winrate !== null) query.winrate_min = winrate / 100
   const volume = finiteFilter(filters.volumeMin)
   if (volume !== null) query.volume_min = volume
+  // Positive close-day ratio is a percentage in the UI and a 0..1 fraction on
+  // the wire, the same split win rate uses.
+  const consistency = finiteFilter(filters.consistencyRatioMin)
+  if (consistency !== null) query.consistency_ratio_min = consistency / 100
+  // Sell/buy event count is already a percentage on both sides, so it travels
+  // unscaled — 100 means one SELL row per BUY row.
+  const fillExitMin = finiteFilter(filters.fillExitMin)
+  if (fillExitMin !== null) query.fill_exit_ratio_min = fillExitMin
+  const fillExitMax = finiteFilter(filters.fillExitMax)
+  if (fillExitMax !== null) query.fill_exit_ratio_max = fillExitMax
   if (completeHistoryOnly) query.complete_history_only = true
 
   return query
@@ -78,6 +91,9 @@ export function activeFilterChips({ filters = DEFAULT_FILTERS, period = DEFAULT_
   add('pnlMin', (n) => `PnL ${label} ≥ $${n}`)
   add('winrateMin', (n) => `Win rate ${label} ≥ ${n}%`)
   add('volumeMin', (n) => `Volume ${label} ≥ $${n}`)
+  add('consistencyRatioMin', (n) => `Positive close-day ratio ${label} ≥ ${n}%`)
+  add('fillExitMin', (n) => `Sell / buy event count ${label} ≥ ${n}%`)
+  add('fillExitMax', (n) => `Sell / buy event count ${label} ≤ ${n}%`)
   if (completeHistoryOnly) chips.push(['completeHistoryOnly', `Fetched history ≥ ${parseInt(period, 10)}D`])
   return chips
 }
@@ -91,6 +107,8 @@ export function formatMetric(value, kind = 'money') {
   if (value == null || !Number.isFinite(Number(value))) return UNAVAILABLE
   const number = Number(value)
   if (kind === 'percent') return `${Math.round(number * 100)}%`
+  // Already a percentage in the cache (SELL rows / BUY rows * 100).
+  if (kind === 'percentValue') return `${Math.round(number)}%`
   if (kind === 'count') return String(Math.round(number))
   const sign = number < 0 ? '-' : ''
   const magnitude = Math.abs(number)
@@ -130,6 +148,8 @@ export function walletRows(payload) {
       winRate: wallet.win_rate ?? null,
       volume: wallet.volume ?? null,
       activePositions: wallet.active_positions ?? null,
+      consistencyRatio: wallet.consistency_ratio ?? null,
+      fillExitRatio: wallet.fill_exit_ratio ?? null,
       historyDays: wallet.history_days ?? null,
       historyPartial: Boolean(wallet.history_partial),
       coverage: coverageLabel(withPeriod),

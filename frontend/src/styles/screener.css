@@ -108,6 +108,8 @@
   border: 1px solid var(--border); border-radius: var(--r-md);
   background: var(--bg); color: var(--text); font-family: var(--mono); font-size: 12px;
 }
+.filter-hint { color: var(--muted); font-size: 11px; line-height: 1.55; }
+
 .filter-check { display: flex; gap: 10px; align-items: flex-start; cursor: pointer; }
 .filter-check input { width: 16px; height: 16px; margin-top: 2px; accent-color: var(--green); flex: none; }
 .filter-check strong { display: block; font-size: 12px; }

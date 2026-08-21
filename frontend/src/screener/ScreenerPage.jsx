@@ -161,6 +161,24 @@ export default function ScreenerPage() {
                 id="f-volume" label={`Volume ${period.toUpperCase()} ≥ $`}
                 value={filters.volumeMin} onChange={(v) => setFilter('volumeMin', v)}
               />
+              <NumberFilter
+                id="f-consistency"
+                label={`Positive close-day ratio ${period.toUpperCase()} ≥ %`}
+                value={filters.consistencyRatioMin}
+                onChange={(v) => setFilter('consistencyRatioMin', v)}
+                hint="Days with positive realized PnL as a share of days with non-zero realized PnL. Days that netted exactly zero are excluded."
+              />
+              <NumberFilter
+                id="f-fillexit-min"
+                label={`Sell / buy event count ${period.toUpperCase()} ≥ %`}
+                value={filters.fillExitMin} onChange={(v) => setFilter('fillExitMin', v)}
+                hint="Fetched SELL activity rows per 100 BUY rows. An activity-frequency ratio, not a capital close rate."
+              />
+              <NumberFilter
+                id="f-fillexit-max"
+                label={`Sell / buy event count ${period.toUpperCase()} ≤ %`}
+                value={filters.fillExitMax} onChange={(v) => setFilter('fillExitMax', v)}
+              />
               <label className="filter-check">
                 <input
                   type="checkbox" checked={completeHistoryOnly}
@@ -236,14 +254,17 @@ export default function ScreenerPage() {
   )
 }
 
-function NumberFilter({ id, label, value, onChange }) {
+function NumberFilter({ id, label, value, onChange, hint = '' }) {
+  const hintId = hint ? `${id}-hint` : undefined
   return (
     <div className="filter-field">
       <label htmlFor={id}>{label}</label>
       <input
         id={id} type="number" inputMode="decimal" value={value}
-        placeholder="off" onChange={(event) => onChange(event.target.value)}
+        placeholder="off" aria-describedby={hintId}
+        onChange={(event) => onChange(event.target.value)}
       />
+      {hint && <small id={hintId} className="filter-hint">{hint}</small>}
     </div>
   )
 }
@@ -317,6 +338,14 @@ function WalletAnalysis({ row, period, onClose }) {
         <div><dt>Win rate · {label}</dt><dd>{formatMetric(row.winRate, 'percent')}</dd></div>
         <div><dt>Gross volume · {label}</dt><dd>{formatMetric(row.volume, 'money')}</dd></div>
         <div><dt>Active positions</dt><dd>{formatMetric(row.activePositions, 'count')}</dd></div>
+        <div>
+          <dt>Positive close-day ratio · {label}</dt>
+          <dd>{formatMetric(row.consistencyRatio, 'percent')}</dd>
+        </div>
+        <div>
+          <dt>Sell / buy event count · {label}</dt>
+          <dd>{formatMetric(row.fillExitRatio, 'percentValue')}</dd>
+        </div>
       </dl>
 
       <ul className="analysis-notes">
@@ -333,6 +362,15 @@ function WalletAnalysis({ row, period, onClose }) {
             : 'These statistics have not been recomputed yet, so period metrics are unavailable rather than zero.'}
         </li>
         <li>Win rate counts reconstructed closing events, not open positions.</li>
+        <li>
+          The sell / buy event count is fetched SELL activity rows per 100 BUY rows. It
+          is an activity-frequency ratio — not an order, position, share, or capital
+          close rate.
+        </li>
+        <li>
+          The positive close-day ratio excludes days that netted exactly zero realized
+          PnL, and days with no closings at all.
+        </li>
       </ul>
 
       <div className="analysis-actions">

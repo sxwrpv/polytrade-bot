@@ -10,6 +10,7 @@ these tests hold that line.
 from __future__ import annotations
 
 import inspect
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -36,10 +37,11 @@ class PublicScreenerTestBase(unittest.IsolatedAsyncioTestCase):
         await self.db.execute(
             "INSERT INTO trader_cache(address, display_name, x_username, verified, "
             "pnl_30d, winrate_30d, volume_30d, pnl_7d, open_positions, history_days, "
+            "consistency_ratio_30d, fill_exit_ratio_30d, "
             "stats_refreshed_at, last_refreshed) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (WALLET, "Alpha", "alpha_x", 1, 1234.5, 0.62, 90000.0, 12.0, 4, 30.0,
-             now_iso(), now_iso()))
+             0.75, 90.0, now_iso(), now_iso()))
         await self.db.execute(
             "INSERT INTO trader_cache(address, display_name, pnl_30d, history_days, "
             "last_refreshed) VALUES(?,?,?,?,?)",
@@ -194,8 +196,107 @@ class PrivacyTests(PublicScreenerTestBase):
             "address", "display_name", "x_username", "verified",
             "period", "period_days", "pnl", "win_rate", "volume",
             "active_positions", "history_days", "history_partial",
-            "stats_refreshed_at",
+            "consistency_ratio", "fill_exit_ratio", "stats_refreshed_at",
         }, set(wallet))
+
+
+class AdvancedFilterTests(PublicScreenerTestBase):
+    """The two filters carried over from the retired in-app screener.
+
+    Both metrics were already computed, stored and indexed; only the public
+    surface lacked a way to filter on them.
+    """
+
+    def addresses(self, query: str) -> list[str]:
+        response = self.client.get(f"/api/public/screener/wallets?{query}")
+        self.assertEqual(200, response.status_code, response.text)
+        return [w["address"] for w in response.json()["wallets"]]
+
+    def test_positive_close_day_ratio_filters_on_the_stored_fraction(self):
+        # Stored as 0.75. The wire contract is the fraction, not the percent.
+        self.assertIn(WALLET, self.addresses("period=30d&consistency_ratio_min=0.7"))
+        self.assertNotIn(WALLET, self.addresses("period=30d&consistency_ratio_min=0.8"))
+
+    def test_sell_buy_event_count_filters_on_a_percentage_band(self):
+        # Stored as 90.0, meaning 90 SELL rows per 100 BUY rows.
+        self.assertIn(WALLET, self.addresses(
+            "period=30d&fill_exit_ratio_min=50&fill_exit_ratio_max=150"))
+        self.assertNotIn(WALLET, self.addresses("period=30d&fill_exit_ratio_min=95"))
+        self.assertNotIn(WALLET, self.addresses("period=30d&fill_exit_ratio_max=85"))
+
+    def test_a_wallet_without_the_metric_is_excluded_rather_than_treated_as_zero(self):
+        # OTHER has null for both. A null must not satisfy ">= 0".
+        self.assertNotIn(OTHER, self.addresses("period=30d&consistency_ratio_min=0"))
+        self.assertNotIn(OTHER, self.addresses("period=30d&fill_exit_ratio_min=0"))
+        # Unfiltered, it is still listed — absence of a metric is not exclusion.
+        self.assertIn(OTHER, self.addresses("period=30d"))
+
+    def test_the_filters_are_period_aware(self):
+        # The metrics were only ever written for the 30d window here, so the
+        # same threshold must not match through a different period's column.
+        self.assertNotIn(WALLET, self.addresses("period=7d&consistency_ratio_min=0.7"))
+        self.assertNotIn(WALLET, self.addresses("period=7d&fill_exit_ratio_min=50"))
+
+    def test_an_out_of_range_ratio_is_rejected_rather_than_clamped(self):
+        # consistency_ratio is a 0..1 fraction; 70 is a percent typo, and
+        # silently clamping it would return a list that ignores the filter.
+        for query in ("consistency_ratio_min=70", "consistency_ratio_min=-1",
+                      "fill_exit_ratio_min=-5"):
+            with self.subTest(query=query):
+                self.assertEqual(
+                    422, self.client.get(f"/api/public/screener/wallets?{query}").status_code)
+
+    def test_both_metrics_are_published_so_a_threshold_can_be_checked(self):
+        wallet = self.client.get(f"/api/public/screener/wallets/{WALLET}").json()
+
+        self.assertEqual(0.75, wallet["consistency_ratio"])
+        self.assertEqual(90.0, wallet["fill_exit_ratio"])
+        other = self.client.get(f"/api/public/screener/wallets/{OTHER}").json()
+        self.assertIsNone(other["consistency_ratio"])
+        self.assertIsNone(other["fill_exit_ratio"])
+
+    def test_provenance_says_what_the_exit_fill_ratio_is_not(self):
+        limitations = " ".join(
+            self.client.get("/api/public/screener/provenance").json()["limitations"]).lower()
+
+        self.assertIn("not an order, position, share, or capital close rate", limitations)
+        self.assertIn("exactly zero", limitations)
+
+    def test_filtering_still_reads_only_the_cache(self):
+        # The advanced filters must not have introduced a write path.
+        before = self.client.get(f"/api/public/screener/wallets/{WALLET}").json()
+        self.addresses("period=30d&consistency_ratio_min=0.1&fill_exit_ratio_min=1")
+        after = self.client.get(f"/api/public/screener/wallets/{WALLET}").json()
+
+        self.assertEqual(before, after)
+
+
+class WireContractTests(PublicScreenerTestBase):
+    def test_every_key_the_screener_sends_is_a_parameter_this_route_accepts(self):
+        """A renamed parameter fails silently: FastAPI ignores the unknown key
+        and returns an unfiltered list that still looks correct. Nothing else
+        in either suite would catch that, so pin the contract here."""
+        model = (Path(__file__).parents[1]
+                 / "frontend/src/screener/screenerModel.js").read_text()
+        emitted = set(re.findall(r"query\.([a-z_]+)\s*=", model))
+        emitted |= {"period", "sort", "limit"}  # set in the object literal
+        accepted = set(inspect.signature(routes_public_screener.public_wallets).parameters)
+
+        self.assertTrue(emitted, "no query keys parsed out of the screener model")
+        self.assertLessEqual(emitted, accepted, emitted - accepted)
+
+    def test_the_filters_actually_narrow_the_result(self):
+        """Guards the same failure from the other side: an ignored parameter
+        would leave the wallet in the list rather than filtering it out."""
+        unfiltered = self.client.get("/api/public/screener/wallets?period=30d").json()
+        self.assertIn(WALLET, [w["address"] for w in unfiltered["wallets"]])
+
+        for query in ("consistency_ratio_min=0.9", "fill_exit_ratio_min=99",
+                      "fill_exit_ratio_max=10"):
+            with self.subTest(query=query):
+                body = self.client.get(
+                    f"/api/public/screener/wallets?period=30d&{query}").json()
+                self.assertNotIn(WALLET, [w["address"] for w in body["wallets"]])
 
 
 class RateLimitTests(PublicScreenerTestBase):

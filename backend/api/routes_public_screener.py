@@ -113,6 +113,11 @@ def _project(row: dict, period: str) -> dict:
             None if refreshed is None else
             (None if row.get("open_positions") is None else int(row["open_positions"]))
         ),
+        # Published because they are filterable below: a threshold you cannot
+        # see the value behind asserts something the reader cannot check.
+        "consistency_ratio": _number(row.get(f"consistency_ratio_{period}")),
+        # Already a percentage (SELL rows / BUY rows * 100), not a 0..1 share.
+        "fill_exit_ratio": _number(row.get(f"fill_exit_ratio_{period}")),
         "history_days": history_days,
         # "Partial" describes the fetched TRADE history only — it says nothing
         # about coverage of any other source.
@@ -131,6 +136,12 @@ _PROVENANCE = {
         "A missing metric is shown as unavailable, never as zero.",
         "Figures are a cache, refreshed periodically — see stats_refreshed_at "
         "for when each wallet was last recomputed.",
+        "The exit/fill ratio counts fetched SELL activity rows against BUY "
+        "activity rows. It is an activity-frequency ratio, not an order, "
+        "position, share, or capital close rate.",
+        "The positive close-day ratio counts UTC days with positive realized "
+        "PnL against days with negative realized PnL; days that netted exactly "
+        "zero, and days with no closings at all, are excluded.",
         "Past wallet activity does not predict future results.",
     ],
 }
@@ -154,6 +165,9 @@ async def public_wallets(
     pnl_min: float | None = Query(None),
     winrate_min: float | None = Query(None),
     volume_min: float | None = Query(None),
+    consistency_ratio_min: float | None = Query(None, ge=0, le=1),
+    fill_exit_ratio_min: float | None = Query(None, ge=0),
+    fill_exit_ratio_max: float | None = Query(None, ge=0),
     complete_history_only: bool = Query(False),
     db=Depends(get_db),
 ):
@@ -180,6 +194,15 @@ async def public_wallets(
     if volume_min is not None:
         clauses.append(f"volume_{period} >= ?")
         params.append(volume_min)
+    if consistency_ratio_min is not None:
+        clauses.append(f"consistency_ratio_{period} >= ?")
+        params.append(consistency_ratio_min)
+    if fill_exit_ratio_min is not None:
+        clauses.append(f"fill_exit_ratio_{period} >= ?")
+        params.append(fill_exit_ratio_min)
+    if fill_exit_ratio_max is not None:
+        clauses.append(f"fill_exit_ratio_{period} <= ?")
+        params.append(fill_exit_ratio_max)
     if complete_history_only:
         clauses.append("history_days >= ?")
         params.append(float(PERIODS[period]))
