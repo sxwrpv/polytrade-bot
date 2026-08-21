@@ -11,7 +11,7 @@
 .api-reference { width: min(100% - 48px, 1080px); margin: 0 auto; padding: 54px 0 42px; }
 .api-intro { max-width: 760px; margin-bottom: 40px; }
 .api-eyebrow { margin-bottom: 12px; color: var(--faint); font-size: 10px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
-.api-intro h1 { margin: 0 0 14px; color: var(--text); font-size: clamp(34px, 4vw, 44px); line-height: 1.12; letter-spacing: -.035em; font-weight: 760; }
+.api-intro h1 { margin: 0 0 14px; color: var(--text); font-family: var(--serif); font-size: clamp(34px, 4vw, 44px); line-height: 1.12; letter-spacing: -.02em; font-weight: 400; }
 .api-intro p { margin: 0 0 14px; color: var(--muted); font-size: 17px; line-height: 1.7; }
 .api-intro .api-risk-note { padding: 12px 14px; border-left: 3px solid var(--blue); border-radius: 4px; background: var(--surface); font-size: 14px; line-height: 1.6; }
 .api-quicklinks { display: flex; flex-wrap: wrap; gap: 7px; color: var(--faint); font-size: 13px; }

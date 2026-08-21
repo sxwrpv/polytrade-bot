@@ -26,6 +26,7 @@
   --r-lg: 22px;   /* cards, modals */
   --r-md: 14px;   /* buttons, inputs */
   --r-sm: 10px;   /* small chrome */
+  --serif: 'Instrument Serif', Georgia, serif;
   --mono: 'JetBrains Mono', 'Consolas', monospace;
   --shadow-card: 0 8px 24px rgba(20, 32, 26, 0.08);
 }
@@ -271,8 +272,8 @@ input:focus, select:focus {
 
 /* onboarding */
 .onboard { max-width: 460px; margin: 60px auto; padding: 24px; display: flex; flex-direction: column; gap: 12px; }
-.onboard .logo { color: var(--text); font-size: 19px; font-weight: 600; letter-spacing: 0.1em; }
-.onboard .logo::first-letter { color: var(--green); }
+.onboard .logo { color: var(--text); font-size: 19px; font-weight: 600; letter-spacing: 0.02em; }
+.onboard h1 { font-family: var(--serif); font-weight: 400; letter-spacing: -.02em; line-height: 1.08; }
 .onboard .tagline { color: var(--muted); font-size: 11px; letter-spacing: 0.12em; margin-bottom: 12px; }
 .addr {
   font-size: 12px; font-family: var(--mono); color: var(--cyan); word-break: break-all;
@@ -517,12 +518,13 @@ input:focus, select:focus {
 /* ===== consumer public site ===== */
 html { scroll-behavior: smooth; }
 a { color: inherit; }
-.brand-mark {
-  width: 32px; height: 32px; display: inline-grid; place-items: center;
-  border-radius: 10px; color: var(--green-ink); background: var(--green-fill);
-  font-family: var(--mono); font-weight: 700; box-shadow: 0 6px 16px rgba(11,158,99,.2);
+.brand-logo {
+  width: 32px; height: 32px; display: inline-block; flex: none;
+  border-radius: 10px; object-fit: cover;
+  box-shadow: 0 6px 16px rgba(11,158,99,.16);
 }
-.brand-mark.mini { width: 25px; height: 25px; border-radius: 8px; margin-right: 7px; }
+.logo { display: inline-flex; align-items: center; gap: 10px; }
+.logo .brand-logo { width: 36px; height: 36px; border-radius: 11px; }
 .public-site { min-height: 100vh; overflow: hidden; font-size: 15px; }
 .public-wrap { width: min(1160px, calc(100% - 40px)); margin-inline: auto; }
 .public-nav {
@@ -538,7 +540,7 @@ a { color: inherit; }
 .public-small-cta { padding: 9px 14px; }
 .public-hero { min-height: 710px; padding: 108px 0 90px; display: grid; grid-template-columns: 1.05fr .95fr; gap: 72px; align-items: center; }
 .eyebrow { color: var(--green); font-size: 11px; line-height: 1.2; letter-spacing: .17em; font-weight: 600; text-transform: uppercase; margin-bottom: 18px; }
-.public-site h1, .public-site h2 { letter-spacing: -.045em; line-height: 1.04; font-weight: 500; }
+.public-site h1, .public-site h2 { font-family: var(--serif); letter-spacing: -.035em; line-height: 1.04; font-weight: 400; }
 .public-site h1 { font-size: clamp(46px, 6.2vw, 78px); }
 .public-site h1 span { color: var(--green); }
 .public-site h2 { font-size: clamp(34px, 4.2vw, 54px); }

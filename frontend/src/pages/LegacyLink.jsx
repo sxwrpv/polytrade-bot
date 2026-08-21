@@ -24,7 +24,7 @@ export default function LegacyLink({ initData, address, onDone }) {
 
   return (
     <div className="onboard onboard-flow">
-      <div className="logo"><span>P</span> PolyTrade</div>
+      <div className="logo"><img className="brand-logo" src="/brand/polytrade-mark.png" alt="" /> PolyTrade</div>
       <div className="section-header">RECOVER EXISTING WALLET</div>
       <h1>Link Telegram without creating another wallet.</h1>
       <p className="muted">An authenticated legacy wallet already exists in this browser. Link this Telegram account to preserve that wallet and its funds.</p>

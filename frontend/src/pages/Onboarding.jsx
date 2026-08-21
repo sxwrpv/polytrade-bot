@@ -34,7 +34,7 @@ export default function Onboarding({ onDone }) {
   if (result) {
     return (
       <div className="onboard onboard-flow">
-        <div className="logo"><span>P</span> PolyTrade</div>
+        <div className="logo"><img className="brand-logo" src="/brand/polytrade-mark.png" alt="" /> PolyTrade</div>
         <div className="onboard-progress"><span className="done">1</span><i /><span className="active">2</span></div>
         <div className="section-header">{result.created ? 'WALLET CREATED' : 'WALLET FOUND'}</div>
         <h1>{result.created
@@ -54,7 +54,7 @@ export default function Onboarding({ onDone }) {
 
   return (
     <div className="onboard onboard-flow">
-      <div className="logo"><span>P</span> PolyTrade</div>
+      <div className="logo"><img className="brand-logo" src="/brand/polytrade-mark.png" alt="" /> PolyTrade</div>
       <div className="onboard-progress"><span className="active">1</span><i /><span>2</span></div>
       <div className="eyebrow">BEFORE WALLET CREATION</div>
       <h1>Understand what you’re opening.</h1>
