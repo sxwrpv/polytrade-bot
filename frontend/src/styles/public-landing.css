@@ -81,7 +81,7 @@
   background: var(--surface2); color: var(--muted); font-size: 9px;
 }
 .demo-result-row i { float: right; color: var(--text); font: normal 10px var(--mono); }
-.demo-note { margin: 9px 2px 0; font: 8px var(--mono); letter-spacing: .12em; color: var(--faint); }
+.demo-note { margin: 9px 2px 0; font: 8px var(--mono); letter-spacing: .12em; color: var(--muted); }
 
 /* ---------- cadence strip ------------------------------------------------
    Mono carries the numbers; Inter carries the sentences beneath them. */
@@ -126,7 +126,7 @@
 .js-reveal .reveal.in .pipe-node.n4, .js-reveal .reveal.in .surf-node.n4 { transition-delay: .82s; }
 
 .benefits-lede { max-width: 46ch; color: var(--muted); line-height: 1.7; }
-.benefits-footnote { margin-top: 16px; color: var(--faint); font-size: 12px; }
+.benefits-footnote { margin-top: 16px; color: var(--muted); font-size: 12px; }
 .benefits-footnote a { color: var(--green-deep); }
 
 /* ---------- feature rows -------------------------------------------------- */
@@ -144,7 +144,7 @@
 .feature-list span::before { content: '—'; color: var(--green-deep); }
 
 .panel { padding: 18px; border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--surface); }
-.panel-label { margin: 0 0 12px 2px; font: 8px var(--mono); letter-spacing: .14em; color: var(--faint); }
+.panel-label { margin: 0 0 12px 2px; font: 8px var(--mono); letter-spacing: .14em; color: var(--muted); }
 .panel-card { padding: 14px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--bg); }
 .panel-card + .panel-card { margin-top: 9px; }
 .panel-top { display: flex; align-items: center; gap: 10px; }

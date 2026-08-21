@@ -173,3 +173,42 @@ test('diagrams render complete when the reveal script never runs', async () => {
     )
   }
 })
+
+test('--faint never sets text: it cannot reach AA on paper', async () => {
+  const sheets = await Promise.all([
+    read('src/styles/brutalism.css'),
+    read('src/styles/public-landing.css'),
+    read('src/styles/screener.css'),
+  ])
+  const css = sheets.join('\n')
+
+  // 3.21:1 against #eef2ef — fine for a rule or a marker, never for type.
+  const faint = css.match(/--faint:\s*([^;]+);/)
+  assert.ok(faint)
+  assert.ok(contrast(faint[1].trim(), '#eef2ef') < 4.5)
+  assert.doesNotMatch(css, /color:\s*var\(--faint\)/)
+})
+
+test('the selected screener row keeps its text above AA', async () => {
+  const [tokens, screener] = await Promise.all([
+    read('src/styles/brutalism.css'),
+    read('src/styles/screener.css'),
+  ])
+
+  // Composite the row wash over paper and check the muted text on top of it.
+  const wash = tokens.match(/--green-wash:\s*rgba\(([^)]+)\)/)
+  assert.ok(wash, 'missing --green-wash')
+  const [r, g, b, a] = wash[1].split(',').map((n) => Number(n.trim()))
+  const paper = [0xee, 0xf2, 0xef]
+  const blended = [r, g, b]
+    .map((channel, index) => Math.round(paper[index] + (channel - paper[index]) * a))
+    .map((n) => n.toString(16).padStart(2, '0'))
+    .join('')
+  const muted = tokens.match(/--muted:\s*([^;]+);/)[1].trim()
+  assert.ok(
+    contrast(muted, `#${blended}`) >= 4.5,
+    `muted on the selected row is ${contrast(muted, `#${blended}`).toFixed(2)}:1`,
+  )
+  // Selection is not signalled by the tint alone.
+  assert.match(screener, /tr\.selected > th[^}]*box-shadow/)
+})

@@ -120,6 +120,96 @@ Logs may contain public wallet metadata but must never contain keys, cookies, Te
 
 Never roll code back across an incompatible migration while orders are being submitted.
 
+## Wallet Screener hosting
+
+The standalone Wallet Screener is a second Vite entry (`frontend/screener.html`),
+built into the same `frontend/dist`. It ships **same-origin** by default:
+FastAPI serves it at `https://polytradebot.live/screener`, and the browser
+talks to `/api/public/screener/*` on the same origin. In that arrangement
+nothing about the auth model changes — no CORS entry, no cookie relaxation, no
+new certificate.
+
+`/api/public/screener/*` is anonymous, read-only and rate limited. It reads
+only precomputed `trader_cache` columns, so a public request can never trigger
+an upstream Polymarket call or a cache write. `/api/traders/*` keeps its
+session gate and remains the only route that spends upstream API budget.
+
+### Optional: screener.polytradebot.live
+
+Only worth doing if you want the screener on its own host. It is not required,
+and same-origin is the safer default.
+
+**DNS.** One record, pointed at the same host as the apex:
+
+```
+screener.polytradebot.live.  A  52.51.200.58
+```
+
+Let it resolve **before** the first Caddy start. Caddy provisions the
+certificate over the HTTP-01 challenge on port 80; repeated failures count
+against Let's Encrypt rate limits.
+
+**Caddy.** Add a host block to the existing Caddyfile — one Caddy instance, not
+a second one:
+
+```
+screener.polytradebot.live {
+	encode zstd gzip
+
+	header {
+		-Server
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		# Nothing embeds the screener, and it is not a Telegram Mini App.
+		Content-Security-Policy "frame-ancestors 'none'"
+	}
+
+	root * /srv/screener
+	try_files {path} /screener.html
+	file_server
+}
+```
+
+`/srv/screener` holds the built `dist`. Note the apex block already sends
+`includeSubDomains`, so this name is inside the existing HSTS policy — it must
+be served over HTTPS from the moment that header is first honoured.
+
+**TLS.** Automatic, same as the apex. `includeSubDomains` means a subdomain
+that cannot present a valid certificate becomes unreachable rather than falling
+back to HTTP, so bring DNS up first.
+
+**CORS and sessions.** Build the screener with
+
+```
+VITE_API_BASE=https://polytradebot.live/api
+```
+
+and add `https://screener.polytradebot.live` to `CORS_ALLOW_ORIGINS`. The
+existing middleware sets `allow_credentials=False`; leave it that way. The
+public screener client sends `credentials: 'omit'`, so no cookie crosses
+origins and `SameSite` on the real session cookie never has to be weakened.
+
+**Same-origin versus cross-origin.**
+
+| | `polytradebot.live/screener` | `screener.polytradebot.live` |
+| --- | --- | --- |
+| Auth model | untouched | untouched *only if* credentials stay off |
+| CORS | none needed | one origin, no credentials |
+| Certificates | existing | one more name |
+| Failure blast radius | shared with the app | isolated |
+| Cost of a mistake | low | a credentialed CORS entry would expose the session cross-site |
+
+Prefer same-origin unless the isolation is worth that last row.
+
+**Rollback.** Remove the Caddy host block and reload Caddy
+(`docker compose exec caddy caddy reload --config /etc/caddy/Caddyfile`); the
+same-origin `/screener` route is untouched and keeps serving. Drop the origin
+from `CORS_ALLOW_ORIGINS` and restart the app. Leave the DNS record in place
+until HSTS `max-age` has lapsed for anyone who visited the subdomain, or point
+it back at the same host — with `includeSubDomains` active, a name that stops
+resolving is a hard failure for those clients, not a silent one.
+
 ## Production checklist
 
 - [ ] DNS and trusted HTTPS work.
@@ -130,6 +220,8 @@ Never roll code back across an incompatible migration while orders are being sub
 - [ ] Gasless flow was tested with a small amount.
 - [ ] Base Compose keeps autostart off.
 - [ ] Exactly one production engine is enabled.
+- [ ] The screener is served from one place only (same-origin `/screener`,
+      or the subdomain — not both pointing at different builds).
 - [ ] Engine, claims, disk, logs, DNS, and TLS are monitored.
 - [ ] Telegram menu targets production HTTPS.
 - [ ] Pause and rotation procedures are documented.

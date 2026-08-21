@@ -33,11 +33,14 @@
   --green-fill:  #0b9e63;                   /* solid primary button */
   --green-ink:   #14201a;                   /* label on the green fill (AA) */
   --green-soft:  rgba(11, 158, 99, 0.10);   /* tinted active state */
+  --green-wash:  rgba(11, 158, 99, 0.05);   /* row tint that keeps text at AA */
   --red:         #b3242f;
   --yellow:      #8a5d06;
   --cyan:        #0879c9;                   /* links, addresses */
   --text:        #14201a;
   --muted:       #5c6b62;
+  /* Decorative only. #7b8a81 on paper is 3.21:1 — it cannot carry text at
+     AA, so text uses --muted and this stays for marks and rules. */
   --faint:       #7b8a81;
   --border:      rgba(20, 32, 26, 0.12);    /* the documentation hairline */
   --border-strong: #c3cec7;
@@ -554,7 +557,7 @@ a { color: inherit; }
 .hero-footnote { max-width: 60ch; color: var(--muted); font-size: 12px; line-height: 1.6; }
 
 .product-preview { position: relative; }
-.preview-label { margin: 0 0 9px 2px; font: 9px var(--mono); letter-spacing: .14em; color: var(--faint); text-transform: uppercase; }
+.preview-label { margin: 0 0 9px 2px; font: 9px var(--mono); letter-spacing: .14em; color: var(--muted); text-transform: uppercase; }
 .avatar { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 50%; border: 1px solid var(--border); background: var(--surface); color: var(--green-deep); font: 600 10px var(--mono); }
 
 /* Sections — separated by whitespace and hairlines, not by card edges. */
@@ -575,7 +578,7 @@ a { color: inherit; }
 .public-footer div { display: flex; gap: 18px; }
 .public-footer a { text-decoration: none; }
 .public-footer a:hover { color: var(--green-deep); }
-.public-footer small { grid-column: 1/-1; border-top: 1px solid var(--border); padding-top: 20px; color: var(--faint); }
+.public-footer small { grid-column: 1/-1; border-top: 1px solid var(--border); padding-top: 20px; color: var(--muted); }
 
 /* Telegram onboarding and funding notices */
 .onboard-flow { max-width: 560px; margin-top: 35px; }.onboard-flow h1,.launch-state h1{font-size:29px;line-height:1.2;letter-spacing:-.03em}.onboard .logo{display:flex;align-items:center;gap:10px;letter-spacing:0;text-transform:none}.onboard .logo span{display:grid;place-items:center;width:32px;height:32px;border-radius:10px;background:var(--green-fill);color:var(--green-ink);font-family:var(--mono)}
@@ -590,4 +593,15 @@ a { color: inherit; }
 }
 @media (prefers-reduced-motion: reduce) {
   html{scroll-behavior:auto}*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}.product-preview{animation:none}
+}
+
+/* Home: paste an address found in the standalone screener and act on it. */
+.screener-entry p { margin: 6px 0 12px; }
+.add-wallet-row { display: flex; gap: 8px; margin-bottom: 10px; }
+.add-wallet-row input { flex: 1; font-family: var(--mono); font-size: 12px; }
+.add-wallet-row .btn { flex: none; white-space: nowrap; }
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px;
+  margin: -1px; padding: 0; border: 0; overflow: hidden;
+  clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap;
 }

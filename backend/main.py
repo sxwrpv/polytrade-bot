@@ -27,7 +27,8 @@ from backend.core.polymarket import PolymarketClient
 from backend.core.telegram_alerts import TelegramPositionNotifier
 from backend.db.database import Database
 from backend.api import (
-    routes_auth, routes_positions, routes_telemetry, routes_traders, routes_user,
+    routes_auth, routes_positions, routes_public_screener, routes_telemetry,
+    routes_traders, routes_user,
 )
 
 logging.basicConfig(
@@ -283,6 +284,11 @@ app.include_router(routes_user.router, prefix="/api/user", tags=["user"])
 app.include_router(routes_traders.router, prefix="/api/traders", tags=["traders"])
 app.include_router(routes_positions.router, prefix="/api/positions", tags=["positions"])
 app.include_router(routes_telemetry.router, prefix="/api/telemetry", tags=["telemetry"])
+# Anonymous, read-only, rate-limited wallet research for the standalone
+# screener. Separate from /api/traders/* precisely so that router's session
+# gate and its upstream-spending routes stay exactly as they are.
+app.include_router(routes_public_screener.router, prefix="/api/public/screener",
+                   tags=["public-screener"])
 
 
 @app.get("/api/docs", include_in_schema=False)
@@ -358,6 +364,20 @@ if os.path.isfile(_DOCS_INDEX):
         return FileResponse(_DOCS_INDEX)
 
 
-# SPA — mount last so it doesn't shadow /api or /docs.
+# Standalone Wallet Screener. Its own Vite entry, served here same-origin so
+# no cross-site cookie or CORS relaxation is needed today; the same built page
+# can later be published at screener.polytradebot.live unchanged (see
+# docs/deployment.md). Declared before the SPA mount so "/screener" resolves to
+# the screener page rather than falling through to the app's index.html.
+_SCREENER_PAGE = os.path.join(_FRONTEND_DIST, "screener.html")
+if os.path.isfile(_SCREENER_PAGE):
+
+    @app.get("/screener", include_in_schema=False)
+    @app.get("/screener/", include_in_schema=False)
+    async def wallet_screener():
+        return FileResponse(_SCREENER_PAGE)
+
+
+# SPA — mount last so it doesn't shadow /api, /docs or /screener.
 if os.path.isdir(_FRONTEND_DIST):
     app.mount("/", StaticFiles(directory=_FRONTEND_DIST, html=True), name="spa")
