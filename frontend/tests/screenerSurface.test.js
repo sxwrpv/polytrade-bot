@@ -245,7 +245,13 @@ test('the screener explains its data and uses the restrained button system', asy
   // The analyze action uses the shared .btn system, which is now the
   // documentation green — not the old neon fill.
   assert.doesNotMatch(css, /#3ddc84/i)
-  assert.doesNotMatch(css, /backdrop-filter/)
+  // Glass panels stay gone, but the sticky header may blur what scrolls under
+  // it — docs/site/styles.css does exactly that on its own topbar, and the
+  // screener now sits on a gradient the header has to sit legibly above.
+  const blurred = [...css.replace(/\/\*[\s\S]*?\*\//g, '')
+    .matchAll(/([^{}]+){[^}]*backdrop-filter[^}]*}/g)]
+    .map((match) => match[1].trim())
+  assert.deepEqual(blurred, ['.screener-nav'])
   assert.match(css, /@media \(prefers-reduced-motion: reduce\)/)
   assert.match(css, /@media \(max-width/)
 })

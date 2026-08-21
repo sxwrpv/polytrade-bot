@@ -11,7 +11,34 @@
  * serif never sets a table cell.
  */
 
-.screener { min-height: 100vh; display: flex; flex-direction: column; }
+/* --- page ground -----------------------------------------------------------
+   The Mini App's mint radial wash, at the Mini App's own colour (61,220,132).
+
+   The alpha is lower than the Mini App's 0.34, and deliberately so: the Mini
+   App floats frosted cards over its wash, whereas here labels and lede sit
+   directly on it. At 0.34 the shared --muted (#5c6b62, the documentation's
+   value) falls to 4.19:1 against the wash — under AA. Capping the peak at
+   0.16 keeps it at 4.57:1, so the palette stays identical to the docs and the
+   landing instead of the screener forking its own darker grey. Reading
+   surfaces still float on translucent paper over the top. */
+.screener {
+  min-height: 100vh;
+  background:
+    radial-gradient(820px circle at 2% -8%, rgba(61, 220, 132, 0.16), transparent 64%),
+    radial-gradient(680px circle at 105% 26%, rgba(61, 220, 132, 0.13), transparent 62%),
+    radial-gradient(620px circle at 24% 106%, rgba(61, 220, 132, 0.11), transparent 60%);
+  background-color: var(--bg);
+  background-attachment: fixed;
+}
+
+/* Tint behind an engaged control. --green at 10% keeps the deep green label at
+   6.08:1; the pill also carries a green border so the state is never signalled
+   by tint alone. */
+.screener { --pill-tint: rgba(11, 158, 99, 0.10); }
+/* Engaged/hover step. Deep green stays at 5.58:1 on this. */
+.screener { --pill-tint-strong: rgba(11, 158, 99, 0.18); }
+/* Translucent paper: the wash reads through, the text stays legible. */
+.screener { --paper-surface: rgba(238, 242, 239, 0.94); }
 
 .visually-hidden {
   position: absolute; width: 1px; height: 1px;
@@ -19,33 +46,161 @@
   clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap;
 }
 
-/* ---------- header ------------------------------------------------------- */
+/* --- header ---------------------------------------------------------------- */
 .screener-nav {
   position: sticky; top: 0; z-index: 20;
   display: flex; align-items: center; gap: 20px;
-  padding: 13px max(20px, calc((100% - 1240px) / 2));
-  background: var(--bg);
+  padding: 12px max(20px, calc((100% - 1560px) / 2));
+  background: rgba(238, 242, 239, 0.92);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   border-bottom: 1px solid var(--border);
 }
 .screener-brand {
   display: inline-flex; align-items: center; gap: 10px;
-  margin-right: auto; color: var(--text); text-decoration: none;
-  font-size: 15px; font-weight: 700; letter-spacing: -.01em;
+  color: var(--text); text-decoration: none;
+  font-size: 15px; font-weight: 700; letter-spacing: -.01em; white-space: nowrap;
 }
 .screener-brand .brand-logo { width: 28px; height: 28px; border-radius: 8px; }
 .screener-brand-divider { width: 1px; height: 17px; background: var(--border-strong); }
 .screener-brand-label { color: var(--muted); font-weight: 500; }
-.screener-nav-links { display: flex; align-items: center; gap: 18px; }
-.screener-nav-links a:not(.btn) { color: var(--muted); font-size: 13px; font-weight: 600; text-decoration: none; }
-.screener-nav-links a:not(.btn):hover { color: var(--green-deep); }
-.screener-nav-links .screener-nav-cta { font-size: 12px; }
 
-.screener-main {
-  flex: 1; width: min(1240px, calc(100% - 40px)); margin-inline: auto;
-  padding: 44px 0 64px;
+.screener-search { flex: 1; max-width: 460px; }
+.screener-search input {
+  width: 100%; height: 34px; padding: 0 12px;
+  border: 1px solid var(--border); border-radius: 999px;
+  background: var(--bg); color: var(--text);
+  font-family: var(--mono); font-size: 12px;
+}
+.screener-search input::placeholder { color: var(--muted); }
+.screener-search input:focus-visible {
+  outline: 2px solid var(--green-deep); outline-offset: 1px; border-color: var(--green);
 }
 
-/* ---------- editorial intro ---------------------------------------------- */
+.screener-nav-links { display: flex; align-items: center; gap: 18px; margin-left: auto; }
+.screener-nav-links a:not(.btn) { color: var(--muted); font-size: 13px; font-weight: 600; text-decoration: none; }
+.screener-nav-links a:not(.btn):hover { color: var(--green-deep); }
+.screener-nav-links .screener-nav-cta { font-size: 12px; border-radius: 999px; }
+
+/* --- documentation shell ---------------------------------------------------
+   Filter rail, results column, notes rail — the /docs three-column layout,
+   with the sidebar carrying filters instead of navigation. */
+.screener-shell {
+  display: grid;
+  grid-template-columns: 248px minmax(0, 1fr) 212px;
+  grid-template-areas: "intro intro rail" "sidebar main rail";
+  align-content: start;
+  justify-content: center;
+  column-gap: 40px;
+  width: min(1560px, calc(100% - 40px));
+  margin-inline: auto;
+}
+.screener-intro { grid-area: intro; padding: 34px 0 4px; }
+.screener-sidebar { grid-area: sidebar; }
+.screener-main { grid-area: main; }
+.screener-rail { grid-area: rail; }
+
+.screener-sidebar {
+  position: sticky; top: 59px; align-self: start;
+  max-height: calc(100vh - 59px); overflow-y: auto;
+  padding: 26px 18px 26px 0;
+  border-right: 1px solid var(--border);
+  scrollbar-width: thin;
+}
+.rail-heading {
+  margin-bottom: 18px;
+  color: var(--green-deep); font-family: var(--mono);
+  font-size: 11px; font-weight: 500; letter-spacing: .16em; text-transform: uppercase;
+}
+.rail-heading::after {
+  content: ''; display: block; margin-top: 9px; height: 1px; background: var(--border);
+}
+
+.control { display: grid; gap: 8px; margin-bottom: 20px; }
+.control-label {
+  font-family: var(--mono); color: var(--muted);
+  font-size: 9px; font-weight: 500; letter-spacing: .14em; text-transform: uppercase;
+}
+
+/* Pills, as in the Mini App: an engaged one is a light tint with a green
+   border and the deep-green label — never a solid slab of fill. */
+.segmented { display: flex; flex-wrap: wrap; gap: 7px; }
+.segmented button {
+  padding: 7px 12px;
+  border: 1px solid var(--border); border-radius: 999px;
+  background: var(--bg); color: var(--muted);
+  font-family: var(--mono); font-size: 10px; font-weight: 500; letter-spacing: .03em;
+  white-space: nowrap; cursor: pointer;
+  transition: background .15s ease, border-color .15s ease, color .15s ease;
+}
+.segmented button:hover { border-color: var(--border-strong); color: var(--text); }
+.segmented button.active {
+  background: var(--pill-tint);
+  border-color: var(--green);
+  color: var(--green-deep);
+}
+.segmented button:focus-visible { outline: 2px solid var(--green-deep); outline-offset: 2px; }
+
+/* --- sliders ---------------------------------------------------------------
+   Parked at the "off" end the control means no filter at all, which is why
+   the value reads "off" rather than a number: a zero threshold would be a
+   real filter that hides every wallet below zero. */
+.range-filter { margin-bottom: 18px; }
+.range-filter label {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 10px;
+  margin-bottom: 8px; color: var(--muted); font-size: 12px;
+}
+.range-filter label b {
+  color: var(--muted); font-family: var(--mono); font-size: 11px; font-weight: 500;
+}
+.range-filter.is-active label b { color: var(--green-deep); font-weight: 600; }
+
+.range-filter input[type='range'] {
+  -webkit-appearance: none; appearance: none;
+  width: 100%; height: 4px; padding: 0;
+  border: 0; border-radius: 999px;
+  background: rgba(20, 32, 26, 0.10);
+  cursor: pointer;
+}
+.range-filter input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 17px; height: 17px; border-radius: 50%;
+  background: var(--bg); border: 2px solid var(--green);
+  cursor: pointer;
+}
+.range-filter input[type='range']::-moz-range-thumb {
+  width: 17px; height: 17px; border-radius: 50%;
+  background: var(--bg); border: 2px solid var(--green);
+  cursor: pointer;
+}
+.range-filter.is-active input[type='range'] { background: var(--pill-tint); }
+.range-filter input[type='range']:focus-visible { outline: 2px solid var(--green-deep); outline-offset: 4px; }
+
+.screener-numeric, .screener-advanced { margin: 4px 0 18px; }
+.screener-numeric > summary, .screener-advanced summary {
+  display: inline-block; margin-bottom: 14px; cursor: pointer;
+  color: var(--green-deep); font-family: var(--mono);
+  font-size: 10px; font-weight: 500; letter-spacing: .14em; text-transform: uppercase;
+}
+.screener-numeric > summary:focus-visible, .screener-advanced summary:focus-visible { outline: 2px solid var(--green-deep); outline-offset: 3px; }
+.rail-hint { margin: -6px 0 16px; color: var(--muted); font-size: 11px; line-height: 1.55; }
+
+.filter-check { display: flex; gap: 10px; align-items: flex-start; cursor: pointer; margin-bottom: 16px; }
+.filter-check input { width: 16px; height: 16px; margin-top: 2px; accent-color: var(--green); flex: none; }
+.filter-check strong { display: block; font-size: 12px; }
+.filter-check small { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; line-height: 1.55; }
+
+.chip-row { display: flex; flex-wrap: wrap; gap: 7px; padding-top: 14px; border-top: 1px solid var(--border); }
+.chip {
+  padding: 5px 11px;
+  border: 1px solid var(--green); border-radius: 999px;
+  background: var(--pill-tint); color: var(--green-deep);
+  font-family: var(--mono); font-size: 10px; cursor: pointer; text-align: left;
+}
+.chip-clear { border-color: var(--border); background: transparent; color: var(--muted); }
+
+/* --- main column ------------------------------------------------------------ */
+.screener-main { min-width: 0; padding: 22px 0 56px; }
 .screener-eyebrow {
   margin: 0 0 8px;
   font-family: var(--mono); color: var(--muted);
@@ -54,78 +209,40 @@
 .screener-intro h1 {
   margin: 0 0 12px;
   font-family: var(--serif); font-weight: 400;
-  font-size: clamp(34px, 4vw, 48px); line-height: 1.08; letter-spacing: -.02em;
+  font-size: clamp(34px, 3.4vw, 46px); line-height: 1.08; letter-spacing: -.02em;
 }
 .screener-lede { max-width: 66ch; color: var(--muted); font-size: 16px; line-height: 1.7; }
 
-/* ---------- controls ------------------------------------------------------ */
-.screener-controls { margin-top: 34px; padding-top: 22px; border-top: 1px solid var(--border); }
-.control-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 26px; }
-.control { display: grid; gap: 7px; }
-.control-label {
+/* --- notes rail ------------------------------------------------------------- */
+.screener-rail {
+  position: sticky; top: 59px; align-self: start;
+  padding: 38px 0 26px;
+  color: var(--muted); font-size: 12px;
+}
+.rail-title {
+  margin-bottom: 11px;
   font-family: var(--mono); color: var(--muted);
-  font-size: 9px; font-weight: 500; letter-spacing: .14em; text-transform: uppercase;
+  font-size: 9px; font-weight: 500; letter-spacing: .16em; text-transform: uppercase;
 }
-.control-search { flex: 1; min-width: 260px; }
-.control-search input {
-  width: 100%; height: 36px; padding: 0 12px;
+.rail-notes { margin: 0; padding-left: 16px; }
+.rail-notes li { margin-bottom: 8px; line-height: 1.6; }
+.rail-link {
+  display: block; margin-top: 18px; padding: 12px;
+  line-height: 1.45;
   border: 1px solid var(--border); border-radius: var(--r-md);
-  background: var(--surface); color: var(--text);
-  font-family: var(--mono); font-size: 12px;
+  background: var(--paper-surface);
+  color: var(--green-deep); font-weight: 600; text-decoration: none;
 }
-.control-search input:focus-visible {
-  outline: 2px solid var(--green-deep); outline-offset: 1px; border-color: var(--green);
-}
-
-.segmented { display: inline-flex; border: 1px solid var(--border); border-radius: var(--r-md); overflow: hidden; }
-.segmented button {
-  padding: 8px 15px; border: 0; border-right: 1px solid var(--border);
-  background: transparent; color: var(--muted);
-  font-family: var(--mono); font-size: 11px; font-weight: 500; letter-spacing: .06em;
-  cursor: pointer;
-}
-.segmented button:last-child { border-right: 0; }
-.segmented button:hover { background: var(--surface); color: var(--text); }
-.segmented button.active { background: var(--green-soft); color: var(--green-deep); }
-.segmented button:focus-visible { outline: 2px solid var(--green-deep); outline-offset: -2px; }
-
-.screener-advanced { margin-top: 22px; }
-.screener-advanced summary {
-  display: inline-block; cursor: pointer;
-  font-family: var(--mono); color: var(--muted);
-  font-size: 10px; font-weight: 500; letter-spacing: .14em; text-transform: uppercase;
-}
-.screener-advanced summary:focus-visible { outline: 2px solid var(--green-deep); outline-offset: 3px; }
-.filter-row {
-  display: grid; grid-template-columns: repeat(3, minmax(0, 200px)) minmax(260px, 1fr);
-  gap: 20px; margin-top: 16px; padding: 18px;
-  border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--surface);
-}
-.filter-field { display: grid; gap: 6px; }
-.filter-field label { color: var(--muted); font-size: 12px; }
-.filter-field input {
-  height: 34px; padding: 0 10px;
-  border: 1px solid var(--border); border-radius: var(--r-md);
-  background: var(--bg); color: var(--text); font-family: var(--mono); font-size: 12px;
-}
-.filter-hint { color: var(--muted); font-size: 11px; line-height: 1.55; }
-
-.filter-check { display: flex; gap: 10px; align-items: flex-start; cursor: pointer; }
-.filter-check input { width: 16px; height: 16px; margin-top: 2px; accent-color: var(--green); flex: none; }
-.filter-check strong { display: block; font-size: 12px; }
-.filter-check small { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; line-height: 1.55; }
-
-.chip-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
-.chip {
-  padding: 5px 10px; border: 1px solid var(--green); border-radius: var(--r-sm);
-  background: var(--green-soft); color: var(--green-deep);
-  font-family: var(--mono); font-size: 10px; cursor: pointer;
-}
-.chip-clear { border-color: var(--border); background: transparent; color: var(--muted); }
+.rail-link:hover { border-color: var(--green); }
 
 /* ---------- results ------------------------------------------------------- */
-.screener-results { margin-top: 30px; }
-.screener-state { padding: 40px 0; color: var(--muted); }
+.screener-results {
+  margin-top: 30px;
+  border: 1px solid var(--border); border-radius: var(--r-lg);
+  background: var(--paper-surface);
+  overflow: hidden;
+}
+.screener-state { padding: 40px 22px; color: var(--muted); }
 /* `position: relative` is load-bearing, not decoration. The table's
    visually-hidden <caption> is absolutely positioned; without a positioned
    ancestor it resolves against the initial containing block, escapes the
@@ -133,18 +250,18 @@
    whole page draggable sideways at 390px even though the table itself was
    scrolling correctly. */
 .table-scroll { position: relative; overflow-x: auto; overscroll-behavior-x: contain; }
-.screener-table { width: 100%; min-width: 900px; border-collapse: collapse; }
+.screener-table { width: 100%; min-width: 780px; border-collapse: collapse; }
 .screener-table th, .screener-table td {
-  padding: 13px 14px; text-align: left; border-bottom: 1px solid var(--border);
+  padding: 12px 13px; text-align: left; border-bottom: 1px solid var(--border);
   vertical-align: middle;
 }
 .screener-table thead th {
   border-bottom: 1px solid var(--border-strong);
   color: var(--muted); font-family: var(--mono);
   font-size: 9px; font-weight: 500; letter-spacing: .13em; text-transform: uppercase;
-  white-space: nowrap;
+  line-height: 1.4;
 }
-.screener-table tbody tr:hover { background: var(--surface); }
+.screener-table tbody tr:hover { background: rgba(20, 32, 26, 0.03); }
 /* A 10% green wash drops muted body text to ~4.4:1, under AA. Use a lighter
    wash and mark the selected row with a rule as well, so selection is not
    carried by a colour tint alone. */
@@ -155,12 +272,30 @@
 .wallet-name { display: block; font-size: 13px; font-weight: 600; }
 .wallet-address { display: block; margin-top: 3px; color: var(--muted); font-family: var(--mono); font-size: 11px; }
 .coverage { color: var(--muted); font-family: var(--mono); font-size: 10px; letter-spacing: .04em; white-space: nowrap; }
-.btn-analyze { padding: 7px 14px; font-size: 11px; }
+/* A light tinted pill, not a solid green slab repeated down every row —
+   the repetition of a filled button is what made the table read heavy. */
+.btn-analyze {
+  padding: 6px 15px;
+  border: 1px solid var(--green); border-radius: 999px;
+  background: var(--pill-tint); color: var(--green-deep);
+  font-family: var(--mono); font-size: 10px; font-weight: 500; letter-spacing: .06em;
+}
+/* Hover and pressed deepen the tint rather than flipping to a solid fill:
+   paper on #0b9e63 is only 3.05:1, while the deep green on an 18% tint is
+   5.58:1 and keeps the control reading light. */
+.btn-analyze:hover { background: var(--pill-tint-strong); border-color: var(--green-deep); }
+.btn-analyze[aria-pressed="true"] {
+  background: var(--pill-tint-strong);
+  border-color: var(--green-deep);
+  color: var(--green-deep);
+  font-weight: 700;
+}
 
 /* ---------- selected wallet ---------------------------------------------- */
 .wallet-analysis {
-  margin-top: 34px; padding: 26px;
-  border: 1px solid var(--border-strong); border-radius: var(--r-lg); background: var(--surface);
+  margin-top: 26px; padding: 26px;
+  border: 1px solid var(--border-strong); border-radius: var(--r-lg);
+  background: var(--paper-surface);
 }
 .analysis-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; }
 .analysis-head h2 {
@@ -208,25 +343,55 @@
    The table keeps its intrinsic width and scrolls inside .table-scroll rather
    than collapsing into unreadable columns; the page itself never scrolls
    sideways. Controls stack. */
-@media (max-width: 900px) {
-  .screener-main { padding-top: 32px; }
-  .control-row { gap: 18px; }
-  .control-search { min-width: 100%; }
-  .filter-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .analysis-metrics { grid-template-columns: repeat(2, 1fr); }
-  .analysis-metrics > div:nth-child(2) { border-right: 0; }
-  .analysis-metrics > div:nth-child(n+3) { border-top: 1px solid var(--border); }
+@media (min-width: 941px) {
+  .screener-numeric > summary { display: none; }
 }
+
+/* --- narrow screens ---------------------------------------------------------
+   The shell sheds columns the way the documentation does: the notes rail goes
+   first, then the filter rail unsticks and stacks above the results. The table
+   always keeps its intrinsic width and scrolls inside .table-scroll, so the
+   page itself never pans sideways. */
+@media (max-width: 1240px) {
+  .screener-shell {
+    grid-template-columns: 248px minmax(0, 1fr);
+    grid-template-areas: "intro intro" "sidebar main";
+    column-gap: 34px;
+  }
+  .screener-rail { display: none; }
+}
+
+@media (max-width: 940px) {
+  /* Stacked: title first, then the filters, then the results — the filter rail
+     must not sit above the page's own heading. */
+  .screener-shell { display: flex; flex-direction: column; }
+  .screener-intro { order: 1; padding: 26px 0 0; }
+  .screener-sidebar { order: 2; }
+  .screener-main { order: 3; }
+  .screener-sidebar {
+    position: static; max-height: none; overflow: visible;
+    padding: 22px 0; border-right: 0; border-bottom: 1px solid var(--border);
+  }
+  /* Side by side while there is room, so the filters do not push the results
+     a full screen down. */
+  .screener-sidebar { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 28px; }
+  .rail-heading, .chip-row, .filter-check { grid-column: 1 / -1; }
+  .screener-main { padding-top: 26px; }
+}
+
 @media (max-width: 620px) {
-  .screener-nav { gap: 12px; padding: 11px 16px; }
+  .screener-nav { flex-wrap: wrap; gap: 10px; padding: 10px 16px; }
   .screener-brand-divider, .screener-brand-label { display: none; }
   .screener-nav-links a:not(.btn) { display: none; }
-  .filter-row { grid-template-columns: 1fr; }
+  .screener-search { order: 3; flex-basis: 100%; max-width: none; }
+  .screener-sidebar { grid-template-columns: 1fr; }
+  .screener-shell { width: calc(100% - 32px); }
   .analysis-head { flex-direction: column; }
   .analysis-metrics { grid-template-columns: 1fr; }
   .analysis-metrics > div,
   .analysis-metrics > div + div { padding: 14px 0; border-right: 0; border-top: 1px solid var(--border); }
   .screener-footer { flex-direction: column; gap: 8px; }
+  .wallet-analysis { padding: 18px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

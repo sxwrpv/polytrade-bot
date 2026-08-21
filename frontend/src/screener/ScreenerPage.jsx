@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { publicApi } from './publicApi'
+import RangeFilter from './RangeFilter'
 import {
   DEFAULT_FILTERS,
   DEFAULT_PERIOD,
@@ -86,6 +87,16 @@ export default function ScreenerPage() {
           <span className="screener-brand-divider" />
           <span className="screener-brand-label">Wallet Screener</span>
         </a>
+        <div className="screener-search">
+          <label className="visually-hidden" htmlFor="screener-search">
+            Search name, X handle or 0x address
+          </label>
+          <input
+            id="screener-search" type="search" value={search}
+            placeholder="Search a name, X handle, or 0x address…"
+            onChange={(event) => setSearch(event.target.value)}
+          />
+        </div>
         <nav className="screener-nav-links" aria-label="Site">
           <a href="/docs">Documentation</a>
           <a href="/docs/system-design">System design</a>
@@ -93,179 +104,222 @@ export default function ScreenerPage() {
         </nav>
       </header>
 
-      <main className="screener-main">
+      <div className="screener-shell">
         <section className="screener-intro">
           <p className="screener-eyebrow">PUBLIC WALLET RESEARCH</p>
           <h1>Wallet Screener</h1>
           <p className="screener-lede">
             Search Polymarket wallets on windowed statistics rebuilt from public trading
-            history. Every figure states the period it covers and how much history backs it.
-            Nothing here is a recommendation.
+            history. Every figure states the period it covers and how much history backs
+            it. Nothing here is a recommendation.
           </p>
         </section>
 
-        <section className="screener-controls" aria-label="Filters">
-          <div className="control-row">
-            <div className="control" role="group" aria-label="Metric period">
-              <span className="control-label">PERIOD</span>
-              <div className="segmented">
-                {PERIODS.map((value) => (
-                  <button
-                    key={value} type="button"
-                    className={value === period ? 'active' : ''}
-                    aria-pressed={value === period}
-                    onClick={() => setPeriod(value)}
-                  >{value.toUpperCase()}</button>
-                ))}
-              </div>
-            </div>
+        <aside className="screener-sidebar" aria-label="Filters">
+          <FilterRail
+            period={period} onPeriod={setPeriod}
+            sort={sort} onSort={setSort}
+            filters={filters} setFilter={setFilter}
+            completeHistoryOnly={completeHistoryOnly}
+            onCompleteHistoryOnly={setCompleteHistoryOnly}
+            chips={chips} onClearChip={clearChip} onClearAll={clearAll}
+          />
+        </aside>
 
-            <div className="control" role="group" aria-label="Sort by">
-              <span className="control-label">SORT BY</span>
-              <div className="segmented">
-                {SORTS.map(([key, label]) => (
-                  <button
-                    key={key} type="button"
-                    className={key === sort ? 'active' : ''}
-                    aria-pressed={key === sort}
-                    onClick={() => setSort(key)}
-                  >{label}</button>
-                ))}
-              </div>
-            </div>
+        <main className="screener-main">
+          <section
+            className="screener-results" aria-label="Results"
+            aria-busy={state === 'loading'}
+          >
+            {state === 'throttled' ? (
+              <p className="screener-state" role="status">
+                The public screener is rate limited and this client has hit the limit. Wait a
+                minute and try again.
+              </p>
+            ) : state === 'error' ? (
+              <p className="screener-state" role="alert">Could not load wallets: {error}</p>
+            ) : state === 'loading' ? (
+              <p className="screener-state" role="status">Loading wallets…</p>
+            ) : rows.length === 0 ? (
+              <p className="screener-state">
+                {exactLookup
+                  ? 'That wallet is not in the public screener cache yet. Open the Telegram Mini App to look up any wallet directly.'
+                  : 'No cached wallet matches these filters.'}
+              </p>
+            ) : (
+              <ResultTable
+                rows={rows} period={period}
+                selected={selected} onSelect={setSelected}
+              />
+            )}
+          </section>
 
-            <div className="control control-search">
-              <label className="control-label" htmlFor="screener-search">
-                SEARCH NAME, X HANDLE OR 0x ADDRESS
-              </label>
-              <input
-                id="screener-search" type="search" value={search}
-                placeholder="0x… or a display name"
-                onChange={(event) => setSearch(event.target.value)}
-              />
-            </div>
-          </div>
-
-          <details className="screener-advanced">
-            <summary>Filters</summary>
-            <div className="filter-row">
-              <NumberFilter
-                id="f-pnl" label={`PnL ${period.toUpperCase()} ≥ $`}
-                value={filters.pnlMin} onChange={(v) => setFilter('pnlMin', v)}
-              />
-              <NumberFilter
-                id="f-winrate" label={`Win rate ${period.toUpperCase()} ≥ %`}
-                value={filters.winrateMin} onChange={(v) => setFilter('winrateMin', v)}
-              />
-              <NumberFilter
-                id="f-volume" label={`Volume ${period.toUpperCase()} ≥ $`}
-                value={filters.volumeMin} onChange={(v) => setFilter('volumeMin', v)}
-              />
-              <NumberFilter
-                id="f-consistency"
-                label={`Positive close-day ratio ${period.toUpperCase()} ≥ %`}
-                value={filters.consistencyRatioMin}
-                onChange={(v) => setFilter('consistencyRatioMin', v)}
-                hint="Days with positive realized PnL as a share of days with non-zero realized PnL. Days that netted exactly zero are excluded."
-              />
-              <NumberFilter
-                id="f-fillexit-min"
-                label={`Sell / buy event count ${period.toUpperCase()} ≥ %`}
-                value={filters.fillExitMin} onChange={(v) => setFilter('fillExitMin', v)}
-                hint="Fetched SELL activity rows per 100 BUY rows. An activity-frequency ratio, not a capital close rate."
-              />
-              <NumberFilter
-                id="f-fillexit-max"
-                label={`Sell / buy event count ${period.toUpperCase()} ≤ %`}
-                value={filters.fillExitMax} onChange={(v) => setFilter('fillExitMax', v)}
-              />
-              <label className="filter-check">
-                <input
-                  type="checkbox" checked={completeHistoryOnly}
-                  onChange={(event) => setCompleteHistoryOnly(event.target.checked)}
-                />
-                <span>
-                  <strong>Complete fetched history only</strong>
-                  <small>
-                    Hides wallets whose fetched trade history does not reach back across the
-                    whole period. This describes that source only.
-                  </small>
-                </span>
-              </label>
-            </div>
-          </details>
-
-          {chips.length > 0 && (
-            <div className="chip-row" aria-label="Active filters">
-              {chips.map(([key, label]) => (
-                <button key={key} type="button" className="chip" onClick={() => clearChip(key)}>
-                  {label} ×
-                </button>
-              ))}
-              <button type="button" className="chip chip-clear" onClick={clearAll}>Clear all</button>
-            </div>
-          )}
-        </section>
-
-        <section className="screener-results" aria-label="Results" aria-busy={state === 'loading'}>
-          {state === 'throttled' ? (
-            <p className="screener-state" role="status">
-              The public screener is rate limited and this client has hit the limit. Wait a
-              minute and try again.
-            </p>
-          ) : state === 'error' ? (
-            <p className="screener-state" role="alert">Could not load wallets: {error}</p>
-          ) : state === 'loading' ? (
-            <p className="screener-state" role="status">Loading wallets…</p>
-          ) : rows.length === 0 ? (
-            <p className="screener-state">
-              {exactLookup
-                ? 'That wallet is not in the public screener cache yet. Open the Telegram Mini App to look up any wallet directly.'
-                : 'No cached wallet matches these filters.'}
-            </p>
-          ) : (
-            <ResultTable
-              rows={rows} period={period}
-              selected={selected} onSelect={setSelected}
+          {selected && (
+            <WalletAnalysis
+              row={rows.find((row) => row.address === selected) || null}
+              period={period}
+              onClose={() => setSelected(null)}
             />
           )}
-        </section>
 
-        {selected && (
-          <WalletAnalysis
-            row={rows.find((row) => row.address === selected) || null}
-            period={period}
-            onClose={() => setSelected(null)}
-          />
-        )}
+          <Provenance provenance={payload?.provenance} />
 
-        <Provenance provenance={payload?.provenance} />
-      </main>
+          <footer className="screener-footer">
+            <span>Public wallet data from Polymarket. Not financial advice.</span>
+            <span>
+              <a href="/docs/risk-and-security">Risk &amp; security</a>
+              {' · '}
+              <a href="/docs">Documentation</a>
+            </span>
+          </footer>
+        </main>
 
-      <footer className="screener-footer">
-        <span>Public wallet data from Polymarket. Not financial advice.</span>
-        <span>
-          <a href="/docs/risk-and-security">Risk &amp; security</a>
-          {' · '}
-          <a href="/docs">Documentation</a>
-        </span>
-      </footer>
+        <aside className="screener-rail" aria-label="About these results">
+          <div className="rail-title">Reading this table</div>
+          <ul className="rail-notes">
+            <li>Metrics cover the selected {period.toUpperCase()} window only.</li>
+            <li>“—” means unavailable, not zero.</li>
+            <li>“Partial” describes fetched trade history, nothing else.</li>
+          </ul>
+          <a className="rail-link" href="/docs/system-design">
+            How the metrics are computed&nbsp;<span aria-hidden="true">↗</span>
+          </a>
+        </aside>
+      </div>
     </div>
   )
 }
 
-function NumberFilter({ id, label, value, onChange, hint = '' }) {
-  const hintId = hint ? `${id}-hint` : undefined
+/* Filter rail. Period and sort are pills; every numeric threshold is a slider
+   whose "off" end means no filter, so an untouched control never narrows the
+   result set.
+
+   On a narrow screen the rail stacks above the results, and left expanded it
+   pushed the first wallet roughly 900px down the page. The numeric sliders
+   therefore start collapsed below the breakpoint where the rail stops being a
+   column — period and sort, the two controls people actually reach for first,
+   stay visible either way. Evaluated once on mount: a viewport that changes
+   mid-session is not worth reopening a disclosure the reader may have closed. */
+const RAIL_IS_STACKED = '(max-width: 940px)'
+
+function FilterRail({
+  period, onPeriod, sort, onSort, filters, setFilter,
+  completeHistoryOnly, onCompleteHistoryOnly, chips, onClearChip, onClearAll,
+}) {
+  const label = period.toUpperCase()
+  const [numericOpen] = useState(
+    () => !(typeof window !== 'undefined' && window.matchMedia?.(RAIL_IS_STACKED).matches),
+  )
   return (
-    <div className="filter-field">
-      <label htmlFor={id}>{label}</label>
-      <input
-        id={id} type="number" inputMode="decimal" value={value}
-        placeholder="off" aria-describedby={hintId}
-        onChange={(event) => onChange(event.target.value)}
+    <>
+      <div className="rail-heading">Filters</div>
+
+      <div className="control" role="group" aria-label="Metric period">
+        <span className="control-label">PERIOD</span>
+        <div className="segmented">
+          {PERIODS.map((value) => (
+            <button
+              key={value} type="button"
+              className={value === period ? 'active' : ''}
+              aria-pressed={value === period}
+              onClick={() => onPeriod(value)}
+            >{value.toUpperCase()}</button>
+          ))}
+        </div>
+      </div>
+
+      <div className="control" role="group" aria-label="Sort by">
+        <span className="control-label">SORT BY</span>
+        <div className="segmented">
+          {SORTS.map(([key, text]) => (
+            <button
+              key={key} type="button"
+              className={key === sort ? 'active' : ''}
+              aria-pressed={key === sort}
+              onClick={() => onSort(key)}
+            >{text}</button>
+          ))}
+        </div>
+      </div>
+
+      <details className="screener-numeric" open={numericOpen}>
+        <summary>Thresholds</summary>
+        <RangeFilter
+        id="f-pnl" label={`PnL ${label} ≥`} value={filters.pnlMin}
+        onChange={(v) => setFilter('pnlMin', v)}
+        min={-25000} max={25000} step={250}
+        format={(n) => `$${n.toLocaleString('en-US')}`}
       />
-      {hint && <small id={hintId} className="filter-hint">{hint}</small>}
-    </div>
+      <RangeFilter
+        id="f-winrate" label={`Win rate ${label} ≥`} value={filters.winrateMin}
+        onChange={(v) => setFilter('winrateMin', v)}
+        min={0} max={100} step={5} format={(n) => `${n}%`}
+      />
+      <RangeFilter
+        id="f-volume" label={`Volume ${label} ≥`} value={filters.volumeMin}
+        onChange={(v) => setFilter('volumeMin', v)}
+        min={0} max={250000} step={2500}
+        format={(n) => `$${n.toLocaleString('en-US')}`}
+      />
+      </details>
+
+      <details className="screener-advanced">
+        <summary>Advanced</summary>
+        <RangeFilter
+          id="f-consistency" label={`Positive close-day ratio ${label} ≥`}
+          value={filters.consistencyRatioMin}
+          onChange={(v) => setFilter('consistencyRatioMin', v)}
+          min={0} max={100} step={5} format={(n) => `${n}%`}
+        />
+        <p className="rail-hint">
+          Positive / (positive + negative) realized close days. Flat days and days with no
+          closings are excluded.
+        </p>
+        <RangeFilter
+          id="f-exit-min" label={`Sell / buy event count ${label} ≥`}
+          value={filters.fillExitMin}
+          onChange={(v) => setFilter('fillExitMin', v)}
+          min={0} max={400} step={5} format={(n) => `${n}%`}
+        />
+        <RangeFilter
+          id="f-exit-max" label={`Sell / buy event count ${label} ≤`}
+          value={filters.fillExitMax}
+          onChange={(v) => setFilter('fillExitMax', v)}
+          min={0} max={400} step={5} off="max" format={(n) => `${n}%`}
+        />
+        <p className="rail-hint">
+          SELL activity rows / BUY activity rows × 100. An activity-frequency ratio — not
+          capital, shares, or a position close rate.
+        </p>
+      </details>
+
+      <label className="filter-check">
+        <input
+          type="checkbox" checked={completeHistoryOnly}
+          onChange={(event) => onCompleteHistoryOnly(event.target.checked)}
+        />
+        <span>
+          <strong>Complete fetched history only</strong>
+          <small>
+            Hides wallets whose fetched trade history does not reach back across the whole
+            period. This describes that source only.
+          </small>
+        </span>
+      </label>
+
+      {chips.length > 0 && (
+        <div className="chip-row" aria-label="Active filters">
+          {chips.map(([key, text]) => (
+            <button key={key} type="button" className="chip" onClick={() => onClearChip(key)}>
+              {text} ×
+            </button>
+          ))}
+          <button type="button" className="chip chip-clear" onClick={onClearAll}>
+            Clear all
+          </button>
+        </div>
+      )}
+    </>
   )
 }
 
