@@ -8,7 +8,6 @@ import {
   DEFAULT_SORT,
   PERIODS,
   SORTS,
-  SUPPORTS_WALLET_DEEP_LINK,
   botDeepLink,
   activeFilterChips,
   buildPublicQuery,
@@ -171,15 +170,10 @@ test('rows carry provenance and never fabricate an aggregate score', () => {
   }
 })
 
-test('copying a wallet hands off to Telegram without inventing a deep link', () => {
-  const address = `0x${'a1'.repeat(20)}`
-
+test('Telegram handoff uses a plain bot link without inventing a wallet payload', () => {
   // Nothing in this repository reads Telegram's `start` payload, so the link
   // must not pretend the selected wallet travels with it.
-  assert.equal(SUPPORTS_WALLET_DEEP_LINK, false)
-  assert.equal(botDeepLink(address), 'https://t.me/cpolytrade_bot')
-  assert.equal(botDeepLink(null), 'https://t.me/cpolytrade_bot')
-  assert.equal(botDeepLink('not-an-address'), 'https://t.me/cpolytrade_bot')
+  assert.equal(botDeepLink(), 'https://t.me/cpolytrade_bot')
 })
 
 test('the page does not imply that a selected address carries into Telegram', async () => {

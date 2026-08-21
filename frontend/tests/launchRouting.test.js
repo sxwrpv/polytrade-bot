@@ -138,10 +138,9 @@ test('successful logout clears public cache and changes UI state', async () => {
 
 test('consumer copy and metadata include required disclosures and avoid overclaims', async () => {
   const root = new URL('../', import.meta.url)
-  const [publicPage, onboarding, gettingStarted, deposits, html] = await Promise.all([
+  const [publicPage, onboarding, deposits, html] = await Promise.all([
     readFile(new URL('src/pages/PublicHome.jsx', root), 'utf8'),
     readFile(new URL('src/pages/Onboarding.jsx', root), 'utf8'),
-    readFile(new URL('src/components/GettingStarted.jsx', root), 'utf8'),
     readFile(new URL('src/components/DepositAddresses.jsx', root), 'utf8'),
     readFile(new URL('index.html', root), 'utf8'),
   ])
@@ -153,7 +152,7 @@ test('consumer copy and metadata include required disclosures and avoid overclai
   assert.match(onboarding.toLowerCase(), /acknowledge/)
   assert.match(onboarding.toLowerCase(), /security/)
 
-  const guarded = `${publicPage}\n${onboarding}\n${gettingStarted}\n${deposits}`.toLowerCase()
+  const guarded = `${publicPage}\n${onboarding}\n${deposits}`.toLowerCase()
   for (const banned of [
     'mirrors every trade',
     'any chain',

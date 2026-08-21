@@ -138,17 +138,26 @@ async def create_wallet(body: CreateWallet, request: Request, response: Response
         raise HTTPException(500, "ENCRYPTION_SECRET not configured")
 
     telegram_user_id = int(tg_user["id"])
-    existing = await db.fetchone(
-        "SELECT * FROM users WHERE telegram_user_id = ?", (telegram_user_id,))
-    if existing:
+
+    async def restore_existing_wallet(existing_user: dict) -> dict:
+        """Record current consent and restore the existing wallet session."""
         await db.execute(
             "INSERT INTO user_consents(user_id,terms_version,telegram_user_id,accepted_at) "
             "VALUES(?,?,?,?) ON CONFLICT(user_id,terms_version) DO NOTHING",
-            (existing["id"], CURRENT_TERMS_VERSION, telegram_user_id, now_iso()))
-        raw = await auth.issue_session(db, existing["id"])
+            (existing_user["id"], CURRENT_TERMS_VERSION, telegram_user_id, now_iso()))
+        raw = await auth.issue_session(db, existing_user["id"])
         auth.set_session_cookie(response, raw)
-        return {"address": existing["id"], "signer_address": existing["signer_address"],
-                "gasless": existing["id"] != existing["signer_address"], "created": False}
+        return {
+            "address": existing_user["id"],
+            "signer_address": existing_user["signer_address"],
+            "gasless": existing_user["id"] != existing_user["signer_address"],
+            "created": False,
+        }
+
+    existing = await db.fetchone(
+        "SELECT * FROM users WHERE telegram_user_id = ?", (telegram_user_id,))
+    if existing:
+        return await restore_existing_wallet(existing)
 
     ip = _client_ip(request)
     if _create_rate_limited(ip):
@@ -171,14 +180,7 @@ async def create_wallet(body: CreateWallet, request: Request, response: Response
         existing = await db.fetchone(
             "SELECT * FROM users WHERE telegram_user_id = ?", (telegram_user_id,))
         if existing:
-            await db.execute(
-                "INSERT INTO user_consents(user_id,terms_version,telegram_user_id,accepted_at) "
-                "VALUES(?,?,?,?) ON CONFLICT(user_id,terms_version) DO NOTHING",
-                (existing["id"], CURRENT_TERMS_VERSION, telegram_user_id, now_iso()))
-            raw = await auth.issue_session(db, existing["id"])
-            auth.set_session_cookie(response, raw)
-            return {"address": existing["id"], "signer_address": existing["signer_address"],
-                    "gasless": existing["id"] != existing["signer_address"], "created": False}
+            return await restore_existing_wallet(existing)
         raise HTTPException(409, "wallet creation or reconciliation is already in progress")
 
     try:

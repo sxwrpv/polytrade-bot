@@ -94,7 +94,6 @@ Export requires a linked Telegram identity and `initData` no older than five min
 
 ## Trader routes
 
-- `GET /api/traders/leaderboard`
 - `GET /api/traders/following`
 - `GET /api/traders/{address}`
 - `POST /api/traders/{address}/follow`

@@ -37,6 +37,7 @@ router = APIRouter()
 _ADDR_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
 PERIODS: dict[str, int] = {"7d": 7, "30d": 30, "90d": 90}
 SORTS = {"pnl", "winrate", "volume"}
+FILTERS = {"pnl", "winrate", "volume", "consistency_ratio", "fill_exit_ratio", "history_days"}
 
 # Per-client budget. Generous enough for a person researching wallets, tight
 # enough that the endpoint cannot be used as a free bulk export of the cache.
@@ -254,8 +255,7 @@ async def public_wallet(
     if not row:
         raise HTTPException(
             404,
-            "this wallet is not in the public screener cache — open the "
-            "Telegram Mini App to look up any wallet directly",
+            "this wallet is not in the public screener cache",
         )
     return _project(row, period)
 

@@ -305,41 +305,11 @@ input:focus, select:focus {
 }
 .chip-icon { display: inline-flex; align-items: center; gap: 6px; }
 
-/* trader card */
-.trader-card .tc-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 12px; }
-.tc-identity { display: flex; flex-direction: column; min-width: 0; }
+/* Copied-wallet PnL breakdown on the User page. */
+.tc-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 12px; }
 .tc-name { font-weight: 600; font-size: 14px; overflow-wrap: anywhere; }
-.tc-period-label { color: var(--green); font: 10px var(--mono); letter-spacing: .08em; white-space: nowrap; }
-.tc-discovery-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-block: 1px solid var(--border); }
-.tc-discovery-stats > div { padding: 11px 10px; border-right: 1px solid var(--border); }
-.tc-discovery-stats > div:first-child { padding-left: 0; }
-.tc-discovery-stats > div:last-child { border-right: 0; }
-.tc-discovery-stats span { display: block; color: var(--muted); font-size: 9px; letter-spacing: .06em; }
-.tc-discovery-stats strong { display: block; margin-top: 5px; font: 600 14px var(--mono); }
-.tc-evidence-state { display: flex; justify-content: space-between; gap: 10px; margin: 8px 0 12px; color: var(--muted); font-size: 9px; letter-spacing: .05em; text-transform: uppercase; }
-.tc-actions { display: flex; gap: 8px; }
-.tc-actions .btn { min-width: 120px; }
-.tc-analysis { margin-top: 10px; }
-.tc-copy-settings { margin-top: 10px; }
+.tc-stats { display: flex; gap: 12px; flex-wrap: wrap; color: var(--muted); font-size: 11px; }
 
-/* deep trader analysis */
-.ta { display: grid; gap: 12px; }
-.ta-section { min-width: 0; border-top: 1px solid var(--border); }
-.ta-section:first-child { border-top: 0; }
-.ta-name, .ta-address, .ta-fetch-state { display: block; }
-.ta-address { margin-top: 3px; overflow-wrap: anywhere; }
-.ta-fetch-state { margin-top: 6px; }
-.ta-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--border); }
-.ta-summary > div { min-width: 0; padding: 9px; border-right: 1px solid var(--border); }
-.ta-summary > div:last-child { border-right: 0; }
-.ta-summary span, .ta-summary strong { display: block; overflow-wrap: anywhere; }
-.ta-summary span { color: var(--muted); font-size: 9px; letter-spacing: .06em; }
-.ta-summary strong { margin-top: 5px; font: 600 12px var(--mono); }
-.ta-row { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 11px; }
-.ta-title { flex: 1; min-width: 150px; overflow-wrap: anywhere; }
-.ta-count { margin-bottom: 4px; overflow-wrap: anywhere; }
-.ta-source-note { display: grid; gap: 4px; padding: 10px; border: 1px solid var(--border); background: color-mix(in srgb, var(--surface) 75%, transparent); }
-.ta-source-note strong { color: var(--text); font-size: 9px; letter-spacing: .08em; }
 
 /* position card */
 .pos-card .pc-title { font-weight: 600; margin-bottom: 4px; }
@@ -382,8 +352,6 @@ input:focus, select:focus {
 .folder-body > .card:first-child { margin-top: 0; }
 .folder-body .folder { margin-left: 4px; padding-left: 10px; border-left: 1px solid var(--border); }
 
-/* persistent KPI strip — sticks under the app header on HOME */
-.kpi-strip { position: sticky; top: 52px; z-index: 5; margin-bottom: 16px; }
 
 .slider-row { display: flex; align-items: center; gap: 8px; }
 .slider-row input[type='range'] {
@@ -412,12 +380,6 @@ input:focus, select:focus {
 .setting-val { font-family: var(--mono); color: var(--green-text); font-size: 12px; letter-spacing: 0; }
 .setting-hint { text-transform: none; letter-spacing: 0; margin-top: 2px; }
 
-/* getting-started checklist */
-.getting-started { border-color: rgba(11, 158, 99, 0.45); }
-.gs-step { display: flex; gap: 8px; align-items: baseline; padding: 4px 0; font-size: 12px; }
-.gs-check { color: var(--green); font-family: var(--mono); }
-.gs-step .gs-label { letter-spacing: 0.04em; font-weight: 500; }
-.gs-step.done .gs-label { color: var(--muted); text-decoration: line-through; }
 
 /* activity feed — flat translucent rows, NO blur (dense data) */
 .feed-row {
@@ -434,21 +396,13 @@ input:focus, select:focus {
 .skeleton { height: 120px; animation: pulse 1.2s ease-in-out infinite; }
 @keyframes pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 0.7; } }
 
-/* trader-card period stat block */
-.tc-period { border-top: 1px solid var(--border); padding-top: 8px; margin-top: 4px; margin-bottom: 10px; }
-.sparkline {
-  width: 100%; height: 48px; display: block;
-  background: rgba(255, 255, 255, 0.45);
-  border: 1px solid var(--border); border-radius: var(--r-sm);
-}
-.spark-empty { padding: 8px 0; }
-
-/* dot strip — green/red/gray day visualization */
+/* User-page daily PnL visualization. */
 .dot-strip { display: flex; flex-wrap: wrap; gap: 3px; }
 .dot { width: 8px; height: 8px; display: inline-block; border: 1px solid var(--border); border-radius: 3px; }
 .dot-green { background: var(--green); border-color: var(--green); }
 .dot-red { background: var(--red); border-color: var(--red); }
 .dot-flat { background: rgba(20, 32, 26, 0.07); }
+
 
 /* ===== consumer public site ===== */
 html { scroll-behavior: smooth; }
@@ -525,17 +479,13 @@ a { color: inherit; }
 
 @media (max-width: 760px) {
   .public-wrap{width:min(100% - 28px, 620px)}.public-nav{top:7px}.public-nav-link{display:none}.public-small-cta{font-size:10px}.public-hero{grid-template-columns:1fr;min-height:0;padding:75px 0 70px;gap:55px}.public-site h1{font-size:clamp(42px,14vw,62px)}.hero-lede{font-size:16px}.hero-actions{align-items:flex-start;flex-direction:column;gap:17px}.benefits,.know{padding-block:72px}.benefits>div:first-child{display:block}.know{grid-template-columns:1fr;gap:45px}.know-list article{grid-template-columns:1fr;gap:7px}.final-inner{align-items:flex-start;flex-direction:column}.public-footer{grid-template-columns:1fr}.public-footer small{grid-column:auto}.onboard{margin:20px auto;padding:18px}.onboard-terms{grid-template-columns:1fr}
-  .trader-card .tc-top{flex-direction:column}.tc-period-label{white-space:normal;overflow-wrap:anywhere}.tc-discovery-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.tc-discovery-stats>div{border-bottom:1px solid var(--border)}.tc-discovery-stats>div:nth-child(2){border-right:0}.tc-discovery-stats>div:nth-last-child(-n+2){border-bottom:0}.tc-discovery-stats>div:nth-child(3){padding-left:0}.tc-evidence-state{align-items:flex-start;flex-direction:column}.ta-summary{grid-template-columns:1fr}.ta-summary>div{border-right:0;border-bottom:1px solid var(--border)}.ta-summary>div:last-child{border-bottom:0}.ta-row{align-items:flex-start;flex-direction:column;gap:4px}.ta-title{min-width:0;width:100%}
 }
 @media (prefers-reduced-motion: reduce) {
   html{scroll-behavior:auto}*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}.product-preview{animation:none}
 }
 
-/* Home: paste an address found in the standalone screener and act on it. */
+/* Home: link to the standalone research surface. */
 .screener-entry p { margin: 6px 0 12px; }
-.add-wallet-row { display: flex; gap: 8px; margin-bottom: 10px; }
-.add-wallet-row input { flex: 1; font-family: var(--mono); font-size: 12px; }
-.add-wallet-row .btn { flex: none; white-space: nowrap; }
 .visually-hidden {
   position: absolute; width: 1px; height: 1px;
   margin: -1px; padding: 0; border: 0; overflow: hidden;

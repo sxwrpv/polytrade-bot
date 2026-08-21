@@ -69,19 +69,9 @@ export const api = {
   // pass the CURRENT initData so the backend can re-verify the human.
   exportKey: (initData) =>
     req('/user/export-key', { method: 'POST', body: JSON.stringify({ init_data: initData }) }),
-  // traders — leaderboard doubles as the wallet screener: pass sort/limit/offset
-  // plus any number of `<column>_min` / `<column>_max` filter keys (see
-  // backend/core/trader_stats.py _FILTERABLE_COLUMNS); they all combine with AND.
-  leaderboard: (params = {}) => {
-    const q = new URLSearchParams()
-    Object.entries({ sort: 'pnl_30d', limit: 50, ...params }).forEach(([k, v]) => {
-      if (v !== '' && v != null) q.set(k, v)
-    })
-    return req(`/traders/leaderboard?${q.toString()}`)
-  },
+  // Already-copied wallets and their controls. Discovery lives on the public
+  // read-only /screener surface rather than in the authenticated Mini App.
   following: () => req('/traders/following'),
-  trader: (addr) => req(`/traders/${addr}`),
-  follow: (addr, body) => req(`/traders/${addr}/follow`, { method: 'POST', body: JSON.stringify(body) }),
   followSettings: (addr, body) => req(`/traders/${addr}/settings`, { method: 'POST', body: JSON.stringify(body) }),
   unfollow: (addr) => req(`/traders/${addr}/follow`, { method: 'DELETE' }),
   telemetryEvent: (body) => req('/telemetry/events', {

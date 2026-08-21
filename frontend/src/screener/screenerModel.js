@@ -159,25 +159,10 @@ export function walletRows(payload) {
   })
 }
 
-/* Telegram deep linking is NOT enabled.
- *
- * Telegram can carry a `start` payload into a bot, but nothing in this
- * repository reads one: the backend only calls sendMessage for alerts, and
- * neither the Mini App nor the API looks at `start_param` /
- * `tgWebAppStartParam`. Emitting `?start=wallet_<address>` would therefore
- * produce a link that silently drops the wallet — a flow the product does not
- * actually support.
- *
- * So the hand-off is the plain bot link, and the UI tells the reader to bring
- * the address with them rather than implying it travels automatically. When
- * the bot does learn to resolve a `wallet_<address>` payload, flip this flag
- * and the deep link below is already the right shape.
- */
-export const SUPPORTS_WALLET_DEEP_LINK = false
-
-export function botDeepLink(address) {
-  if (!SUPPORTS_WALLET_DEEP_LINK || !isAddress(address)) return BOT_URL
-  return `${BOT_URL}?start=wallet_${String(address).trim().toLowerCase()}`
+/* The bot does not consume wallet deep-link payloads. Keep the handoff honest:
+ * opening Telegram never implies that the selected address travels with it. */
+export function botDeepLink() {
+  return BOT_URL
 }
 
 export const POLYMARKET_PROFILE = (address) =>

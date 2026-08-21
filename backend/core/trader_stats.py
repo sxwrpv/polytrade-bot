@@ -1,4 +1,4 @@
-"""Trader leaderboard, consistency scoring, wallet screener, and trader_cache seeding.
+"""Trader discovery, consistency scoring, screener metrics, and cache seeding.
 
 The public leaderboard gives pnl/vol per trader; everything else (consistency,
 win rate, open-position count) is derived locally from the trader's trade history
@@ -12,7 +12,7 @@ expired (resolved-and-lost) holdings realized as losses — see
 window is skipped); the leaderboard's pnl stays authoritative for lifetime
 totals.
 
-Wallet screener (see UX_AND_WALLET_SCREENER_PLAN.md): win rate / pnl / volume /
+Wallet screener metrics — win rate / pnl / volume /
 consistency (green vs red days) / fill-exit ratio are all precomputed per trader
 for three windows (7d/30d/90d) and cached in `trader_cache` on a schedule (see
 `refresh_all` + the background loop in main.py). The screener endpoint filters
@@ -25,7 +25,6 @@ import asyncio
 import datetime as dt
 import json
 import logging
-import math
 import statistics
 import time
 from collections import defaultdict
@@ -82,8 +81,8 @@ _NULL = {
     "reason": (
         "Cache null means not fetched or not computable and is unavailable, not numeric "
         "zero (except the legacy open_positions DEFAULT 0 before stats_refreshed_at). "
-        "Current TraderCard rendering and tier assignment coerce some missing values to "
-        "zero/bronze; that consumer behavior is unsafe and remains a current limitation."
+        "The standalone public screener preserves unavailable values. Legacy tier assignment "
+        "still maps a missing consistency score to bronze on authenticated followed-wallet data."
     ),
 }
 _COMBINED_PARTIAL = {
@@ -161,7 +160,7 @@ SCREENER_METRIC_CONTRACT = {
             "history plus a current positions snapshot and must not be described as lifetime."
         ),
         provenance="official_with_reconstructed_fallback",
-        sortable=True, filterable=True, label="Total PnL",
+        sortable=False, filterable=False, label="Total PnL",
         tooltip=(
             "Polymarket's official ALL-period PnL when returned. Only an explicit "
             "no-row result may fill a missing value with a fetch-bounded estimate; "
@@ -190,7 +189,7 @@ SCREENER_METRIC_CONTRACT = {
             "activity and has no broader coverage claim."
         ),
         provenance="official_with_reconstructed_fallback",
-        sortable=True, filterable=True, label="Total Volume",
+        sortable=False, filterable=False, label="Total Volume",
         tooltip=(
             "Polymarket's official ALL-period volume when returned; after explicit "
             "no-row, a missing value may use a partial sum of fetched TRADE rows."
@@ -212,7 +211,7 @@ SCREENER_METRIC_CONTRACT = {
             f"closing events. {_REALIZED_CLOSING_RULES}"
         ),
         time_window="Fetched history used by the 90-day activity walk; page boundaries may include older events and coverage may be partial.",
-        sortable=True, filterable=True, label="Observed Win Rate",
+        sortable=False, filterable=False, label="Observed Win Rate",
         tooltip="Share of reconstructed fetched closing events that won; coverage is fetch-bounded.",
     ),
     "open_positions": _metric_contract(
@@ -220,7 +219,7 @@ SCREENER_METRIC_CONTRACT = {
         source_endpoint=(_POSITIONS_ENDPOINT,), limits=_POSITIONS_LIMITS,
         partial_behavior=_POSITIONS_PARTIAL,
         time_window="Current point-in-time positions snapshot.",
-        sortable=False, filterable=True, label="Open Positions",
+        sortable=False, filterable=False, label="Open Positions",
         tooltip="Open non-redeemable positions in the fetched snapshot; 500 is a lower-bound truncation risk.",
     ),
     "consistency_score": _metric_contract(
@@ -230,20 +229,20 @@ SCREENER_METRIC_CONTRACT = {
             "means the component is 0, + 0.2*clamp(mean daily PnL/100,0,1), rounded to 4 decimals."
         ),
         time_window="Observed realized-PnL days in the fetched activity walk; absent calendar days are omitted.",
-        sortable=True, filterable=True, label="Consistency",
+        sortable=False, filterable=False, label="Consistency",
         tooltip="Reconstructed steadiness score over observed PnL days; 0 can mean fewer than 7 observed days, not poor performance.",
     ),
     "pnl_quality": _metric_contract(
         formula="sum(reconstructed realized closings in fetched history) - sum(cashPnl of current open non-redeemable positions)",
         time_window="Fetch-bounded realized history minus a current point-in-time unrealized snapshot.",
-        sortable=True, filterable=True, label="PnL Quality",
+        sortable=False, filterable=False, label="PnL Quality",
         tooltip="Reconstructed fetched realized PnL minus current open-position PnL; realized and snapshot terms use different horizons.",
     ),
     "daily_pnl_90d": _metric_contract(
         formula="JSON object mapping UTC closing day to sum(reconstructed realized PnL), retaining keys on or after (inclusive) the UTC date 90 days ago; days with no closing are omitted",
         time_window="Inclusive cutoff spans 91 possible UTC date labels (cutoff date through refresh date), though omitted no-closing dates mean fewer keys.",
         label="90d Daily PnL",
-        tooltip="Reconstructed daily realized PnL points for the sparkline; missing dates are not zero-PnL claims.",
+        tooltip="Reconstructed daily realized PnL points; missing dates are not zero-PnL claims.",
     ),
     "history_days": _metric_contract(
         formula="90.0 when the TRADE fetch exhausted or crossed the 90-day cutoff; otherwise round((refresh time - oldest fetched TRADE timestamp)/86400, 1)",
@@ -293,7 +292,7 @@ for _window, _days in _PERIODS.items():
             f"{_days}d Sell Exits", "Fetched SELL activity-row count; redemptions are not included.", False, False),
         "fill_exit_ratio": (
             "round(SELL TRADE row count / BUY TRADE row count * 100, 2); null when there are no BUY rows",
-            f"{_days}d Exit/Fill Ratio", "Fetched SELL-to-BUY activity-row count ratio as a percentage, not an order, position, share, or capital close rate.", True, True),
+            f"{_days}d Exit/Fill Ratio", "Fetched SELL-to-BUY activity-row count ratio as a percentage, not an order, position, share, or capital close rate.", False, True),
     }
     for _stem, (_formula, _label, _tooltip, _sortable, _filterable) in _defs.items():
         _trade_only = _stem in {"volume", "fills", "exits", "fill_exit_ratio"}
@@ -820,101 +819,3 @@ async def refresh_all(db, pm, *, limit: int = 200, concurrency: int = 8) -> int:
 
     await asyncio.gather(*(one(r["address"]) for r in rows))
     return done
-
-
-_SORT_COLS = {
-    "consistency": "consistency_score",
-    "pnl": "total_pnl",
-    "winrate": "win_rate",
-    "volume": "volume_usd",
-    "pnl_quality": "pnl_quality",
-    "pnl_7d": "pnl_7d",
-    "pnl_30d": "pnl_30d",
-    "pnl_90d": "pnl_90d",
-    "winrate_7d": "winrate_7d",
-    "winrate_30d": "winrate_30d",
-    "winrate_90d": "winrate_90d",
-    "volume_7d": "volume_7d",
-    "volume_30d": "volume_30d",
-    "volume_90d": "volume_90d",
-    "fill_exit_ratio_7d": "fill_exit_ratio_7d",
-    "fill_exit_ratio_30d": "fill_exit_ratio_30d",
-    "fill_exit_ratio_90d": "fill_exit_ratio_90d",
-}
-
-# Whitelist of numeric columns the screener is allowed to filter on — windowed
-# metrics, the fetched TRADE-history coverage indicator, and legacy all-time
-# fields. Query params are `<column>_min` / `<column>_max`; anything not in this
-# set is ignored (defense against injection and against filtering on arbitrary
-# or internal columns).
-_FILTERABLE_COLUMNS = frozenset({
-    "winrate_7d", "winrate_30d", "winrate_90d",
-    "pnl_7d", "pnl_30d", "pnl_90d",
-    "volume_7d", "volume_30d", "volume_90d",
-    "consistency_ratio_7d", "consistency_ratio_30d", "consistency_ratio_90d",
-    "fill_exit_ratio_7d", "fill_exit_ratio_30d", "fill_exit_ratio_90d",
-    "pnl_quality", "total_pnl", "win_rate", "volume_usd", "consistency_score",
-    "open_positions", "history_days",
-})
-
-
-def parse_screener_filters(query_params) -> dict[str, tuple[str, str, float]]:
-    """Extract whitelisted `<col>_min` / `<col>_max` filters from a mapping of
-    raw query params (e.g. FastAPI's `Request.query_params`). Returns
-    {param_key: (column, sql_op, value)} — ready to be AND'd together by
-    `get_leaderboard`. Unknown keys and unparseable values are silently
-    dropped rather than erroring, so unrelated query params (sort, limit, ...)
-    can share the same query string."""
-    out: dict[str, tuple[str, str, float]] = {}
-    for key, raw in dict(query_params).items():
-        for suffix, op in (("_min", ">="), ("_max", "<=")):
-            if key.endswith(suffix):
-                col = key[: -len(suffix)]
-                if col in _FILTERABLE_COLUMNS:
-                    try:
-                        value = float(raw)
-                        if math.isfinite(value):
-                            out[key] = (col, op, value)
-                    except (TypeError, ValueError):
-                        pass
-                break
-    return out
-
-
-async def get_leaderboard(
-    db,
-    sort_by: str = "pnl_30d",
-    limit: int = 50,
-    offset: int = 0,
-    filters: dict[str, tuple[str, str, float]] | None = None,
-    search: str | None = None,
-) -> list[dict]:
-    """Leaderboard / wallet screener. `filters` (see `parse_screener_filters`)
-    combine with AND — pass as many as you like simultaneously; this is a
-    single indexed query over precomputed columns, so cost doesn't grow with
-    the number of active filters. `search` substring-matches the wallet
-    address, display name, or X username (case-insensitive, parameterized)."""
-    col = _SORT_COLS.get(sort_by, "pnl_30d")   # whitelist (no injection)
-    clauses: list[str] = []
-    params: list = []
-    if filters:
-        clauses += [f"{fcol} {op} ?" for fcol, op, _ in filters.values()]
-        params += [val for _, _, val in filters.values()]
-    if search and search.strip():
-        # LOWER() both sides for case-insensitive search on BOTH backends —
-        # SQLite LIKE ignores ASCII case but Postgres LIKE does not.
-        term = f"%{search.strip().lower()}%"
-        clauses.append("(LOWER(address) LIKE ? OR LOWER(display_name) LIKE ? "
-                       "OR LOWER(x_username) LIKE ?)")
-        params += [term, term, term]
-    where_sql = ("WHERE " + " AND ".join(clauses)) if clauses else ""
-    order_sql = (
-        f"CASE WHEN {col} IS NULL THEN 1 ELSE 0 END ASC, "
-        f"{col} DESC, address ASC"
-    )
-    rows = await db.fetchall(
-        f"SELECT * FROM trader_cache {where_sql} ORDER BY {order_sql} LIMIT ? OFFSET ?",
-        [*params, limit, offset])
-    for r in rows:
-        r["tier"] = assign_tier(r.get("consistency_score") or 0.0)
-    return rows
