@@ -135,8 +135,6 @@
   display: grid; grid-template-columns: .9fr 1.1fr; gap: 64px; align-items: center;
   padding-block: 42px;
 }
-.feature-row.flip { grid-template-columns: 1.1fr .9fr; }
-.feature-row.flip .feature-copy { order: 2; }
 .feature-copy h3 { margin-bottom: 12px; font-family: var(--serif); font-size: 27px; font-weight: 400; letter-spacing: -.01em; line-height: 1.2; }
 .feature-copy p { color: var(--muted); max-width: 44ch; line-height: 1.7; }
 .feature-list { margin-top: 18px; display: grid; gap: 9px; }
@@ -174,8 +172,7 @@
   .speed-grid { grid-template-columns: 1fr; }
   .speed-card, .speed-card + .speed-card { padding: 20px 0; border-right: 0; border-top: 1px solid var(--border); }
   .speed-card:first-child { border-top: 0; }
-  .feature-row, .feature-row.flip { grid-template-columns: 1fr; gap: 32px; padding-block: 28px; }
-  .feature-row.flip .feature-copy { order: 0; }
+  .feature-row { grid-template-columns: 1fr; gap: 32px; padding-block: 28px; }
   .pipeline-figure, .surface-figure { padding: 16px 12px; }
 }
 

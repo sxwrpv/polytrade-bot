@@ -15,7 +15,7 @@ export const SORTS = [
 ]
 export const DEFAULT_PERIOD = '30d'
 export const DEFAULT_SORT = 'pnl'
-export const DEFAULT_LIMIT = 50
+const DEFAULT_LIMIT = 50
 
 export const DEFAULT_FILTERS = Object.freeze({
   pnlMin: '',
@@ -33,7 +33,7 @@ export const isAddress = (value) => ADDRESS_RE.test(String(value ?? '').trim())
 
 /** A filter is active only when it parses to a finite number. Blank stays
  *  blank; it never becomes a zero threshold that quietly hides wallets. */
-export function finiteFilter(value) {
+function finiteFilter(value) {
   if (value == null || String(value).trim() === '') return null
   const number = Number(value)
   return Number.isFinite(number) ? number : null
