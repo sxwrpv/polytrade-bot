@@ -14,32 +14,12 @@ from backend.db.database import now_iso
 
 router = APIRouter()
 
-_PERIODS = {"7d", "30d", "90d"}
-_SOURCES = {"screener", "analysis", "positions"}
-_QUERY_KINDS = {"address", "text"}
+_SOURCES = {"positions"}
 _DISMISS_STATES = {"confirming", "confirmed", "rejected", "reconciliation_required", "failed"}
 
+# The exact property set per event — allowed and required are the same set,
+# so this single mapping is the whole payload contract.
 _EVENT_PROPERTIES: dict[str, frozenset[str]] = {
-    "screener_search_submitted": frozenset({"query_kind", "period", "active_filters"}),
-    "period_changed": frozenset({"period", "source"}),
-    "advanced_filters_opened": frozenset({"period"}),
-    "wallet_analysis_opened": frozenset({"period", "source"}),
-    "copy_settings_opened": frozenset({"source"}),
-    "close_modal_opened": frozenset({"source"}),
-    "close_submitted": frozenset({"source"}),
-    "close_confirmed": frozenset({"duration_ms"}),
-    "close_rejected": frozenset({"duration_ms"}),
-    "close_reconciliation_required": frozenset({"duration_ms"}),
-    "close_failed": frozenset({"duration_ms"}),
-    "modal_dismissed": frozenset({"state", "source"}),
-}
-
-_REQUIRED_PROPERTIES: dict[str, frozenset[str]] = {
-    "screener_search_submitted": frozenset({"query_kind", "period", "active_filters"}),
-    "period_changed": frozenset({"period", "source"}),
-    "advanced_filters_opened": frozenset({"period"}),
-    "wallet_analysis_opened": frozenset({"period", "source"}),
-    "copy_settings_opened": frozenset({"source"}),
     "close_modal_opened": frozenset({"source"}),
     "close_submitted": frozenset({"source"}),
     "close_confirmed": frozenset({"duration_ms"}),
@@ -64,21 +44,16 @@ class TelemetryEvent(BaseModel):
             raise ValueError("unsupported telemetry event")
         keys = set(self.properties)
         unknown = keys - allowed
-        missing = _REQUIRED_PROPERTIES[self.event_name] - keys
+        # Every allowed property is also required: the schema is exact-match.
+        missing = allowed - keys
         if unknown:
             raise ValueError("unsupported telemetry property")
         if missing:
             raise ValueError("missing telemetry property")
 
         props = self.properties
-        if "period" in props and props["period"] not in _PERIODS:
-            raise ValueError("invalid period")
         if "source" in props and props["source"] not in _SOURCES:
             raise ValueError("invalid source")
-        if "query_kind" in props and props["query_kind"] not in _QUERY_KINDS:
-            raise ValueError("invalid query kind")
-        if "active_filters" in props and not isinstance(props["active_filters"], bool):
-            raise ValueError("active_filters must be boolean")
         if "duration_ms" in props:
             value = props["duration_ms"]
             if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 3_600_000:

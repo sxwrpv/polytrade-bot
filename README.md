@@ -72,7 +72,6 @@ frontend/
   src/                  React application
   dist/                 production build served by FastAPI
 supabase/migrations/    Postgres schema and security migrations
-deploy/macmini/         legacy local deployment tooling
 tests/                  backend, safety and deployment contracts
 docs/                   consumer help, developer, and operator documentation
 compose.yaml            production service topology

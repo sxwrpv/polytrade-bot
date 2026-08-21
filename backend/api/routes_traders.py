@@ -1,4 +1,4 @@
-"""/api/traders/* — leaderboard, trader profile, follow/unfollow."""
+"""/api/traders/* — authenticated profiles and copied-wallet controls."""
 from __future__ import annotations
 
 import asyncio
@@ -79,26 +79,6 @@ async def _wait_for_trader_submissions(db, user_id: str, address: str) -> None:
 
 
 # Literal routes must precede /{address} (single-segment) to avoid capture.
-# Auth required: the screener is a logged-in surface, and leaving these public
-# handed out unmetered DB reads (and, on /{address}, 3-8 upstream API calls +
-# cache writes per hit) to anyone who found the tunnel URL.
-@router.get("/leaderboard")
-async def leaderboard(request: Request, sort: str = "pnl_30d", limit: int = 50,
-                      offset: int = 0, search: str | None = None,
-                      user=Depends(get_current_user), db=Depends(get_db)):
-    """Leaderboard / wallet screener. Any number of `<column>_min` / `<column>_max`
-    query params (see `trader_stats._FILTERABLE_COLUMNS`) combine with AND — e.g.
-    `?winrate_30d_min=0.6&pnl_30d_min=500&fill_exit_ratio_30d_min=50` filters
-    simultaneously on 30d win rate, 30d pnl, and 30d exit-to-fill ratio.
-    Default sort: `pnl_30d`. `search` substring-matches address / display name /
-    X username."""
-    limit = max(1, min(int(limit), 200))
-    offset = max(0, int(offset))
-    filters = trader_stats.parse_screener_filters(request.query_params)
-    return await trader_stats.get_leaderboard(db, sort, limit, offset, filters,
-                                              search=search)
-
-
 @router.get("/following")
 async def following(user=Depends(get_current_user), db=Depends(get_db)):
     """The user's active follows (leaderboard- or manually-added), with cached stats."""
@@ -118,9 +98,11 @@ async def following(user=Depends(get_current_user), db=Depends(get_db)):
 @router.get("/{address}")
 async def trader_profile(address: str, user=Depends(get_current_user),
                          db=Depends(get_db), pmc=Depends(get_pm)):
-    """Live stats for ANY wallet (the screener's paste-an-address checker) —
-    computes + caches windowed stats on the spot, so it also works for wallets
-    the leaderboard crawler has never seen."""
+    """Authenticated on-demand analysis for any valid wallet address.
+
+    This endpoint computes and caches windowed stats. The public standalone
+    screener remains cache-only and never invokes this upstream-spending path.
+    """
     address = address.lower()
     if not _ADDR_RE.match(address):
         raise HTTPException(400, "invalid wallet address (expected 0x + 40 hex)")

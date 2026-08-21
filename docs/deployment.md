@@ -131,8 +131,8 @@ new certificate.
 
 `/api/public/screener/*` is anonymous, read-only and rate limited. It reads
 only precomputed `trader_cache` columns, so a public request can never trigger
-an upstream Polymarket call or a cache write. `/api/traders/*` keeps its
-session gate and remains the only route that spends upstream API budget.
+an upstream Polymarket call or a cache write. Authenticated
+`/api/traders/{address}` remains the on-demand route that spends upstream API budget.
 
 ### Optional: screener.polytradebot.live
 
@@ -225,7 +225,3 @@ resolving is a hard failure for those clients, not a silent one.
 - [ ] Engine, claims, disk, logs, DNS, and TLS are monitored.
 - [ ] Telegram menu targets production HTTPS.
 - [ ] Pause and rotation procedures are documented.
-
-## Legacy Mac mini path
-
-`deploy/macmini/` contains local launchd/ngrok tooling. It is not production. Never start it while the cloud engine is active.

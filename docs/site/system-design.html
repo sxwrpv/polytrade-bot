@@ -1,9 +1,11 @@
 <!-- PolyTrade · System Design.
      Injected into the ordinary documentation shell by docs/site/app.js, so it
      inherits the header, sidebar, table of contents, language toggle and
-     footer. The six light diagrams come from docs/polytrade-processes.html;
-     the seventh replaces the dark operator sheet
-     (docs/polytrade-workflow-diagram.html) in the documentation palette.
+     footer. This file is the canonical home of all seven diagrams: the six
+     light diagrams were extracted (and factually corrected) from the retired
+     docs/polytrade-processes.html, and the seventh re-renders the retired
+     dark operator sheet in the documentation palette. Both sources are
+     deleted — recover them from git history if ever needed.
      Bilingual: `.ru` / `.en` spans are gated by the docs language toggle. -->
 <h1>System Design</h1>
 <p class="ru sd-intro">Семь диаграмм, построенных по исходникам репозитория: топология,
@@ -857,7 +859,7 @@ from the implementation is a bug in the diagram.</p>
         <rect x="560" y="352" width="176" height="56" rx="6" fill="#eef2ef"/>
         <rect x="560" y="352" width="176" height="56" rx="6" fill="#ffffff" stroke="#14201a" stroke-width="1"/>
         <text x="648" y="384" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="ru">Эндпоинт скринера</text><text x="648" y="384" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="en">Screener endpoint</text>
-        <text x="648" y="398" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle">/api/traders</text>
+        <text x="648" y="398" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle">/api/public/screener</text>
 
         <rect x="560" y="440" width="176" height="56" rx="6" fill="#eef2ef"/>
         <rect x="560" y="440" width="176" height="56" rx="6" fill="rgba(20,32,26,0.02)" stroke="rgba(20,32,26,0.20)" stroke-width="1" stroke-dasharray="4,3"/>
@@ -866,8 +868,8 @@ from the implementation is a bug in the diagram.</p>
 
         <rect x="800" y="352" width="160" height="56" rx="6" fill="#eef2ef"/>
         <rect x="800" y="352" width="160" height="56" rx="6" fill="rgba(92,107,98,0.10)" stroke="#66756c" stroke-width="1"/>
-        <text x="880" y="384" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="ru">Скринер в Mini App</text><text x="880" y="384" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="en">Mini App screener</text>
-        <text x="880" y="398" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="ru">карточки трейдеров</text><text x="880" y="398" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="en">trader cards</text>
+        <text x="880" y="384" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="ru">Публичный скринер</text><text x="880" y="384" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="en">Public screener</text>
+        <text x="880" y="398" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="ru">только исследование</text><text x="880" y="398" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="en">research only</text>
 
         <!-- legend -->
         <line x1="40" y1="544" x2="960" y2="544" stroke="rgba(20,32,26,0.10)" stroke-width="0.8"/>

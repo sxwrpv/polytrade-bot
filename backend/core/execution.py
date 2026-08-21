@@ -387,10 +387,12 @@ async def place_capped_order(
     check_geoblock: bool = True,
     order_type: str = "FAK",
 ) -> OrderResult:
-    # NOTE: no longer used by the copy engine — the owner switched copies to
-    # market orders (2026-07-03). Kept tested and working for an easy revert:
+    # NOTE: intentionally retained with zero callers — dead-code sweeps, do not
+    # delete. The owner switched copy trades from this price-capped path to
+    # market orders (2026-07-03); this stays as the ready revert path:
     # price-capped FAK strictly bounds every share at leader*(1+slippage%) and
     # partial-fills, vs the market path's skip-or-fill-at-quote semantics.
+    # No tests reference it as of 2026-08-21 — re-add coverage before reverting.
     """Price-capped order anchored to the leader's fill price, via the SDK's
     native max_price/min_price (server-side enforced, not just a local check).
 

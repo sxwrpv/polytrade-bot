@@ -30,10 +30,8 @@ test('opaque session id is generated once and reused from session storage', () =
 })
 
 test('payload builder retains only per-event aggregate properties', () => {
-  const event = buildTelemetryEvent('screener_search_submitted', {
-    query_kind: 'address',
-    period: '30d',
-    active_filters: true,
+  const event = buildTelemetryEvent('close_modal_opened', {
+    source: 'positions',
     query: '0x' + 'a'.repeat(40),
     wallet: '0x' + 'b'.repeat(40),
     private_key: 'secret',
@@ -44,8 +42,8 @@ test('payload builder retains only per-event aggregate properties', () => {
 
   assert.deepEqual(event, {
     session_id: SESSION,
-    event_name: 'screener_search_submitted',
-    properties: { query_kind: 'address', period: '30d', active_filters: true },
+    event_name: 'close_modal_opened',
+    properties: { source: 'positions' },
   })
   assert.doesNotMatch(JSON.stringify(event), /0x[a-f0-9]{40}|private|secret|initData|user_id/i)
   assert.equal(buildTelemetryEvent('unknown', {}, SESSION), null)
@@ -54,8 +52,8 @@ test('payload builder retains only per-event aggregate properties', () => {
 test('telemetry delivery is fire-and-forget safe when the network rejects', async () => {
   const storage = memoryStorage()
   const result = await sendTelemetry(
-    'period_changed',
-    { period: '7d', source: 'screener' },
+    'close_submitted',
+    { source: 'positions' },
     {
       storage,
       cryptoApi: { randomUUID: () => SESSION },
@@ -90,17 +88,9 @@ test('uncertain close keeps timing alive until reconciliation emits a final outc
 })
 
 test('Release C telemetry hooks contain no wallet identifiers', async () => {
-  // The screener's three events (screener_search_submitted, period_changed,
-  // advanced_filters_opened) were emitted only by the in-app WalletScreener,
-  // removed when the standalone /screener took over. The public screener is
-  // anonymous and deliberately emits no telemetry, so there is no source file
-  // left to assert against — their allowlist entries are covered below.
-  const card = await readSource('../src/components/TraderCard.jsx')
   const positions = await readSource('../src/pages/Positions.jsx')
   const telemetry = await readSource('../src/telemetry.js')
 
-  assert.match(card, /wallet_analysis_opened/)
-  assert.match(card, /copy_settings_opened/)
   for (const event of ['close_modal_opened', 'close_submitted', 'modal_dismissed']) {
     assert.match(positions, new RegExp(event))
   }
@@ -109,13 +99,8 @@ test('Release C telemetry hooks contain no wallet identifiers', async () => {
     'close_confirmed', 'close_rejected', 'close_reconciliation_required', 'close_failed',
   ]) assert.match(telemetry, new RegExp(event))
 
-  // TraderCard and Positions are now the only emitters left in src/ — the
-  // screener's call sites went with the retired in-app component.
-  const telemetryCalls = [
-    ...card.matchAll(/trackTelemetry\([\s\S]*?\)/g),
-    ...positions.matchAll(/trackTelemetry\([\s\S]*?\)/g),
-  ]
-  assert.ok(telemetryCalls.length >= 6)
+  const telemetryCalls = [...positions.matchAll(/trackTelemetry\([\s\S]*?\)/g)]
+  assert.ok(telemetryCalls.length >= 4)
   for (const call of telemetryCalls) {
     assert.doesNotMatch(
       call[0],

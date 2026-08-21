@@ -10,7 +10,6 @@ state.json.tmp
 *.key
 *.crt
 *.pem
-deploy/macmini/ngrok.env
 *.jsonl
 *.pyc
 __pycache__/

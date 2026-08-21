@@ -8,7 +8,6 @@ import {
   DEFAULT_SORT,
   PERIODS,
   SORTS,
-  SUPPORTS_WALLET_DEEP_LINK,
   botDeepLink,
   activeFilterChips,
   buildPublicQuery,
@@ -171,23 +170,19 @@ test('rows carry provenance and never fabricate an aggregate score', () => {
   }
 })
 
-test('copying a wallet hands off to Telegram without inventing a deep link', () => {
-  const address = `0x${'a1'.repeat(20)}`
-
+test('Telegram handoff uses a plain bot link without inventing a wallet payload', () => {
   // Nothing in this repository reads Telegram's `start` payload, so the link
   // must not pretend the selected wallet travels with it.
-  assert.equal(SUPPORTS_WALLET_DEEP_LINK, false)
-  assert.equal(botDeepLink(address), 'https://t.me/cpolytrade_bot')
-  assert.equal(botDeepLink(null), 'https://t.me/cpolytrade_bot')
-  assert.equal(botDeepLink('not-an-address'), 'https://t.me/cpolytrade_bot')
+  assert.equal(botDeepLink(), 'https://t.me/cpolytrade_bot')
 })
 
-test('the page tells the reader to bring the address rather than implying it carries over', async () => {
+test('the page does not imply that a selected address carries into Telegram', async () => {
   const page = await read('src/screener/ScreenerPage.jsx')
 
   assert.ok(!page.includes('Copy this wallet in Telegram'),
     'that label implies the wallet is preselected, which it is not')
-  assert.match(page, /paste/i)
+  assert.doesNotMatch(page, /paste/i)
+  assert.match(page, /Adding a new copied wallet is not yet available/i)
 })
 
 test('the public client is anonymous and cannot mutate anything', async () => {
@@ -256,13 +251,23 @@ test('the screener explains its data and uses the restrained button system', asy
   assert.match(css, /@media \(max-width/)
 })
 
-test('the Mini App home hands off to the screener instead of embedding it', async () => {
+test('the Mini App home contains only copied wallets and a link to the standalone screener', async () => {
   const home = await read('src/pages/Home.jsx')
 
   assert.doesNotMatch(home, /<WalletScreener/)
-  assert.match(home, /\/screener/)
-  // Account-specific following stays in the Mini App.
+  assert.match(home, /href="\/screener"/)
   assert.match(home, /CopiedWallets/)
+
+  for (const removed of [
+    'AddWalletByAddress',
+    'TraderCard',
+    'COPY A WALLET BY ADDRESS',
+    'GettingStarted',
+    'KpiStrip',
+    'api.trader(',
+  ]) {
+    assert.ok(!home.includes(removed), `Mini App home must not include ${removed}`)
+  }
 })
 
 test('the results table scrolls itself and never drags the page sideways', async () => {
@@ -276,16 +281,13 @@ test('the results table scrolls itself and never drags the page sideways', async
   assert.match(scroller, /position:\s*relative/)
 })
 
-test('the Mini App keeps a way to act on an address found in the screener', async () => {
-  const home = await read('src/pages/Home.jsx')
+test('the standalone screener does not promise an in-app address lookup that no longer exists', async () => {
+  const [home, page] = await Promise.all([
+    read('src/pages/Home.jsx'),
+    read('src/screener/ScreenerPage.jsx'),
+  ])
 
-  // Research moved out, but the account action has to stay in: the public
-  // screener tells people to paste the address into the Mini App, so there
-  // must be somewhere to paste it.
-  assert.match(home, /AddWalletByAddress|addWallet/)
-  assert.match(home, /TraderCard/)
-  assert.match(home, /0x/)
-  // It uses the existing authenticated lookup, not the anonymous public one.
-  assert.match(home, /api\.trader\(/)
-  assert.doesNotMatch(home, /publicApi/)
+  assert.doesNotMatch(home, /AddWalletByAddress|api\.trader\(/)
+  assert.doesNotMatch(page, /Copy a wallet by address|look up any wallet directly/i)
+  assert.match(page, /Adding a new copied wallet is not yet available/i)
 })

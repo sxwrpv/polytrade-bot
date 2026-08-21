@@ -72,9 +72,8 @@ class PublicAccessTests(PublicScreenerTestBase):
         self.assertEqual(200, response.status_code)
         self.assertEqual(WALLET, response.json()["address"])
 
-    def test_authenticated_screener_keeps_requiring_a_session(self):
-        for path in ("/api/traders/leaderboard", f"/api/traders/{WALLET}",
-                     "/api/traders/following"):
+    def test_authenticated_trader_routes_keep_requiring_a_session(self):
+        for path in (f"/api/traders/{WALLET}", "/api/traders/following"):
             with self.subTest(path=path):
                 self.assertEqual(401, self.client.get(path).status_code)
 

@@ -100,7 +100,7 @@ export default function ScreenerPage() {
         <nav className="screener-nav-links" aria-label="Site">
           <a href="/docs">Documentation</a>
           <a href="/docs/system-design">System design</a>
-          <a className="btn screener-nav-cta" href={botDeepLink(null)}>Open Telegram ↗</a>
+          <a className="btn screener-nav-cta" href={botDeepLink()}>Open Telegram ↗</a>
         </nav>
       </header>
 
@@ -143,7 +143,7 @@ export default function ScreenerPage() {
             ) : rows.length === 0 ? (
               <p className="screener-state">
                 {exactLookup
-                  ? 'That wallet is not in the public screener cache yet. Open the Telegram Mini App to look up any wallet directly.'
+                  ? 'That wallet is not in the public screener cache yet.'
                   : 'No cached wallet matches these filters.'}
               </p>
             ) : (
@@ -429,50 +429,19 @@ function WalletAnalysis({ row, period, onClose }) {
 
       <div className="analysis-actions">
         <a
-          className="btn" href={botDeepLink(row.address)}
+          className="btn" href={botDeepLink()}
           target="_blank" rel="noreferrer noopener"
         >Open the Telegram Mini App ↗</a>
-        <CopyAddress address={row.address} />
         <a className="analysis-link" href={POLYMARKET_PROFILE(row.address)}
            target="_blank" rel="noreferrer noopener">
           View on Polymarket ↗
         </a>
       </div>
       <p className="analysis-disclaimer">
-        Copying happens inside the Telegram Mini App, where risk limits and consent apply.
-        The bot does not yet accept a wallet from a link, so paste this address into
-        “Copy a wallet by address” in the Mini App. This page cannot create an account, a wallet, or a
-        position.
+        This page is read-only and cannot create an account, wallet or position. The Telegram Mini
+        App currently shows only wallets already copied by the account. Adding a new copied wallet is not yet available from this public screener.
       </p>
     </section>
-  )
-}
-
-/* The address has to travel by hand, so make that one click rather than a
-   fiddly selection of a 42-character string. Falls back to a visible, fully
-   selectable address if the clipboard API is unavailable or refused. */
-function CopyAddress({ address }) {
-  const [copied, setCopied] = useState(false)
-
-  useEffect(() => {
-    if (!copied) return undefined
-    const timer = setTimeout(() => setCopied(false), 2000)
-    return () => clearTimeout(timer)
-  }, [copied])
-
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(address)
-      setCopied(true)
-    } catch {
-      setCopied(false)
-    }
-  }
-
-  return (
-    <button type="button" className="btn btn-ghost" onClick={copy}>
-      {copied ? 'ADDRESS COPIED' : 'COPY ADDRESS'}
-    </button>
   )
 }
 

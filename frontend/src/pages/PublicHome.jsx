@@ -49,6 +49,8 @@ export default function PublicHome() {
         </a>
         <a className="public-nav-link" href="#speed">Speed</a>
         <a className="public-nav-link" href="#how-it-works">How it works</a>
+        <a className="public-nav-link" href="/screener">Wallet Screener</a>
+        <a className="public-nav-link" href="/docs/system-design">System Design</a>
         <a className="btn public-small-cta" href={BOT_URL}>Open Telegram <Arrow /></a>
       </header>
 
@@ -111,6 +113,13 @@ export default function PublicHome() {
           <div className="pipeline-figure reveal">
             <PipelineDiagram />
           </div>
+          <div className="architecture-link reveal">
+            <div>
+              <strong>See how the whole system fits together.</strong>
+              <p>Explore seven architecture diagrams covering topology, onboarding, execution, risk controls, position lifecycle, the screener pipeline and production workflow.</p>
+            </div>
+            <a className="btn btn-ghost" href="/docs/system-design">Explore full System Design <Arrow /></a>
+          </div>
         </section>
 
         <section className="public-wrap benefits" aria-labelledby="benefits-title">
@@ -134,22 +143,37 @@ export default function PublicHome() {
           </p>
         </section>
 
-        <section className="public-wrap features" aria-labelledby="features-title">
-          <div className="eyebrow">INSIDE THE APP</div>
-          <h2 id="features-title">See the signal,<br />not the noise.</h2>
-
-          <div className="feature-row reveal">
-            <div className="feature-copy">
-              <h3>A screener that admits what it knows</h3>
-              <p>Wallets are ranked on windowed statistics rebuilt from public history — and every card shows how much of that history was actually fetched.</p>
+        <section id="wallet-screener" className="screener-spotlight" aria-labelledby="wallet-screener-title">
+          <div className="public-wrap screener-spotlight-grid">
+            <div className="feature-copy reveal">
+              <div className="eyebrow">PUBLIC WALLET RESEARCH</div>
+              <h2 id="wallet-screener-title">Find the signal before you copy.</h2>
+              <p>
+                Explore public history from Polymarket wallets in a dedicated research view. Compare
+                7-day, 30-day and 90-day results, filter the list, and inspect how much fetched
+                history supports each figure.
+              </p>
               <div className="feature-list">
-                <span>7-day, 30-day and 90-day windows</span>
-                <span>Coverage stated on the card, not hidden</span>
-                <span>Reconstructed ratios kept behind advanced filters</span>
+                <span>No account or Telegram login required</span>
+                <span>Unavailable data stays unavailable, never displayed as zero</span>
+                <span>Past activity is context, not a prediction</span>
               </div>
+              <a className="btn public-primary screener-spotlight-cta" href="/screener">
+                Open Wallet Screener <Arrow />
+              </a>
             </div>
-            <ScreenerPanel />
+            <div className="reveal">
+              <ScreenerPanel />
+              <p className="screener-spotlight-note">
+                Read-only public data. Wallet statistics can be incomplete or delayed and are not financial advice.
+              </p>
+            </div>
           </div>
+        </section>
+
+        <section className="public-wrap features" aria-labelledby="features-title">
+          <div className="eyebrow">POSITION MANAGEMENT</div>
+          <h2 id="features-title">Every state stays visible.</h2>
 
           <div className="feature-row reveal">
             <div className="feature-copy">

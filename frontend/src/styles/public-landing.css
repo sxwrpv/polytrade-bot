@@ -108,6 +108,14 @@
   overflow-x: auto; overscroll-behavior-x: contain;
 }
 .pipeline-figure svg, .surface-figure svg { display: block; width: 100%; min-width: 700px; }
+.architecture-link {
+  display: flex; align-items: center; justify-content: space-between; gap: 28px;
+  margin-top: 18px; padding: 20px 22px;
+  border: 1px solid var(--border); border-radius: var(--r-lg);
+}
+.architecture-link strong { display: block; margin-bottom: 6px; font-size: 14px; }
+.architecture-link p { max-width: 72ch; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.architecture-link .btn { flex: none; }
 /* Both the hidden line and the hidden node are gated on `js-reveal`, exactly
    like `.reveal` itself: the class is set by the page script, so a render
    without JavaScript — or one where the observer never fires — shows both
@@ -129,14 +137,40 @@
 .benefits-footnote { margin-top: 16px; color: var(--muted); font-size: 12px; }
 .benefits-footnote a { color: var(--green-deep); }
 
+/* ---------- public Wallet Screener spotlight ----------------------------- */
+.screener-spotlight {
+  padding-block: 92px;
+  border-block: 1px solid var(--border);
+  background: var(--surface);
+}
+.screener-spotlight-grid {
+  display: grid;
+  grid-template-columns: .85fr 1.15fr;
+  gap: 64px;
+  align-items: center;
+}
+.screener-spotlight .feature-copy h2 {
+  margin: 12px 0 18px;
+  font-family: var(--serif);
+  font-size: clamp(38px, 5vw, 62px);
+  font-weight: 400;
+  letter-spacing: -.025em;
+  line-height: 1.02;
+}
+.screener-spotlight-cta { margin-top: 26px; }
+.screener-spotlight-note {
+  margin: 12px 4px 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
 /* ---------- feature rows -------------------------------------------------- */
 .features { padding-block: 92px; }
 .feature-row {
   display: grid; grid-template-columns: .9fr 1.1fr; gap: 64px; align-items: center;
   padding-block: 42px;
 }
-.feature-row.flip { grid-template-columns: 1.1fr .9fr; }
-.feature-row.flip .feature-copy { order: 2; }
 .feature-copy h3 { margin-bottom: 12px; font-family: var(--serif); font-size: 27px; font-weight: 400; letter-spacing: -.01em; line-height: 1.2; }
 .feature-copy p { color: var(--muted); max-width: 44ch; line-height: 1.7; }
 .feature-list { margin-top: 18px; display: grid; gap: 9px; }
@@ -166,17 +200,18 @@
   .speed-card:nth-child(2) { border-right: 0; }
   .speed-card:nth-child(3) { padding-left: 0; border-bottom: 0; }
   .speed-card:nth-child(n+3) { border-top: 1px solid var(--border); }
+  .screener-spotlight-grid { grid-template-columns: 1fr; gap: 40px; }
 }
 @media (max-width: 760px) {
-  .speed, .pipeline, .features { padding-block: 64px; }
+  .speed, .pipeline, .features, .screener-spotlight { padding-block: 64px; }
   .speed-head { display: block; }
   .speed-head p { margin-top: 14px; }
   .speed-grid { grid-template-columns: 1fr; }
   .speed-card, .speed-card + .speed-card { padding: 20px 0; border-right: 0; border-top: 1px solid var(--border); }
   .speed-card:first-child { border-top: 0; }
-  .feature-row, .feature-row.flip { grid-template-columns: 1fr; gap: 32px; padding-block: 28px; }
-  .feature-row.flip .feature-copy { order: 0; }
+  .feature-row { grid-template-columns: 1fr; gap: 32px; padding-block: 28px; }
   .pipeline-figure, .surface-figure { padding: 16px 12px; }
+  .architecture-link { align-items: flex-start; flex-direction: column; padding: 18px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
