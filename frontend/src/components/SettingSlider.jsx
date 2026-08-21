@@ -1,5 +1,5 @@
 // Slider + numeric input for one always-on per-wallet setting (unlike the
-// screener's FilterSlider, there's no "off" — a copy setting always has a
+// screener's RangeFilter, there's no "off" — a copy setting always has a
 // value). Shows the current value inline with an optional unit. Calls onChange
 // live as the user drags; the parent debounces the actual save.
 export default function SettingSlider({
