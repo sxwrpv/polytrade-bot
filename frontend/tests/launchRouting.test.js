@@ -182,7 +182,19 @@ test('material disclosures and app chrome expose accessibility semantics', async
   assert.match(app, /aria-current=/)
   assert.match(app, /role="status"/)
   assert.match(app, /aria-live="polite"/)
-  assert.match(publicPage, /className="benefit-icon" aria-hidden="true"/)
+  // The decorative icon cards are gone; the landing now explains itself with
+  // diagrams. Same requirement, applied to what is actually on the page:
+  // purely decorative glyphs stay hidden from assistive technology, and every
+  // informative graphic is a labelled figure with a text equivalent.
+  assert.match(publicPage, /<span aria-hidden="true">↗<\/span>/)
+  const diagrams = publicPage.match(/<svg\b[^>]*>/g) || []
+  assert.ok(diagrams.length >= 2)
+  for (const opening of diagrams) {
+    assert.match(opening, /role="img"/)
+    assert.match(opening, /aria-labelledby=/)
+  }
+  assert.equal((publicPage.match(/<title id=/g) || []).length, diagrams.length)
+  assert.equal((publicPage.match(/<desc id=/g) || []).length, diagrams.length)
   assert.match(styles, /\.onboard-terms p[^}]*font-size:\s*(?:1[4-9]|[2-9]\d)px/s)
   assert.match(styles, /\.security-check p[^}]*font-size:\s*(?:1[4-9]|[2-9]\d)px/s)
 })

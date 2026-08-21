@@ -33,6 +33,26 @@ Never paste production `initData` or cookies into docs, shell history, tickets, 
 
 Returns `{"status":"ok"}`. This is process liveness only; it does not verify database, engine, RPC, upstream APIs, or order readiness.
 
+### `GET /api/public/screener/wallets`
+
+Anonymous, read-only wallet discovery for the standalone Wallet Screener. No session, no cookie.
+
+Query: `period` (`7d` | `30d` | `90d`, default `30d`), `sort` (`pnl` | `winrate` | `volume`), `search`, `limit` (≤100), `offset`, `pnl_min`, `winrate_min` (a fraction, so 0.6 is 60%), `volume_min`, `complete_history_only`. An unsupported `period` or `sort` is rejected with 422 rather than silently defaulting, so a response can never be labelled with the wrong window.
+
+Reads only precomputed `trader_cache` columns. It never recomputes a wallet, never calls Polymarket, and never writes — those belong to the authenticated `/api/traders/*` routes and the background stats loop.
+
+Every wallet carries `period_days`, `history_days`, `history_partial` and `stats_refreshed_at`. A metric that has not been computed is `null`, never `0`, and `active_positions` is `null` until stats have actually been refreshed for that wallet. There is no composite "copyability" score.
+
+### `GET /api/public/screener/wallets/{address}`
+
+One wallet from the cache. A wallet the background loop has never seen returns 404 with an explanatory message — it is not fetched on demand, so an anonymous caller cannot spend upstream API budget.
+
+### `GET /api/public/screener/provenance`
+
+Where the numbers come from and what they do not claim.
+
+Rate limiting: these three routes share a per-client budget of 60 requests per minute and answer 429 with `Retry-After` beyond it.
+
 ### `POST /api/auth/telegram`
 
 Validates Telegram `initData`, finds the linked user, and issues a fresh session.

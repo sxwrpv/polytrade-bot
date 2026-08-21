@@ -1,3 +1,12 @@
+// RETAINED, CURRENTLY UNMOUNTED — nothing imports this today.
+//
+// Its only consumer was the in-app WalletScreener, deleted when the standalone
+// /screener replaced it. The standalone screener uses plain number inputs, so
+// this is kept for the next surface that wants a slider-plus-input pair with a
+// real "off" position — SettingSlider.jsx is the always-on variant and cannot
+// express "no filter". Its behaviour is covered by tests/filterSlider.test.js.
+// Delete both together if no such surface materialises.
+//
 // Slider + numeric input pair for one screener filter. The slider parked at
 // its "off" end (min for ≥ filters, max for ≤ filters) means "no filter" —
 // mirrored as the empty-string value the screener already treats as off. The

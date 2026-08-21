@@ -90,14 +90,15 @@ test('uncertain close keeps timing alive until reconciliation emits a final outc
 })
 
 test('Release C telemetry hooks contain no wallet identifiers', async () => {
-  const screener = await readSource('../src/components/WalletScreener.jsx')
+  // The screener's three events (screener_search_submitted, period_changed,
+  // advanced_filters_opened) were emitted only by the in-app WalletScreener,
+  // removed when the standalone /screener took over. The public screener is
+  // anonymous and deliberately emits no telemetry, so there is no source file
+  // left to assert against — their allowlist entries are covered below.
   const card = await readSource('../src/components/TraderCard.jsx')
   const positions = await readSource('../src/pages/Positions.jsx')
   const telemetry = await readSource('../src/telemetry.js')
 
-  assert.match(screener, /screener_search_submitted/)
-  assert.match(screener, /period_changed/)
-  assert.match(screener, /advanced_filters_opened/)
   assert.match(card, /wallet_analysis_opened/)
   assert.match(card, /copy_settings_opened/)
   for (const event of ['close_modal_opened', 'close_submitted', 'modal_dismissed']) {
@@ -108,12 +109,13 @@ test('Release C telemetry hooks contain no wallet identifiers', async () => {
     'close_confirmed', 'close_rejected', 'close_reconciliation_required', 'close_failed',
   ]) assert.match(telemetry, new RegExp(event))
 
+  // TraderCard and Positions are now the only emitters left in src/ — the
+  // screener's call sites went with the retired in-app component.
   const telemetryCalls = [
-    ...screener.matchAll(/trackTelemetry\([\s\S]*?\)/g),
     ...card.matchAll(/trackTelemetry\([\s\S]*?\)/g),
     ...positions.matchAll(/trackTelemetry\([\s\S]*?\)/g),
   ]
-  assert.ok(telemetryCalls.length >= 8)
+  assert.ok(telemetryCalls.length >= 6)
   for (const call of telemetryCalls) {
     assert.doesNotMatch(
       call[0],
