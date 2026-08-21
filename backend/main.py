@@ -65,6 +65,10 @@ _DOCS_PAGES = {
 }
 _DOCS_SLUGS = {
     "overview",
+    # Diagram collection. Its content is an HTML fragment under docs/site (the
+    # explicitly-public asset directory), not an allowlisted Markdown file, so
+    # it needs a slug here but no entry in _DOCS_PAGES.
+    "system-design",
     *(name.removesuffix(".md") for name in _DOCS_PAGES if name != "README.md"),
 }
 # Russian translations sit beside the English files. Only pages that actually

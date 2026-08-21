@@ -1,3 +1,5 @@
+import re
+
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -175,3 +177,114 @@ def test_create_wallet_openapi_does_not_promise_immediate_readiness():
     assert "readiness" in description
     assert "approvals" in description
     assert "may still" in description
+
+
+# ---------------------------------------------------------------------------
+# System Design — the diagram collection restored into the documentation site.
+# ---------------------------------------------------------------------------
+
+def _system_design_fragment() -> str:
+    response = client.get("/docs/assets/system-design.html")
+    assert response.status_code == 200
+    return response.text
+
+
+def test_system_design_has_a_clean_public_url_inside_the_docs_shell():
+    page = client.get("/docs/system-design")
+
+    assert page.status_code == 200
+    # Shares the ordinary documentation shell: same header, logo, sidebar,
+    # language toggle and footer as every other docs page.
+    assert "PolyTrade Documentation" in page.text
+    assert 'src="/docs/assets/polytrade-mark.png"' in page.text
+    assert 'class="doc-footer"' in page.text
+
+
+def test_system_design_is_a_reference_entry_not_a_consumer_top_tab():
+    navigation = client.get("/docs/assets/app.js").text
+    docs = client.get("/docs").text
+
+    assert "'system-design'" in navigation
+    # It belongs to the Developers/Reference end of the sidebar, never to the
+    # consumer-facing header links.
+    assert ">System Design</a>" not in docs
+    assert '<nav class="header-links"' in docs
+
+
+def test_system_design_publishes_every_diagram_from_the_local_sources():
+    fragment = _system_design_fragment()
+
+    for heading in (
+        "System topology",
+        "Onboarding and wallet creation",
+        "The copy cycle",
+        "Risk surfaces",
+        "Lifecycle",
+        "Wallet screener",
+        "Production workflow",
+    ):
+        assert heading in fragment, heading
+
+
+def test_system_design_diagrams_are_accessible_without_colour_or_a_mouse():
+    fragment = _system_design_fragment()
+    diagrams = re.findall(r"<svg\b[^>]*class=\"[^\"]*diagram[^\"]*\"[^>]*>", fragment)
+
+    assert len(diagrams) >= 7
+    for opening_tag in diagrams:
+        assert 'role="img"' in opening_tag
+        assert "aria-labelledby=" in opening_tag
+    # Every diagram carries a title and a prose equivalent, and the legends
+    # name each class rather than relying on the swatch colour alone.
+    assert fragment.count("<title id=") >= 7
+    assert fragment.count("<desc id=") >= 7
+    assert "LEGEND" in fragment
+
+
+def test_system_design_diagram_labels_match_the_current_implementation():
+    fragment = _system_design_fragment()
+
+    # The claims table is copy_open_claims; an unqualified "claims" table label
+    # does not exist in backend/db/models.py.
+    assert "copy_open_claims" in fragment
+    assert "copy_positions · claims" not in fragment
+    # The reconcile cadence is configurable (COPY_ENGINE_POLL_SECONDS): 5s as
+    # deployed, 30s as the code default. Do not publish one as the only truth.
+    assert "COPY_ENGINE_POLL_SECONDS" in fragment
+    assert "detect 2s · reconcile 5s" not in fragment
+    # Storage is SQLite or Postgres via backend/db/database.py — not Supabase.
+    assert "Supabase" not in fragment
+
+
+def test_restyled_workflow_diagram_drops_the_dark_operator_visual_system():
+    fragment = _system_design_fragment()
+    styles = client.get("/docs/assets/system-design.css").text
+
+    for dark_token in ("#020617", "#0f172a", "#22d3ee", "#a78bfa", "#fb7185", "#34d399"):
+        assert dark_token not in fragment, dark_token
+        assert dark_token not in styles, dark_token
+    # It uses the documentation palette instead.
+    assert "#0b9e63" in fragment
+    # No pulsing dot implying live system status.
+    assert "pulse" not in fragment
+
+
+def test_system_design_motion_is_subtle_and_respects_reduced_motion():
+    styles = client.get("/docs/assets/system-design.css").text
+    script = client.get("/docs/assets/system-design.js").text
+
+    assert "prefers-reduced-motion: reduce" in styles
+    assert "prefers-reduced-motion" in script
+    assert "IntersectionObserver" in script
+    # Reveal animations must run once, not loop forever.
+    assert "infinite" not in styles
+
+
+def test_system_design_diagrams_stay_usable_on_a_narrow_screen():
+    styles = client.get("/docs/assets/system-design.css").text
+
+    # Wide diagrams scroll inside their own figure rather than forcing the page
+    # to scroll horizontally, and the scroller is reachable from the keyboard.
+    assert "overflow-x: auto" in styles
+    assert "tabindex" in _system_design_fragment()
+    assert "@media (max-width: 820px)" in styles

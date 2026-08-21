@@ -1,0 +1,1216 @@
+<!-- PolyTrade · System Design.
+     Injected into the ordinary documentation shell by docs/site/app.js, so it
+     inherits the header, sidebar, table of contents, language toggle and
+     footer. The six light diagrams come from docs/polytrade-processes.html;
+     the seventh replaces the dark operator sheet
+     (docs/polytrade-workflow-diagram.html) in the documentation palette.
+     Bilingual: `.ru` / `.en` spans are gated by the docs language toggle. -->
+<h1>System Design</h1>
+<p class="ru sd-intro">Семь диаграмм, построенных по исходникам репозитория: топология,
+онбординг, цикл копирования, контуры риска, жизненный цикл позиции, конвейер скринера
+и продакшн-воркфлоу. Имена узлов совпадают с именами модулей и таблиц в коде.</p>
+<p class="en sd-intro">Seven diagrams drawn from the repository source: topology, onboarding,
+the copy cycle, risk surfaces, position lifecycle, the screener pipeline, and the production
+workflow. Node names match the module and table names in the code, so a diagram that drifts
+from the implementation is a bug in the diagram.</p>
+<div class="sd-provenance">
+  <p class="ru"><strong>Как читать.</strong> Диаграммы описывают устройство системы, а не её
+  текущее состояние: ничего здесь не отражает работу продакшена в реальном времени и не
+  показывает рыночные данные. Интервалы даны именами переменных окружения — развёрнутое
+  значение может отличаться от значения по умолчанию в коде.</p>
+  <p class="en"><strong>How to read these.</strong> The diagrams describe how the system is
+  built, not what it is doing right now — nothing here reflects live production state, and no
+  market data appears on this page. Cadences are named by their environment variable, because
+  the deployed value and the code default differ.</p>
+</div>
+
+  <section class="sd-section" data-diagram="system-topology">
+    <p class="sd-eyebrow">Architecture · 01</p>
+    <h2 class="ru" id="system-topology-ru">Топология системы</h2>
+    <h2 class="en" id="system-topology">System topology</h2>
+    <p class="ru sd-lede">
+      Один процесс FastAPI держит и API, и копи-движок. Всё, что уходит наружу,
+      идёт к Polymarket или в Telegram; всё состояние — в одной базе.
+    </p>
+    <p class="en sd-lede">
+      A single FastAPI process holds both the API and the copy engine. Everything leaving the box goes to Polymarket or Telegram; all state lives in one database.
+    </p>
+
+    <figure class="sd-figure" tabindex="0" role="group" aria-label="Diagram, scrollable">
+      <svg class="diagram" viewBox="0 0 1000 620" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="arch-title arch-desc">
+        <title id="arch-title">PolyTrade topology</title>
+        <desc id="arch-desc">A Telegram Mini App reaches a FastAPI process through Caddy; that process runs both the API routes and the copy engine, which writes claims and fills to the database, submits FOK orders to the Polymarket exchange, reads positions from the data API and sends notifications through the Telegram Bot API.</desc>
+        <defs>
+          <marker id="arch-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#5c6b62"/></marker>
+          <marker id="arch-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#0b9e63"/></marker>
+          <marker id="arch-arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#0879c9"/></marker>
+        </defs>
+
+        <rect width="100%" height="100%" fill="#eef2ef"/>
+
+        <!-- zones -->
+        <rect x="400" y="160" width="344" height="320" rx="8" fill="rgba(20,32,26,0.02)" stroke="rgba(20,32,26,0.10)" stroke-width="0.8"/>
+        <rect x="440" y="164" width="264" height="12" rx="2" fill="#eef2ef"/>
+        <text x="572" y="173" fill="rgba(20,32,26,0.40)" font-size="7" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.14em" class="ru">BACKEND · ОДИН ПРОЦЕСС FASTAPI</text>
+        <text x="572" y="173" fill="rgba(20,32,26,0.40)" font-size="7" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.14em" class="en">BACKEND · ONE FASTAPI PROCESS</text>
+
+        <rect x="800" y="252" width="160" height="260" rx="8" fill="rgba(20,32,26,0.02)" stroke="rgba(20,32,26,0.10)" stroke-width="0.8"/>
+        <rect x="824" y="256" width="108" height="12" rx="2" fill="#eef2ef"/>
+        <text x="880" y="265" fill="rgba(20,32,26,0.40)" font-size="7" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.14em" class="ru">ВНЕШНИЕ СЕРВИСЫ</text>
+        <text x="880" y="265" fill="rgba(20,32,26,0.40)" font-size="7" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.14em" class="en">EXTERNAL SERVICES</text>
+
+        <!-- arrows (drawn before boxes) -->
+        <line x1="192" y1="220" x2="232" y2="220" stroke="#0879c9" stroke-width="1.2" marker-end="url(#arch-arrow-link)"/>
+        <rect x="194" y="200" width="36" height="12" rx="2" fill="#eef2ef"/>
+        <text x="212" y="209" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">LAUNCH</text>
+
+        <line x1="352" y1="220" x2="432" y2="220" stroke="#0879c9" stroke-width="1.2" marker-end="url(#arch-arrow-link)"/>
+        <rect x="356" y="200" width="72" height="12" rx="2" fill="#eef2ef"/>
+        <text x="392" y="209" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">HTTPS · HSTS</text>
+
+        <path d="M 576,220 H 600 Q 608,220 608,228 V 400" fill="none" stroke="#5c6b62" stroke-width="1.2" marker-end="url(#arch-arrow)"/>
+        <rect x="616" y="248" width="76" height="12" rx="2" fill="#eef2ef"/>
+        <text x="654" y="257" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">READ · WRITE</text>
+
+        <line x1="472" y1="352" x2="472" y2="400" stroke="#5c6b62" stroke-width="1.2" marker-end="url(#arch-arrow)"/>
+        <rect x="480" y="364" width="84" height="12" rx="2" fill="#eef2ef"/>
+        <text x="522" y="373" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">CLAIMS · FILLS</text>
+
+        <line x1="576" y1="304" x2="824" y2="304" stroke="#0b9e63" stroke-width="1.2" marker-end="url(#arch-arrow-accent)"/>
+        <rect x="682" y="284" width="60" height="12" rx="2" fill="#eef2ef"/>
+        <text x="712" y="293" fill="#07603c" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">FOK ORDER</text>
+
+        <path d="M 576,320 H 776 Q 784,320 784,328 V 384 Q 784,392 792,392 H 824" fill="none" stroke="#5c6b62" stroke-width="1.2" marker-end="url(#arch-arrow)"/>
+        <rect x="792" y="340" width="68" height="12" rx="2" fill="#eef2ef"/>
+        <text x="826" y="349" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">POSITIONS</text>
+
+        <path d="M 576,336 H 752 Q 760,336 760,344 V 464 Q 760,472 768,472 H 824" fill="none" stroke="#5c6b62" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arch-arrow)"/>
+        <rect x="696" y="356" width="56" height="12" rx="2" fill="#eef2ef"/>
+        <text x="724" y="365" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">ALERTS</text>
+
+        <!-- nodes -->
+        <rect x="40" y="192" width="152" height="56" rx="6" fill="#eef2ef"/>
+        <rect x="40" y="192" width="152" height="56" rx="6" fill="rgba(92,107,98,0.10)" stroke="#66756c" stroke-width="1"/>
+        <rect x="48" y="198" width="32" height="12" rx="2" fill="transparent" stroke="rgba(102,117,108,0.40)" stroke-width="0.8"/>
+        <text x="64" y="207" fill="#66756c" font-size="7" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.08em">USER</text>
+        <text x="116" y="228" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle">Telegram Mini App</text>
+        <text x="116" y="241" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle">@cpolytrade_bot</text>
+
+        <rect x="232" y="192" width="120" height="56" rx="6" fill="#eef2ef"/>
+        <rect x="232" y="192" width="120" height="56" rx="6" fill="#ffffff" stroke="#14201a" stroke-width="1"/>
+        <rect x="240" y="198" width="28" height="12" rx="2" fill="transparent" stroke="rgba(20,32,26,0.40)" stroke-width="0.8"/>
+        <text x="254" y="207" fill="#14201a" font-size="7" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.08em">TLS</text>
+        <text x="292" y="228" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle">Caddy</text>
+        <text x="292" y="241" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle">:443</text>
+
+        <rect x="432" y="192" width="144" height="56" rx="6" fill="#eef2ef"/>
+        <rect x="432" y="192" width="144" height="56" rx="6" fill="#ffffff" stroke="#14201a" stroke-width="1"/>
+        <rect x="440" y="198" width="28" height="12" rx="2" fill="transparent" stroke="rgba(20,32,26,0.40)" stroke-width="0.8"/>
+        <text x="454" y="207" fill="#14201a" font-size="7" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.08em">API</text>
+        <text x="504" y="228" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="ru">API-маршруты</text><text x="504" y="228" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="en">API routes</text>
+        <text x="504" y="241" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle">auth · user · traders</text>
+
+        <rect x="432" y="288" width="144" height="64" rx="6" fill="#eef2ef"/>
+        <rect x="432" y="288" width="144" height="64" rx="6" fill="rgba(11,158,99,0.10)" stroke="#0b9e63" stroke-width="1.2"/>
+        <rect x="440" y="294" width="44" height="12" rx="2" fill="transparent" stroke="rgba(11,158,99,0.50)" stroke-width="0.8"/>
+        <text x="462" y="303" fill="#07603c" font-size="7" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.08em">ENGINE</text>
+        <text x="504" y="326" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="ru">Копи-движок</text><text x="504" y="326" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="en">Copy engine</text>
+        <text x="504" y="340" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle">detect 2s · reconcile 5–30s</text>
+
+        <rect x="432" y="400" width="280" height="56" rx="6" fill="#eef2ef"/>
+        <rect x="432" y="400" width="280" height="56" rx="6" fill="rgba(20,32,26,0.05)" stroke="#5c6b62" stroke-width="1"/>
+        <rect x="440" y="406" width="24" height="12" rx="2" fill="transparent" stroke="rgba(92,107,98,0.40)" stroke-width="0.8"/>
+        <text x="452" y="415" fill="#5c6b62" font-size="7" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.08em">DB</text>
+        <text x="572" y="434" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle">SQLite / Postgres</text>
+        <text x="572" y="445" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle">users · followed_traders · copy_positions</text>
+        <text x="572" y="456" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle">copy_open_claims · trader_cache · equity_snapshots</text>
+
+        <rect x="824" y="284" width="112" height="56" rx="6" fill="#eef2ef"/>
+        <rect x="824" y="284" width="112" height="56" rx="6" fill="rgba(20,32,26,0.03)" stroke="rgba(20,32,26,0.30)" stroke-width="1"/>
+        <text x="880" y="316" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle">Polymarket CLOB</text>
+        <text x="880" y="330" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="ru">ордера</text><text x="880" y="330" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="en">orders</text>
+
+        <rect x="824" y="364" width="112" height="56" rx="6" fill="#eef2ef"/>
+        <rect x="824" y="364" width="112" height="56" rx="6" fill="rgba(20,32,26,0.03)" stroke="rgba(20,32,26,0.30)" stroke-width="1"/>
+        <text x="880" y="396" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle">data-api</text>
+        <text x="880" y="410" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="ru">позиции · сделки</text><text x="880" y="410" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="en">positions · trades</text>
+
+        <rect x="824" y="444" width="112" height="56" rx="6" fill="#eef2ef"/>
+        <rect x="824" y="444" width="112" height="56" rx="6" fill="rgba(20,32,26,0.03)" stroke="rgba(20,32,26,0.30)" stroke-width="1"/>
+        <text x="880" y="476" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle">Telegram Bot API</text>
+        <text x="880" y="490" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="ru">алерты</text><text x="880" y="490" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="en">alerts</text>
+
+        <!-- legend -->
+        <line x1="40" y1="544" x2="960" y2="544" stroke="rgba(20,32,26,0.10)" stroke-width="0.8"/>
+        <text x="40" y="568" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.14em">LEGEND</text>
+
+        <rect x="140" y="560" width="12" height="12" rx="2" fill="rgba(92,107,98,0.10)" stroke="#66756c" stroke-width="1"/>
+        <text x="160" y="569" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="ru">КЛИЕНТ</text><text x="160" y="569" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="en">CLIENT</text>
+
+        <rect x="252" y="560" width="12" height="12" rx="2" fill="#ffffff" stroke="#14201a" stroke-width="1"/>
+        <text x="272" y="569" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="ru">СЕРВИС</text><text x="272" y="569" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="en">SERVICE</text>
+
+        <rect x="364" y="560" width="12" height="12" rx="2" fill="rgba(11,158,99,0.10)" stroke="#0b9e63" stroke-width="1.2"/>
+        <text x="384" y="569" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="ru">ДВИЖОК</text><text x="384" y="569" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="en">ENGINE</text>
+
+        <rect x="476" y="560" width="12" height="12" rx="2" fill="rgba(20,32,26,0.05)" stroke="#5c6b62" stroke-width="1"/>
+        <text x="496" y="569" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="ru">ХРАНИЛИЩЕ</text><text x="496" y="569" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="en">STORE</text>
+
+        <rect x="616" y="560" width="12" height="12" rx="2" fill="rgba(20,32,26,0.03)" stroke="rgba(20,32,26,0.30)" stroke-width="1"/>
+        <text x="636" y="569" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="ru">ВНЕШНИЙ</text><text x="636" y="569" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="en">EXTERNAL</text>
+
+        <line x1="740" y1="566" x2="768" y2="566" stroke="#5c6b62" stroke-width="1" stroke-dasharray="4,3"/>
+        <text x="776" y="569" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="ru">АСИНХРОННО</text><text x="776" y="569" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="en">ASYNC</text>
+      </svg>
+      </figure>
+      <p class="sd-scroll-hint">
+        <span class="en">Wide diagram — scroll it sideways, or focus it and use the arrow keys.</span>
+        <span class="ru">Широкая диаграмма — прокрутите её вбок или сфокусируйтесь и используйте стрелки.</span>
+      </p>
+
+    <div class="sd-note">
+      <p class="ru"><strong>Что здесь важно.</strong> Копи-движок — не отдельный сервис, а две
+      асинхронные задачи внутри того же процесса, что обслуживает API
+      (<code>lifespan</code> в <code>backend/main.py</code>). Отсюда следствие:
+      перезапуск API останавливает и копирование, поэтому все незавершённые
+      намерения должны переживать рестарт в базе, а не в памяти.</p>
+    <p class="en"><strong>What matters here.</strong> The copy engine is not a separate service but two asyncio tasks inside the same process that serves the API (<code>lifespan</code> in <code>backend/main.py</code>). The consequence: restarting the API also stops copying, so every unfinished intent must survive that restart in the database, not in memory.</p>
+      <p class="ru">Публичный <code>/health</code> отвечает за процесс, а не за движок —
+      живой health-эндпоинт не доказывает, что копирование работает.</p>
+    <p class="en">The public <code>/health</code> endpoint answers for the process, not for the engine — a healthy endpoint is no proof that copying works.</p>
+    </div>
+  </section>
+
+  <section class="sd-section" data-diagram="onboarding-and-wallet-creation">
+    <p class="sd-eyebrow">Sequence · 02</p>
+    <h2 class="ru" id="onboarding-and-wallet-creation-ru">Онбординг и создание кошелька</h2>
+    <h2 class="en" id="onboarding-and-wallet-creation">Onboarding and wallet creation</h2>
+    <p class="ru sd-lede">
+      Личность подтверждает Telegram, а не браузер. Необратимая часть — генерация
+      ключа и деплой кошелька — закрыта долговременным «замком» в таблице
+      <code>wallet_creation_claims</code>, чтобы повторный запрос не создал второй кошелёк.
+    </p>
+    <p class="en sd-lede">
+      Identity is proved by Telegram, not by the browser. The irreversible part — key generation and wallet deployment — is guarded by a durable lease in <code>wallet_creation_claims</code>, so a retried request cannot mint a second wallet.
+    </p>
+
+    <figure class="sd-figure" tabindex="0" role="group" aria-label="Diagram, scrollable">
+      <svg class="diagram" viewBox="0 0 1000 720" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="onboard-title onboard-desc">
+        <title id="onboard-title">PolyTrade onboarding</title>
+        <desc id="onboard-desc">Wallet creation sequence: the Mini App sends signed initData, the API validates identity and terms consent, acquires a durable lease in the claims table, generates and encrypts a key, deploys a gasless wallet on Polymarket and returns an HttpOnly session.</desc>
+        <defs>
+          <marker id="onb-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#5c6b62"/></marker>
+          <marker id="onb-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#0b9e63"/></marker>
+          <marker id="onb-arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#0879c9"/></marker>
+        </defs>
+
+        <rect width="100%" height="100%" fill="#eef2ef"/>
+
+        <!-- lifelines -->
+        <line x1="140" y1="104" x2="140" y2="620" stroke="rgba(20,32,26,0.20)" stroke-width="1" stroke-dasharray="3,3"/>
+        <line x1="400" y1="104" x2="400" y2="620" stroke="rgba(20,32,26,0.20)" stroke-width="1" stroke-dasharray="3,3"/>
+        <line x1="640" y1="104" x2="640" y2="620" stroke="rgba(20,32,26,0.20)" stroke-width="1" stroke-dasharray="3,3"/>
+        <line x1="880" y1="104" x2="880" y2="620" stroke="rgba(20,32,26,0.20)" stroke-width="1" stroke-dasharray="3,3"/>
+
+        <!-- opt fragment -->
+        <rect x="104" y="232" width="344" height="88" rx="4" fill="rgba(20,32,26,0.02)" stroke="rgba(20,32,26,0.22)" stroke-width="1"/>
+        <rect x="104" y="232" width="40" height="16" rx="2" fill="#eef2ef" stroke="rgba(20,32,26,0.22)" stroke-width="1"/>
+        <text x="124" y="244" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.12em">OPT</text>
+        <text x="116" y="268" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.04em" class="ru">[telegram_user_id уже привязан]</text><text x="116" y="268" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.04em" class="en">[telegram_user_id already linked]</text>
+
+        <!-- activation bar on API -->
+        <rect x="396" y="152" width="8" height="444" fill="rgba(20,32,26,0.06)" stroke="#5c6b62" stroke-width="0.8"/>
+
+        <!-- messages -->
+        <line x1="140" y1="152" x2="396" y2="152" stroke="#0879c9" stroke-width="1.2" marker-end="url(#onb-arrow-link)"/>
+        <rect x="204" y="132" width="132" height="12" rx="2" fill="#eef2ef"/>
+        <text x="270" y="141" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">POST /CREATE-WALLET</text>
+
+        <path d="M 404,188 H 448 Q 456,188 456,196 V 204 Q 456,212 448,212 H 408" fill="none" stroke="#5c6b62" stroke-width="1.2" marker-end="url(#onb-arrow)"/>
+        <rect x="464" y="194" width="152" height="12" rx="2" fill="#eef2ef"/>
+        <text x="468" y="203" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="ru">ПРОВЕРКА INITDATA + TERMS</text>
+        <text x="468" y="203" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="en">VALIDATE INITDATA + TERMS</text>
+
+        <line x1="396" y1="296" x2="144" y2="296" stroke="#5c6b62" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#onb-arrow)"/>
+        <rect x="212" y="276" width="116" height="12" rx="2" fill="#eef2ef"/>
+        <text x="270" y="285" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="ru">СТАРАЯ СЕССИЯ</text>
+        <text x="270" y="285" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="en">EXISTING SESSION</text>
+
+        <line x1="404" y1="352" x2="636" y2="352" stroke="#5c6b62" stroke-width="1.2" marker-end="url(#onb-arrow)"/>
+        <rect x="464" y="332" width="112" height="12" rx="2" fill="#eef2ef"/>
+        <text x="520" y="341" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="ru">ЗАХВАТ ЗАМКА</text>
+        <text x="520" y="341" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="en">ACQUIRE LEASE</text>
+
+        <line x1="636" y1="384" x2="404" y2="384" stroke="#5c6b62" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#onb-arrow)"/>
+        <rect x="472" y="364" width="96" height="12" rx="2" fill="#eef2ef"/>
+        <text x="520" y="373" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">STATE=CLAIMED</text>
+
+        <path d="M 404,420 H 448 Q 456,420 456,428 V 436 Q 456,444 448,444 H 408" fill="none" stroke="#5c6b62" stroke-width="1.2" marker-end="url(#onb-arrow)"/>
+        <rect x="464" y="426" width="148" height="12" rx="2" fill="#eef2ef"/>
+        <text x="468" y="435" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="ru">КЛЮЧ + AES-GCM ШИФР</text>
+        <text x="468" y="435" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="en">KEY + AES-GCM ENCRYPT</text>
+
+        <line x1="404" y1="472" x2="636" y2="472" stroke="#5c6b62" stroke-width="1.2" marker-end="url(#onb-arrow)"/>
+        <rect x="440" y="452" width="160" height="12" rx="2" fill="#eef2ef"/>
+        <text x="520" y="461" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">SIDE_EFFECT_STARTED</text>
+
+        <line x1="404" y1="504" x2="876" y2="504" stroke="#5c6b62" stroke-width="1.2" marker-end="url(#onb-arrow)"/>
+        <rect x="692" y="484" width="136" height="12" rx="2" fill="#eef2ef"/>
+        <text x="760" y="493" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="ru">ДЕПЛОЙ + APPROVALS</text>
+        <text x="760" y="493" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="en">DEPLOY + APPROVALS</text>
+
+        <line x1="876" y1="536" x2="404" y2="536" stroke="#5c6b62" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#onb-arrow)"/>
+        <rect x="704" y="516" width="112" height="12" rx="2" fill="#eef2ef"/>
+        <text x="760" y="525" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="ru">АДРЕС КОШЕЛЬКА</text>
+        <text x="760" y="525" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="en">WALLET ADDRESS</text>
+
+        <line x1="404" y1="568" x2="636" y2="568" stroke="#5c6b62" stroke-width="1.2" marker-end="url(#onb-arrow)"/>
+        <rect x="476" y="548" width="88" height="12" rx="2" fill="#eef2ef"/>
+        <text x="520" y="557" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">STATE=COMPLETE</text>
+
+        <line x1="396" y1="596" x2="144" y2="596" stroke="#0b9e63" stroke-width="1.2" marker-end="url(#onb-arrow-accent)"/>
+        <rect x="192" y="576" width="152" height="12" rx="2" fill="#eef2ef"/>
+        <text x="270" y="585" fill="#07603c" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="ru">HTTPONLY COOKIE + АДРЕС</text>
+        <text x="270" y="585" fill="#07603c" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="en">HTTPONLY COOKIE + ADDRESS</text>
+
+        <!-- actors -->
+        <rect x="52" y="48" width="176" height="56" rx="6" fill="#eef2ef"/>
+        <rect x="52" y="48" width="176" height="56" rx="6" fill="rgba(92,107,98,0.10)" stroke="#66756c" stroke-width="1"/>
+        <text x="140" y="76" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle">Telegram Mini App</text>
+        <text x="140" y="92" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle">Onboarding.jsx</text>
+
+        <rect x="312" y="48" width="176" height="56" rx="6" fill="#eef2ef"/>
+        <rect x="312" y="48" width="176" height="56" rx="6" fill="#ffffff" stroke="#14201a" stroke-width="1"/>
+        <text x="400" y="76" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle">API</text>
+        <text x="400" y="92" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle">routes_user.py</text>
+
+        <rect x="552" y="48" width="176" height="56" rx="6" fill="#eef2ef"/>
+        <rect x="552" y="48" width="176" height="56" rx="6" fill="rgba(20,32,26,0.05)" stroke="#5c6b62" stroke-width="1"/>
+        <text x="640" y="76" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="ru">Замок создания</text><text x="640" y="76" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="en">Creation lease</text>
+        <text x="640" y="92" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle">wallet_creation_claims</text>
+
+        <rect x="792" y="48" width="176" height="56" rx="6" fill="#eef2ef"/>
+        <rect x="792" y="48" width="176" height="56" rx="6" fill="rgba(20,32,26,0.03)" stroke="rgba(20,32,26,0.30)" stroke-width="1"/>
+        <text x="880" y="76" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle">Polymarket</text>
+        <text x="880" y="92" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle">CLOB · relayer</text>
+
+        <!-- legend -->
+        <line x1="40" y1="648" x2="960" y2="648" stroke="rgba(20,32,26,0.10)" stroke-width="0.8"/>
+        <text x="40" y="672" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.14em">LEGEND</text>
+
+        <line x1="140" y1="668" x2="176" y2="668" stroke="#5c6b62" stroke-width="1.2"/>
+        <text x="184" y="671" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="ru">ВЫЗОВ</text><text x="184" y="671" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="en">CALL</text>
+
+        <line x1="292" y1="668" x2="328" y2="668" stroke="#5c6b62" stroke-width="1.2" stroke-dasharray="5,4"/>
+        <text x="336" y="671" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="ru">ОТВЕТ</text><text x="336" y="671" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="en">RETURN</text>
+
+        <line x1="444" y1="668" x2="480" y2="668" stroke="#0b9e63" stroke-width="1.2"/>
+        <text x="488" y="671" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="ru">УСПЕХ</text><text x="488" y="671" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="en">SUCCESS</text>
+
+        <rect x="596" y="662" width="8" height="12" fill="rgba(20,32,26,0.06)" stroke="#5c6b62" stroke-width="0.8"/>
+        <text x="612" y="671" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="ru">АКТИВАЦИЯ</text><text x="612" y="671" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="en">ACTIVATION</text>
+
+        <rect x="740" y="662" width="12" height="12" rx="2" fill="rgba(20,32,26,0.02)" stroke="rgba(20,32,26,0.22)" stroke-width="1"/>
+        <text x="760" y="671" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="ru">ВЕТКА OPT</text><text x="760" y="671" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="en">OPT BRANCH</text>
+      </svg>
+      </figure>
+      <p class="sd-scroll-hint">
+        <span class="en">Wide diagram — scroll it sideways, or focus it and use the arrow keys.</span>
+        <span class="ru">Широкая диаграмма — прокрутите её вбок или сфокусируйтесь и используйте стрелки.</span>
+      </p>
+
+    <div class="sd-note">
+      <p class="ru"><strong>Три необратимых шага под одним замком.</strong> Генерация ключа,
+      его шифрование и деплой кошелька разнесены по состояниям
+      <code>claimed → side_effect_started → complete</code>. Возобновить можно только
+      заявку в состоянии <code>claimed</code>, и только если она провисела дольше
+      таймаута: состояние <code>side_effect_started</code> означает, что SDK уже мог
+      создать кошелёк на стороне Polymarket, и повтор создал бы «сироту».</p>
+    <p class="en"><strong>Three irreversible steps under one lease.</strong> Key generation, encryption, and wallet deployment are separated by the states <code>claimed → side_effect_started → complete</code>. Only a claim in <code>claimed</code> can be resumed, and only once it has gone stale: <code>side_effect_started</code> means the SDK may already have created the wallet on Polymarket's side, and a retry would leave an orphan.</p>
+      <p class="ru">Согласие с условиями и подтверждённая личность проверяются <em>до</em>
+      расхода лимита и до любой необратимой работы. Приватный ключ шифруется
+      AES-GCM на <code>ENCRYPTION_SECRET</code> и никогда не покидает сервер, а
+      сессионная кука отдаётся HttpOnly — в теле ответа её нет.</p>
+    <p class="en">Terms consent and verified identity are checked <em>before</em> the rate limit is spent and before any irreversible work. The private key is AES-GCM encrypted under <code>ENCRYPTION_SECRET</code> and never leaves the server; the session cookie is HttpOnly and never appears in the response body.</p>
+    </div>
+  </section>
+
+  <section class="sd-section" data-diagram="the-copy-cycle">
+    <p class="sd-eyebrow">Flowchart · 03</p>
+    <h2 class="ru" id="the-copy-cycle-ru">Цикл копирования: от сделки лидера до записи</h2>
+    <h2 class="en" id="the-copy-cycle">The copy cycle: from leader trade to recorded fill</h2>
+    <p class="ru sd-lede">
+      Путь одной сделки. Между «решили купить» и «отправили ордер» стоят два
+      независимых барьера: резерв заявки в базе и проверка фенса непосредственно
+      перед отправкой.
+    </p>
+    <p class="en sd-lede">
+      The path of a single trade. Between deciding to buy and submitting the order stand two independent barriers: a durable claim in the database, and a fence check taken immediately before submission.
+    </p>
+
+    <figure class="sd-figure" tabindex="0" role="group" aria-label="Diagram, scrollable">
+      <svg class="diagram" viewBox="0 0 1000 900" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="engine-title engine-desc">
+        <title id="engine-title">Copy cycle for one trade</title>
+        <desc id="engine-desc">Flowchart: a detected leader trade passes through the planner, the risk gates, claim reservation and a fence check before a market FOK order is submitted; an unfilled order is retried at most three times, after which the claim is released.</desc>
+        <defs>
+          <marker id="eng-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#5c6b62"/></marker>
+          <marker id="eng-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#0b9e63"/></marker>
+        </defs>
+
+        <rect width="100%" height="100%" fill="#eef2ef"/>
+
+        <!-- arrows -->
+        <line x1="320" y1="96" x2="320" y2="136" stroke="#5c6b62" stroke-width="1.2" marker-end="url(#eng-arrow)"/>
+        <line x1="320" y1="192" x2="320" y2="216" stroke="#5c6b62" stroke-width="1.2" marker-end="url(#eng-arrow)"/>
+
+        <line x1="320" y1="296" x2="320" y2="336" stroke="#5c6b62" stroke-width="1.2" marker-end="url(#eng-arrow)"/>
+        <rect x="328" y="304" width="44" height="12" rx="2" fill="#eef2ef"/>
+        <text x="350" y="313" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="ru">ДА</text>
+        <text x="350" y="313" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="en">YES</text>
+
+        <path d="M 400,256 H 784 Q 792,256 792,264 V 428" fill="none" stroke="#5c6b62" stroke-width="1.2" marker-end="url(#eng-arrow)"/>
+        <rect x="528" y="236" width="60" height="12" rx="2" fill="#eef2ef"/>
+        <text x="560" y="245" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="ru">БЛОК</text>
+        <text x="560" y="245" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="en">BLOCKED</text>
+
+        <line x1="320" y1="392" x2="320" y2="416" stroke="#5c6b62" stroke-width="1.2" marker-end="url(#eng-arrow)"/>
+
+        <line x1="320" y1="496" x2="320" y2="536" stroke="#0b9e63" stroke-width="1.2" marker-end="url(#eng-arrow-accent)"/>
+        <rect x="328" y="504" width="52" height="12" rx="2" fill="#eef2ef"/>
+        <text x="354" y="513" fill="#07603c" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="ru">ЦЕЛ</text>
+        <text x="354" y="513" fill="#07603c" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="en">INTACT</text>
+
+        <line x1="400" y1="456" x2="680" y2="456" stroke="#5c6b62" stroke-width="1.2" marker-end="url(#eng-arrow)"/>
+        <rect x="512" y="436" width="60" height="12" rx="2" fill="#eef2ef"/>
+        <text x="540" y="445" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="ru">ОТОЗВАН</text>
+        <text x="540" y="445" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="en">REVOKED</text>
+
+        <line x1="320" y1="600" x2="320" y2="624" stroke="#5c6b62" stroke-width="1.2" marker-end="url(#eng-arrow)"/>
+
+        <line x1="320" y1="704" x2="320" y2="744" stroke="#5c6b62" stroke-width="1.2" marker-end="url(#eng-arrow)"/>
+        <rect x="328" y="712" width="52" height="12" rx="2" fill="#eef2ef"/>
+        <text x="354" y="721" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="ru">ФИЛЛ</text>
+        <text x="354" y="721" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="en">FILL</text>
+
+        <path d="M 240,664 H 152 Q 144,664 144,656 V 576 Q 144,568 152,568 H 200" fill="none" stroke="#5c6b62" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#eng-arrow)"/>
+        <rect x="160" y="644" width="76" height="12" rx="2" fill="#eef2ef"/>
+        <text x="196" y="653" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="ru">ПОВТОР ≤3</text>
+        <text x="196" y="653" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="en">RETRY ≤3</text>
+
+        <path d="M 400,664 H 752 Q 760,664 760,656 V 484" fill="none" stroke="#5c6b62" stroke-width="1.2" marker-end="url(#eng-arrow)"/>
+        <rect x="528" y="644" width="96" height="12" rx="2" fill="#eef2ef"/>
+        <text x="576" y="653" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="ru">БЮДЖЕТ ИСЧЕРПАН</text>
+        <text x="576" y="653" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="en">BUDGET SPENT</text>
+
+        <!-- nodes -->
+        <rect x="200" y="48" width="240" height="48" rx="24" fill="#eef2ef"/>
+        <rect x="200" y="48" width="240" height="48" rx="24" fill="rgba(92,107,98,0.10)" stroke="#66756c" stroke-width="1"/>
+        <text x="320" y="70" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="ru">Сделка лидера замечена</text><text x="320" y="70" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="en">Leader trade detected</text>
+        <text x="320" y="84" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="ru">OrderFilled · опрос 2с</text><text x="320" y="84" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="en">OrderFilled · 2s poll</text>
+
+        <rect x="200" y="136" width="240" height="56" rx="6" fill="#eef2ef"/>
+        <rect x="200" y="136" width="240" height="56" rx="6" fill="#ffffff" stroke="#14201a" stroke-width="1"/>
+        <text x="320" y="164" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="ru">Диф позиций лидера</text><text x="320" y="164" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="en">Diff leader positions</text>
+        <text x="320" y="180" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle">plan_actions()</text>
+
+        <polygon points="320,216 400,256 320,296 240,256" fill="#eef2ef"/>
+        <polygon points="320,216 400,256 320,296 240,256" fill="#ffffff" stroke="#14201a" stroke-width="1"/>
+        <text x="320" y="252" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="ru">Риск-гейты</text><text x="320" y="252" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="en">Risk gates</text>
+        <text x="320" y="268" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="ru">пройдены?</text><text x="320" y="268" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="en">pass?</text>
+
+        <rect x="200" y="336" width="240" height="56" rx="6" fill="#eef2ef"/>
+        <rect x="200" y="336" width="240" height="56" rx="6" fill="#ffffff" stroke="#14201a" stroke-width="1"/>
+        <text x="320" y="364" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="ru">Резерв заявки</text><text x="320" y="364" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="en">Reserve claim</text>
+        <text x="320" y="380" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle">copy_open_claims · reserved</text>
+
+        <polygon points="320,416 400,456 320,496 240,456" fill="#eef2ef"/>
+        <polygon points="320,416 400,456 320,496 240,456" fill="#ffffff" stroke="#14201a" stroke-width="1"/>
+        <text x="320" y="452" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="ru">Фенс</text><text x="320" y="452" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="en">Fence</text>
+        <text x="320" y="468" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="ru">цел на отправке?</text><text x="320" y="468" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="en">intact at submit?</text>
+
+        <rect x="200" y="536" width="240" height="64" rx="6" fill="#eef2ef"/>
+        <rect x="200" y="536" width="240" height="64" rx="6" fill="rgba(11,158,99,0.10)" stroke="#0b9e63" stroke-width="1.2"/>
+        <rect x="208" y="542" width="36" height="12" rx="2" fill="transparent" stroke="rgba(11,158,99,0.50)" stroke-width="0.8"/>
+        <text x="226" y="551" fill="#07603c" font-size="7" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.08em">CLOB</text>
+        <text x="320" y="574" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="ru">Рыночный FOK-ордер</text><text x="320" y="574" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="en">Market FOK order</text>
+        <text x="320" y="588" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle">place_market_order()</text>
+
+        <polygon points="320,624 400,664 320,704 240,664" fill="#eef2ef"/>
+        <polygon points="320,624 400,664 320,704 240,664" fill="#ffffff" stroke="#14201a" stroke-width="1"/>
+        <text x="320" y="668" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="ru">Исполнен?</text><text x="320" y="668" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="en">Filled?</text>
+
+        <rect x="200" y="744" width="240" height="56" rx="6" fill="#eef2ef"/>
+        <rect x="200" y="744" width="240" height="56" rx="6" fill="#ffffff" stroke="#14201a" stroke-width="1"/>
+        <text x="320" y="772" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="ru">Запись, алерт, сверка</text><text x="320" y="772" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="en">Persist, alert, reconcile</text>
+        <text x="320" y="788" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle">_record_open()</text>
+
+        <rect x="680" y="428" width="240" height="56" rx="6" fill="#eef2ef"/>
+        <rect x="680" y="428" width="240" height="56" rx="6" fill="rgba(20,32,26,0.05)" stroke="#5c6b62" stroke-width="1"/>
+        <text x="800" y="456" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="ru">Пропуск · заявка снята</text><text x="800" y="456" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="en">Skip · claim released</text>
+        <text x="800" y="472" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle">_release_buy_claim()</text>
+
+        <!-- legend -->
+        <line x1="40" y1="844" x2="960" y2="844" stroke="rgba(20,32,26,0.10)" stroke-width="0.8"/>
+        <text x="40" y="868" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.14em">LEGEND</text>
+
+        <rect x="140" y="858" width="20" height="12" rx="6" fill="rgba(92,107,98,0.10)" stroke="#66756c" stroke-width="1"/>
+        <text x="168" y="869" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="ru">СТАРТ</text><text x="168" y="869" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="en">START</text>
+
+        <rect x="252" y="858" width="20" height="12" rx="2" fill="#ffffff" stroke="#14201a" stroke-width="1"/>
+        <text x="280" y="869" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="ru">ШАГ</text><text x="280" y="869" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="en">STEP</text>
+
+        <polygon points="376,858 388,864 376,870 364,864" fill="#ffffff" stroke="#14201a" stroke-width="1"/>
+        <text x="396" y="869" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="ru">РЕШЕНИЕ</text><text x="396" y="869" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="en">DECISION</text>
+
+        <rect x="512" y="858" width="20" height="12" rx="2" fill="rgba(11,158,99,0.10)" stroke="#0b9e63" stroke-width="1.2"/>
+        <text x="540" y="869" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="ru">РЕАЛЬНЫЕ ДЕНЬГИ</text><text x="540" y="869" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="en">REAL MONEY</text>
+
+        <line x1="712" y1="864" x2="740" y2="864" stroke="#5c6b62" stroke-width="1" stroke-dasharray="4,3"/>
+        <text x="748" y="869" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="ru">ПОВТОРНАЯ ПОПЫТКА</text><text x="748" y="869" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="en">RETRY PATH</text>
+      </svg>
+      </figure>
+      <p class="sd-scroll-hint">
+        <span class="en">Wide diagram — scroll it sideways, or focus it and use the arrow keys.</span>
+        <span class="ru">Широкая диаграмма — прокрутите её вбок или сфокусируйтесь и используйте стрелки.</span>
+      </p>
+
+    <div class="sd-note">
+      <p class="ru"><strong>Почему два барьера, а не один.</strong> Риск-гейты в планировщике
+      считаются на снимке данных, который к моменту отправки уже мог устареть.
+      Поэтому резерв заявки перечитывает настройки внутри транзакции, а фенс
+      перед самой отправкой сравнивает <code>risk_revision</code>: если между
+      планированием и отправкой пользователь нажал «пауза» или сменил лимиты,
+      ордер не уйдёт.</p>
+    <p class="en"><strong>Why two barriers, not one.</strong> The planner's risk gates are computed on a snapshot that may already be stale by submission time. So the claim step re-reads the settings inside a transaction, and the fence compares <code>risk_revision</code> right before submitting: if the user hit pause or changed limits in between, the order never goes out.</p>
+      <p class="ru">FOK означает «всё или ничего» — частичного исполнения не бывает.
+      Неисполненный ордер повторяется максимум три раза с интервалом такта
+      сверки (~15 секунд суммарно), после чего намерение снимается.</p>
+    <p class="en">FOK means all-or-nothing — there is no partial fill. An unfilled order is retried at most three times at the reconcile-tick interval (~15 seconds in total), after which the intent is abandoned.</p>
+    </div>
+    <p class="ru aside">Пропуск сделки — штатный исход, а не сбой. Гарантии «скопируется каждая сделка лидера» в системе нет по построению.</p>
+    <p class="en aside">A skipped trade is a normal outcome, not a failure. By construction, the system offers no guarantee that every leader trade gets copied.</p>
+  </section>
+
+  <section class="sd-section" data-diagram="risk-surfaces">
+    <p class="sd-eyebrow">Layer stack · 04</p>
+    <h2 class="ru" id="risk-surfaces-ru">Контуры риска: где именно что проверяется</h2>
+    <h2 class="en" id="risk-surfaces">Risk surfaces: what is enforced where</h2>
+    <p class="ru sd-lede">
+      Ограничения не лежат в одном месте. Каждый слой закрывает щель, которую
+      оставил предыдущий, и применяется на своей поверхности — от записи настроек
+      до сверки уже после исполнения.
+    </p>
+    <p class="en sd-lede">
+      The limits do not live in one place. Each layer closes a gap the previous one left, and each is enforced on its own surface — from the settings write to reconciliation after the fill.
+    </p>
+
+    <figure class="sd-figure" tabindex="0" role="group" aria-label="Diagram, scrollable">
+      <svg class="diagram" viewBox="0 0 1000 580" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="risk-title risk-desc">
+        <title id="risk-title">PolyTrade risk surfaces</title>
+        <desc id="risk-desc">Six enforcement surfaces in order: settings write, planner, claim-reservation transaction, submit fence, order execution and post-fill reconciliation; each names its actor, its timing and the controls it enforces.</desc>
+        <defs>
+          <marker id="risk-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#5c6b62"/></marker>
+        </defs>
+
+        <rect width="100%" height="100%" fill="#eef2ef"/>
+
+        <text x="40" y="76" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.14em" class="ru">ПОРЯДОК ПРИМЕНЕНИЯ</text><text x="40" y="76" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.14em" class="en">ENFORCEMENT ORDER</text>
+        <line x1="120" y1="96" x2="120" y2="464" stroke="#5c6b62" stroke-width="1" marker-end="url(#risk-arrow)"/>
+
+        <rect x="160" y="88" width="760" height="384" rx="8" fill="#ffffff" stroke="#14201a" stroke-width="1"/>
+        <line x1="160" y1="152" x2="920" y2="152" stroke="rgba(20,32,26,0.12)" stroke-width="1"/>
+        <line x1="160" y1="216" x2="920" y2="216" stroke="rgba(20,32,26,0.12)" stroke-width="1"/>
+        <line x1="160" y1="280" x2="920" y2="280" stroke="rgba(20,32,26,0.12)" stroke-width="1"/>
+        <line x1="160" y1="344" x2="920" y2="344" stroke="rgba(20,32,26,0.12)" stroke-width="1"/>
+        <line x1="160" y1="408" x2="920" y2="408" stroke="rgba(20,32,26,0.12)" stroke-width="1"/>
+
+        <!-- focal layer -->
+        <rect x="160" y="216" width="760" height="64" fill="rgba(11,158,99,0.10)" stroke="#0b9e63" stroke-width="1.2"/>
+
+        <!-- S1 -->
+        <text x="176" y="124" fill="#66756c" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.08em">S1</text>
+        <text x="216" y="116" fill="#14201a" font-size="13" font-weight="600" font-family="'Inter', system-ui, sans-serif" class="ru">Запись настроек</text><text x="216" y="116" fill="#14201a" font-size="13" font-weight="600" font-family="'Inter', system-ui, sans-serif" class="en">Settings write</text>
+        <text x="216" y="132" fill="#66756c" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" class="ru">api · при записи</text><text x="216" y="132" fill="#66756c" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" class="en">api · on write</text>
+        <text x="904" y="116" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="end">validate_slippage_pct · risk_revision++</text>
+        <text x="904" y="132" fill="#66756c" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="end" class="ru">под общим copy_risk_lock</text><text x="904" y="132" fill="#66756c" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="end" class="en">under shared copy_risk_lock</text>
+
+        <!-- S2 -->
+        <text x="176" y="188" fill="#66756c" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.08em">S2</text>
+        <text x="216" y="180" fill="#14201a" font-size="13" font-weight="600" font-family="'Inter', system-ui, sans-serif" class="ru">Планировщик</text><text x="216" y="180" fill="#14201a" font-size="13" font-weight="600" font-family="'Inter', system-ui, sans-serif" class="en">Planner</text>
+        <text x="216" y="196" fill="#66756c" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" class="ru">code · каждый тик</text><text x="216" y="196" fill="#66756c" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" class="en">code · every tick</text>
+        <text x="904" y="180" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="end" class="ru">ratio % · max/сделку · коридор цены</text><text x="904" y="180" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="end" class="en">ratio % · max/trade · price band</text>
+        <text x="904" y="196" fill="#66756c" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="end" class="ru">min лидера · max открытых · экспозиция</text><text x="904" y="196" fill="#66756c" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="end" class="en">min leader · max open · exposure</text>
+
+        <!-- S3 focal -->
+        <text x="176" y="252" fill="#07603c" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.08em">S3</text>
+        <text x="216" y="244" fill="#14201a" font-size="13" font-weight="600" font-family="'Inter', system-ui, sans-serif" class="ru">Транзакция заявки</text><text x="216" y="244" fill="#14201a" font-size="13" font-weight="600" font-family="'Inter', system-ui, sans-serif" class="en">Claim transaction</text>
+        <text x="216" y="260" fill="#07603c" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" class="ru">db · до отправки</text><text x="216" y="260" fill="#07603c" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" class="en">db · pre-submit</text>
+        <text x="904" y="244" fill="#14201a" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="end" class="ru">перечитывает настройки FOR UPDATE</text><text x="904" y="244" fill="#14201a" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="end" class="en">re-reads settings FOR UPDATE</text>
+        <text x="904" y="260" fill="#07603c" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="end" class="ru">экспозиция с учётом резервов · уникальность</text><text x="904" y="260" fill="#07603c" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="end" class="en">exposure incl. reservations · uniqueness</text>
+
+        <!-- S4 -->
+        <text x="176" y="316" fill="#66756c" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.08em">S4</text>
+        <text x="216" y="308" fill="#14201a" font-size="13" font-weight="600" font-family="'Inter', system-ui, sans-serif" class="ru">Фенс отправки</text><text x="216" y="308" fill="#14201a" font-size="13" font-weight="600" font-family="'Inter', system-ui, sans-serif" class="en">Submit fence</text>
+        <text x="216" y="324" fill="#66756c" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" class="ru">db · на отправке</text><text x="216" y="324" fill="#66756c" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" class="en">db · at submit</text>
+        <text x="904" y="308" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="end" class="ru">CAS: risk_revision совпал</text><text x="904" y="308" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="end" class="en">CAS: risk_revision matches</text>
+        <text x="904" y="324" fill="#66756c" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="end" class="ru">не на паузе · подписка активна</text><text x="904" y="324" fill="#66756c" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="end" class="en">not paused · follow active</text>
+
+        <!-- S5 -->
+        <text x="176" y="380" fill="#66756c" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.08em">S5</text>
+        <text x="216" y="372" fill="#14201a" font-size="13" font-weight="600" font-family="'Inter', system-ui, sans-serif" class="ru">Исполнение</text><text x="216" y="372" fill="#14201a" font-size="13" font-weight="600" font-family="'Inter', system-ui, sans-serif" class="en">Execution</text>
+        <text x="216" y="388" fill="#66756c" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" class="ru">clob · в ордере</text><text x="216" y="388" fill="#66756c" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" class="en">clob · in order</text>
+        <text x="904" y="372" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="end" class="ru">FOK всё-или-ничего · min размер</text><text x="904" y="372" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="end" class="en">FOK all-or-nothing · min size</text>
+        <text x="904" y="388" fill="#66756c" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="end" class="ru">проскальзывание к цене лидера · геоблок</text><text x="904" y="388" fill="#66756c" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="end" class="en">slippage vs leader price · geoblock</text>
+
+        <!-- S6 -->
+        <text x="176" y="444" fill="#66756c" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.08em">S6</text>
+        <text x="216" y="436" fill="#14201a" font-size="13" font-weight="600" font-family="'Inter', system-ui, sans-serif" class="ru">Сверка после факта</text><text x="216" y="436" fill="#14201a" font-size="13" font-weight="600" font-family="'Inter', system-ui, sans-serif" class="en">Post-fill reconciliation</text>
+        <text x="216" y="452" fill="#66756c" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" class="ru">engine · 5с / 30с</text><text x="216" y="452" fill="#66756c" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" class="en">engine · 5s / 30s</text>
+        <text x="904" y="436" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="end" class="ru">uncertain-заявки · зависшие закрытия</text><text x="904" y="436" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="end" class="en">uncertain claims · stuck closings</text>
+        <text x="904" y="452" fill="#66756c" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="end" class="ru">дневной лимит убытка блокирует входы</text><text x="904" y="452" fill="#66756c" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="end" class="en">daily loss limit blocks opens</text>
+
+        <!-- legend -->
+        <line x1="40" y1="520" x2="960" y2="520" stroke="rgba(20,32,26,0.10)" stroke-width="0.8"/>
+        <text x="40" y="544" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.14em">LEGEND</text>
+
+        <rect x="140" y="534" width="12" height="12" rx="2" fill="rgba(11,158,99,0.10)" stroke="#0b9e63" stroke-width="1.2"/>
+        <text x="160" y="544" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="ru">ТОЧКА РЕЗЕРВА ДЕНЕГ</text><text x="160" y="544" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="en">WHERE MONEY IS RESERVED</text>
+
+        <text x="392" y="544" fill="#66756c" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="ru">СЛЕВА — ПОВЕРХНОСТЬ И ИСПОЛНИТЕЛЬ · СПРАВА — КОНТРОЛИ</text><text x="392" y="544" fill="#66756c" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="en">LEFT — SURFACE AND ACTOR · RIGHT — CONTROLS</text>
+      </svg>
+      </figure>
+      <p class="sd-scroll-hint">
+        <span class="en">Wide diagram — scroll it sideways, or focus it and use the arrow keys.</span>
+        <span class="ru">Широкая диаграмма — прокрутите её вбок или сфокусируйтесь и используйте стрелки.</span>
+      </p>
+
+    <div class="sd-note">
+      <p class="ru"><strong>Где щели закрываются.</strong> Планировщик (S2) — чистая функция и
+      ничего не знает о параллельных тиках, поэтому лимит экспозиции там можно
+      обойти гонкой. Закрывает это S3: он считает занятый капитал как сумму
+      открытых позиций <em>плюс</em> зарезервированных заявок, и делает это в
+      транзакции. Отдельно S3 учитывает строки в статусах <code>closing</code> и
+      <code>reconciliation_required</code> — они всё ещё держат реальные акции.</p>
+    <p class="en"><strong>Where the gaps close.</strong> The planner (S2) is a pure function with no knowledge of concurrent ticks, so its exposure cap can be raced. S3 closes that: it counts capital in use as open positions <em>plus</em> reserved claims, inside a transaction. S3 also counts rows in <code>closing</code> and <code>reconciliation_required</code> — they still hold real shares.</p>
+      <p class="ru"><strong>Пауза не значит «продать».</strong> Приостановленная подписка
+      перестаёт открывать новое, но продолжает закрывать и реализовывать уже
+      купленное. Отписка ведёт себя так же — открытые копии не бросаются.</p>
+    <p class="en"><strong>Pause does not mean sell.</strong> A paused follow stops opening anything new but keeps closing and resolving what was already bought. Unfollowing behaves the same way — open copies are never abandoned.</p>
+    </div>
+  </section>
+
+  <section class="sd-section" data-diagram="lifecycle">
+    <p class="sd-eyebrow">State machine · 05</p>
+    <h2 class="ru" id="lifecycle-ru">Жизненный цикл: от заявки до терминального состояния</h2>
+    <h2 class="en" id="lifecycle">Lifecycle: from claim to terminal state</h2>
+    <p class="ru sd-lede">
+      Верхний ряд — состояния заявки на покупку, нижние — состояния самой позиции.
+      Переход между рядами происходит в момент, когда деньги уже потрачены.
+    </p>
+    <p class="en sd-lede">
+      The top row holds the buy claim's states; the rows below hold the position's own. The move between them happens at the moment the money is already spent.
+    </p>
+
+    <figure class="sd-figure" tabindex="0" role="group" aria-label="Diagram, scrollable">
+      <svg class="diagram" viewBox="0 0 1000 660" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="lifecycle-title lifecycle-desc">
+        <title id="lifecycle-title">Claim and position lifecycle</title>
+        <desc id="lifecycle-desc">State machine: a claim moves through reserved, submitting and uncertain; once a fill is confirmed it becomes an open position, which later closes, falls into reconciliation, or is realized when the market resolves.</desc>
+        <defs>
+          <marker id="lc-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#5c6b62"/></marker>
+          <marker id="lc-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#0b9e63"/></marker>
+        </defs>
+
+        <rect width="100%" height="100%" fill="#eef2ef"/>
+
+        <!-- transitions -->
+        <line x1="80" y1="168" x2="136" y2="168" stroke="#5c6b62" stroke-width="1.2" marker-end="url(#lc-arrow)"/>
+        <rect x="80" y="148" width="48" height="12" rx="2" fill="#eef2ef"/>
+        <text x="104" y="157" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">INSERT</text>
+
+        <line x1="280" y1="168" x2="336" y2="168" stroke="#5c6b62" stroke-width="1.2" marker-end="url(#lc-arrow)"/>
+        <rect x="280" y="148" width="56" height="12" rx="2" fill="#eef2ef"/>
+        <text x="308" y="157" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="ru">ФЕНС OK</text>
+        <text x="308" y="157" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="en">FENCE OK</text>
+
+        <line x1="480" y1="168" x2="536" y2="168" stroke="#5c6b62" stroke-width="1.2" marker-end="url(#lc-arrow)"/>
+        <rect x="488" y="148" width="44" height="12" rx="2" fill="#eef2ef"/>
+        <text x="508" y="157" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="ru">СБОЙ</text>
+        <text x="508" y="157" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="en">ERROR</text>
+
+        <line x1="408" y1="200" x2="408" y2="320" stroke="#0b9e63" stroke-width="1.2" marker-end="url(#lc-arrow-accent)"/>
+        <rect x="416" y="254" width="44" height="12" rx="2" fill="#eef2ef"/>
+        <text x="438" y="263" fill="#07603c" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="ru">ФИЛЛ</text>
+        <text x="438" y="263" fill="#07603c" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="en">FILL</text>
+
+        <path d="M 608,200 V 264 Q 608,272 600,272 H 448 Q 440,272 440,280 V 320" fill="none" stroke="#5c6b62" stroke-width="1.2" marker-end="url(#lc-arrow)"/>
+        <rect x="496" y="252" width="60" height="12" rx="2" fill="#eef2ef"/>
+        <text x="524" y="261" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="ru">ПРИНЯТЬ</text>
+        <text x="524" y="261" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="en">ADOPT</text>
+
+        <line x1="480" y1="352" x2="536" y2="352" stroke="#5c6b62" stroke-width="1.2" marker-end="url(#lc-arrow)"/>
+        <rect x="488" y="332" width="44" height="12" rx="2" fill="#eef2ef"/>
+        <text x="508" y="341" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="ru">ВЫХОД</text>
+        <text x="508" y="341" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="en">EXIT</text>
+
+        <line x1="680" y1="352" x2="736" y2="352" stroke="#5c6b62" stroke-width="1.2" marker-end="url(#lc-arrow)"/>
+        <rect x="688" y="332" width="44" height="12" rx="2" fill="#eef2ef"/>
+        <text x="708" y="341" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="ru">ЗАВИС</text>
+        <text x="708" y="341" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="en">STUCK</text>
+
+        <line x1="608" y1="384" x2="608" y2="480" stroke="#5c6b62" stroke-width="1.2" marker-end="url(#lc-arrow)"/>
+        <rect x="616" y="426" width="76" height="12" rx="2" fill="#eef2ef"/>
+        <text x="654" y="435" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="ru">ПОДТВЕРЖДЁН</text>
+        <text x="654" y="435" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="en">CONFIRMED</text>
+
+        <path d="M 824,384 V 504 Q 824,512 816,512 H 672" fill="none" stroke="#5c6b62" stroke-width="1.2" marker-end="url(#lc-arrow)"/>
+        <rect x="744" y="440" width="72" height="12" rx="2" fill="#eef2ef"/>
+        <text x="780" y="449" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="ru">ПО КОШЕЛЬКУ</text>
+        <text x="780" y="449" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="en">BY WALLET</text>
+
+        <line x1="408" y1="384" x2="408" y2="480" stroke="#5c6b62" stroke-width="1.2" marker-end="url(#lc-arrow)"/>
+        <rect x="412" y="426" width="96" height="12" rx="2" fill="#eef2ef"/>
+        <text x="460" y="435" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="ru">МАРКЕТ ЗАКРЫТ</text>
+        <text x="460" y="435" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="en">MARKET RESOLVED</text>
+
+        <!-- start dot -->
+        <circle cx="72" cy="168" r="6" fill="#14201a"/>
+
+        <!-- claim states -->
+        <rect x="136" y="136" width="144" height="64" rx="8" fill="#eef2ef"/>
+        <rect x="136" y="136" width="144" height="64" rx="8" fill="rgba(20,32,26,0.05)" stroke="#5c6b62" stroke-width="1"/>
+        <text x="208" y="172" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle">reserved</text>
+        <text x="208" y="186" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="ru">резерв суммы</text><text x="208" y="186" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="en">amount reserved</text>
+
+        <rect x="336" y="136" width="144" height="64" rx="8" fill="#eef2ef"/>
+        <rect x="336" y="136" width="144" height="64" rx="8" fill="rgba(20,32,26,0.05)" stroke="#5c6b62" stroke-width="1"/>
+        <text x="408" y="172" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle">submitting</text>
+        <text x="408" y="186" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="ru">ордер в полёте</text><text x="408" y="186" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="en">order in flight</text>
+
+        <rect x="536" y="136" width="144" height="64" rx="8" fill="#eef2ef"/>
+        <rect x="536" y="136" width="144" height="64" rx="8" fill="rgba(11,158,99,0.10)" stroke="#0b9e63" stroke-width="1.2"/>
+        <text x="608" y="172" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle">uncertain</text>
+        <text x="608" y="186" fill="#07603c" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="ru">исход неизвестен</text><text x="608" y="186" fill="#07603c" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="en">outcome unknown</text>
+
+        <!-- position states -->
+        <rect x="336" y="320" width="144" height="64" rx="8" fill="#eef2ef"/>
+        <rect x="336" y="320" width="144" height="64" rx="8" fill="#ffffff" stroke="#14201a" stroke-width="1"/>
+        <text x="408" y="356" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle">open</text>
+        <text x="408" y="370" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="ru">копия держится</text><text x="408" y="370" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="en">copy held</text>
+
+        <rect x="536" y="320" width="144" height="64" rx="8" fill="#eef2ef"/>
+        <rect x="536" y="320" width="144" height="64" rx="8" fill="#ffffff" stroke="#14201a" stroke-width="1"/>
+        <text x="608" y="356" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle">closing</text>
+        <text x="608" y="370" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="ru">продажа идёт</text><text x="608" y="370" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="en">sell in flight</text>
+
+        <rect x="736" y="320" width="176" height="64" rx="8" fill="#eef2ef"/>
+        <rect x="736" y="320" width="176" height="64" rx="8" fill="#ffffff" stroke="#14201a" stroke-width="1"/>
+        <text x="824" y="356" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle">reconciliation_required</text>
+        <text x="824" y="370" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="ru">решает кошелёк</text><text x="824" y="370" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="en">wallet decides</text>
+
+        <!-- terminal states -->
+        <rect x="336" y="480" width="144" height="64" rx="8" fill="#eef2ef"/>
+        <rect x="336" y="480" width="144" height="64" rx="8" fill="#ffffff" stroke="#14201a" stroke-width="1"/>
+        <rect x="340" y="484" width="136" height="56" rx="6" fill="none" stroke="#14201a" stroke-width="0.8"/>
+        <text x="408" y="516" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle">resolved</text>
+        <text x="408" y="530" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="ru">без ордера</text><text x="408" y="530" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="en">no order</text>
+
+        <rect x="536" y="480" width="144" height="64" rx="8" fill="#eef2ef"/>
+        <rect x="536" y="480" width="144" height="64" rx="8" fill="#ffffff" stroke="#14201a" stroke-width="1"/>
+        <rect x="540" y="484" width="136" height="56" rx="6" fill="none" stroke="#14201a" stroke-width="0.8"/>
+        <text x="608" y="516" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle">closed</text>
+        <text x="608" y="530" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="ru">PnL зафиксирован</text><text x="608" y="530" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="en">PnL booked</text>
+
+        <!-- legend -->
+        <line x1="40" y1="600" x2="960" y2="600" stroke="rgba(20,32,26,0.10)" stroke-width="0.8"/>
+        <text x="40" y="624" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.14em">LEGEND</text>
+
+        <rect x="140" y="614" width="12" height="12" rx="3" fill="rgba(20,32,26,0.05)" stroke="#5c6b62" stroke-width="1"/>
+        <text x="160" y="624" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="ru">ЗАЯВКА</text><text x="160" y="624" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="en">CLAIM</text>
+
+        <rect x="272" y="614" width="12" height="12" rx="3" fill="#ffffff" stroke="#14201a" stroke-width="1"/>
+        <text x="292" y="624" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="ru">ПОЗИЦИЯ</text><text x="292" y="624" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="en">POSITION</text>
+
+        <rect x="416" y="614" width="12" height="12" rx="3" fill="rgba(11,158,99,0.10)" stroke="#0b9e63" stroke-width="1.2"/>
+        <text x="436" y="624" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="ru">НЕОПРЕДЕЛЁННОСТЬ</text><text x="436" y="624" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="en">UNCERTAINTY</text>
+
+        <rect x="628" y="614" width="12" height="12" rx="3" fill="#ffffff" stroke="#14201a" stroke-width="1"/>
+        <rect x="630" y="616" width="8" height="8" rx="2" fill="none" stroke="#14201a" stroke-width="0.8"/>
+        <text x="648" y="624" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="ru">ТЕРМИНАЛЬНОЕ</text><text x="648" y="624" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="en">TERMINAL</text>
+      </svg>
+      </figure>
+      <p class="sd-scroll-hint">
+        <span class="en">Wide diagram — scroll it sideways, or focus it and use the arrow keys.</span>
+        <span class="ru">Широкая диаграмма — прокрутите её вбок или сфокусируйтесь и используйте стрелки.</span>
+      </p>
+
+    <div class="sd-note">
+      <p class="ru"><strong>Два перехода, которых нет на схеме, но которые есть в коде.</strong>
+      Заявка в <code>reserved</code> старше двух минут удаляется при старте движка —
+      она доказуемо не дошла до отправки. Заявка в <code>submitting</code> в тех же
+      условиях переводится в <code>uncertain</code>, но <em>никогда</em> не
+      переотправляется автоматически: ордер мог исполниться.</p>
+    <p class="en"><strong>Two transitions absent from the diagram but present in the code.</strong> A <code>reserved</code> claim older than two minutes is deleted at engine start — it provably never reached submission. A <code>submitting</code> claim in the same condition becomes <code>uncertain</code>, but is <em>never</em> resubmitted automatically: the order may have filled.</p>
+      <p class="ru"><strong>Как разрешается <code>uncertain</code>.</strong> Через три минуты
+      (индексатору нужно время) движок смотрит на реальный кошелёк: есть
+      непривязанные акции — исполнение было, позиция усыновляется; нет — заявка
+      снимается. До появления этой сверки такие заявки замораживали токен навсегда
+      и держали резерв в расчёте экспозиции.</p>
+    <p class="en"><strong>How <code>uncertain</code> is settled.</strong> After three minutes — the indexer needs time — the engine looks at the real wallet: shares that no tracking row explains mean the buy filled and the position is adopted; no shares means it never filled and the claim is released. Before this reconciliation existed, such claims froze their token forever and kept holding reserved capital against the exposure cap.</p>
+    </div>
+  </section>
+
+  <section class="sd-section" data-diagram="wallet-screener">
+    <p class="sd-eyebrow">Architecture · 06</p>
+    <h2 class="ru" id="wallet-screener-ru">Скринер кошельков: как считаются метрики</h2>
+    <h2 class="en" id="wallet-screener">Wallet screener: how the metrics are computed</h2>
+    <p class="ru sd-lede">
+      Фоновый конвейер держит кэш заранее посчитанных окон 7/30/90 дней. Эндпоинт
+      скринера читает только готовые колонки, поэтому фильтры отвечают мгновенно
+      независимо от размера популяции.
+    </p>
+    <p class="en sd-lede">
+      A background pipeline maintains a cache of precomputed 7/30/90-day windows. The screener endpoint reads only finished columns, so filters stay instant regardless of population size.
+    </p>
+
+    <figure class="sd-figure" tabindex="0" role="group" aria-label="Diagram, scrollable">
+      <svg class="diagram" viewBox="0 0 1000 620" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="screener-title screener-desc">
+        <title id="screener-title">Wallet screener pipeline</title>
+        <desc id="screener-desc">A background task crawls public leaderboards to discover active wallets and recomputes windowed metrics from the data API into a trader cache; the screener endpoint reads only precomputed columns, while deep per-wallet analysis runs on demand.</desc>
+        <defs>
+          <marker id="scr-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#5c6b62"/></marker>
+          <marker id="scr-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#0b9e63"/></marker>
+          <marker id="scr-arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#0879c9"/></marker>
+        </defs>
+
+        <rect width="100%" height="100%" fill="#eef2ef"/>
+
+        <!-- arrows -->
+        <line x1="200" y1="180" x2="272" y2="180" stroke="#5c6b62" stroke-width="1.2" marker-end="url(#scr-arrow)"/>
+        <rect x="216" y="160" width="44" height="12" rx="2" fill="#eef2ef"/>
+        <text x="236" y="169" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="ru">КРАУЛ</text>
+        <text x="236" y="169" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="en">CRAWL</text>
+
+        <line x1="200" y1="300" x2="272" y2="300" stroke="#5c6b62" stroke-width="1.2" marker-end="url(#scr-arrow)"/>
+        <rect x="200" y="280" width="68" height="12" rx="2" fill="#eef2ef"/>
+        <text x="236" y="289" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="ru">АКТИВНОСТЬ</text>
+        <text x="236" y="289" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="en">ACTIVITY</text>
+
+        <path d="M 448,180 H 528 Q 536,180 536,188 V 208 Q 536,216 544,216 H 560" fill="none" stroke="#5c6b62" stroke-width="1.2" marker-end="url(#scr-arrow)"/>
+        <rect x="464" y="160" width="48" height="12" rx="2" fill="#eef2ef"/>
+        <text x="488" y="169" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">UPSERT</text>
+
+        <path d="M 448,304 H 528 Q 536,304 536,296 V 256 Q 536,248 544,248 H 560" fill="none" stroke="#0b9e63" stroke-width="1.2" marker-end="url(#scr-arrow-accent)"/>
+        <rect x="464" y="284" width="52" height="12" rx="2" fill="#eef2ef"/>
+        <text x="488" y="293" fill="#07603c" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="ru">ОКНА</text>
+        <text x="488" y="293" fill="#07603c" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="en">WINDOWS</text>
+
+        <line x1="648" y1="264" x2="648" y2="352" stroke="#5c6b62" stroke-width="1.2" marker-end="url(#scr-arrow)"/>
+        <rect x="656" y="300" width="84" height="12" rx="2" fill="#eef2ef"/>
+        <text x="698" y="309" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="ru">ТОЛЬКО ЧТЕНИЕ</text>
+        <text x="698" y="309" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="en">READ ONLY</text>
+
+        <line x1="800" y1="380" x2="736" y2="380" stroke="#0879c9" stroke-width="1.2" marker-end="url(#scr-arrow-link)"/>
+        <rect x="744" y="360" width="52" height="12" rx="2" fill="#eef2ef"/>
+        <text x="768" y="369" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="ru">ФИЛЬТРЫ</text>
+        <text x="768" y="369" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="en">FILTERS</text>
+
+        <path d="M 880,408 V 460 Q 880,468 872,468 H 736" fill="none" stroke="#0879c9" stroke-width="1.2" marker-end="url(#scr-arrow-link)"/>
+        <rect x="756" y="448" width="88" height="12" rx="2" fill="#eef2ef"/>
+        <text x="800" y="457" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="ru">ПО ЗАПРОСУ</text>
+        <text x="800" y="457" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="en">ON DEMAND</text>
+
+        <path d="M 560,468 H 128 Q 120,468 120,460 V 328" fill="none" stroke="#5c6b62" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#scr-arrow)"/>
+        <rect x="452" y="448" width="56" height="12" rx="2" fill="#eef2ef"/>
+        <text x="480" y="457" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="ru">БЕЗ КЭША</text>
+        <text x="480" y="457" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="en">UNCACHED</text>
+
+        <!-- nodes -->
+        <rect x="40" y="152" width="160" height="56" rx="6" fill="#eef2ef"/>
+        <rect x="40" y="152" width="160" height="56" rx="6" fill="rgba(20,32,26,0.03)" stroke="rgba(20,32,26,0.30)" stroke-width="1"/>
+        <text x="120" y="184" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="ru">Лидерборды</text><text x="120" y="184" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="en">Leaderboards</text>
+        <text x="120" y="198" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="ru">публичные фиды</text><text x="120" y="198" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="en">public feeds</text>
+
+        <rect x="40" y="272" width="160" height="56" rx="6" fill="#eef2ef"/>
+        <rect x="40" y="272" width="160" height="56" rx="6" fill="rgba(20,32,26,0.03)" stroke="rgba(20,32,26,0.30)" stroke-width="1"/>
+        <text x="120" y="304" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle">data-api</text>
+        <text x="120" y="318" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="ru">сделки · позиции</text><text x="120" y="318" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="en">trades · positions</text>
+
+        <rect x="272" y="152" width="176" height="56" rx="6" fill="#eef2ef"/>
+        <rect x="272" y="152" width="176" height="56" rx="6" fill="#ffffff" stroke="#14201a" stroke-width="1"/>
+        <text x="360" y="184" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="ru">Поиск кошельков</text><text x="360" y="184" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="en">Wallet discovery</text>
+        <text x="360" y="198" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="ru">цель ~2000</text><text x="360" y="198" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="en">target ~2000</text>
+
+        <rect x="272" y="272" width="176" height="64" rx="6" fill="#eef2ef"/>
+        <rect x="272" y="272" width="176" height="64" rx="6" fill="rgba(11,158,99,0.10)" stroke="#0b9e63" stroke-width="1.2"/>
+        <rect x="280" y="278" width="48" height="12" rx="2" fill="transparent" stroke="rgba(11,158,99,0.50)" stroke-width="0.8"/>
+        <text x="304" y="287" fill="#07603c" font-size="7" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.08em" class="ru">15 МИН</text><text x="304" y="287" fill="#07603c" font-size="7" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.08em" class="en">15 MIN</text>
+        <text x="360" y="310" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="ru">Пересчёт метрик</text><text x="360" y="310" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="en">Stats refresh</text>
+        <text x="360" y="324" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="ru">батч 200 · параллель 4</text><text x="360" y="324" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="en">batch 200 · concurrency 4</text>
+
+        <rect x="560" y="200" width="176" height="64" rx="6" fill="#eef2ef"/>
+        <rect x="560" y="200" width="176" height="64" rx="6" fill="rgba(20,32,26,0.05)" stroke="#5c6b62" stroke-width="1"/>
+        <rect x="568" y="206" width="24" height="12" rx="2" fill="transparent" stroke="rgba(92,107,98,0.40)" stroke-width="0.8"/>
+        <text x="580" y="215" fill="#5c6b62" font-size="7" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.08em">DB</text>
+        <text x="648" y="238" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle">trader_cache</text>
+        <text x="648" y="252" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="ru">окна 7д / 30д / 90д</text><text x="648" y="252" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="en">7d / 30d / 90d windows</text>
+
+        <rect x="560" y="352" width="176" height="56" rx="6" fill="#eef2ef"/>
+        <rect x="560" y="352" width="176" height="56" rx="6" fill="#ffffff" stroke="#14201a" stroke-width="1"/>
+        <text x="648" y="384" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="ru">Эндпоинт скринера</text><text x="648" y="384" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="en">Screener endpoint</text>
+        <text x="648" y="398" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle">/api/traders</text>
+
+        <rect x="560" y="440" width="176" height="56" rx="6" fill="#eef2ef"/>
+        <rect x="560" y="440" width="176" height="56" rx="6" fill="rgba(20,32,26,0.02)" stroke="rgba(20,32,26,0.20)" stroke-width="1" stroke-dasharray="4,3"/>
+        <text x="648" y="472" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="ru">Глубокий анализ</text><text x="648" y="472" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="en">Deep analysis</text>
+        <text x="648" y="486" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="ru">один кошелёк</text><text x="648" y="486" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="en">one wallet</text>
+
+        <rect x="800" y="352" width="160" height="56" rx="6" fill="#eef2ef"/>
+        <rect x="800" y="352" width="160" height="56" rx="6" fill="rgba(92,107,98,0.10)" stroke="#66756c" stroke-width="1"/>
+        <text x="880" y="384" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="ru">Скринер в Mini App</text><text x="880" y="384" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="en">Mini App screener</text>
+        <text x="880" y="398" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="ru">карточки трейдеров</text><text x="880" y="398" fill="#5c6b62" font-size="9" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="en">trader cards</text>
+
+        <!-- legend -->
+        <line x1="40" y1="544" x2="960" y2="544" stroke="rgba(20,32,26,0.10)" stroke-width="0.8"/>
+        <text x="40" y="568" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.14em">LEGEND</text>
+
+        <rect x="140" y="558" width="12" height="12" rx="2" fill="rgba(20,32,26,0.03)" stroke="rgba(20,32,26,0.30)" stroke-width="1"/>
+        <text x="160" y="568" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="ru">ВНЕШНИЙ</text><text x="160" y="568" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="en">EXTERNAL</text>
+
+        <rect x="272" y="558" width="12" height="12" rx="2" fill="#ffffff" stroke="#14201a" stroke-width="1"/>
+        <text x="292" y="568" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="ru">ФОНОВАЯ ЗАДАЧА</text><text x="292" y="568" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="en">BACKGROUND TASK</text>
+
+        <rect x="452" y="558" width="12" height="12" rx="2" fill="rgba(11,158,99,0.10)" stroke="#0b9e63" stroke-width="1.2"/>
+        <text x="472" y="568" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="ru">ГОРЯЧИЙ ПУТЬ</text><text x="472" y="568" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="en">HOT PATH</text>
+
+        <rect x="620" y="558" width="12" height="12" rx="2" fill="rgba(20,32,26,0.05)" stroke="#5c6b62" stroke-width="1"/>
+        <text x="640" y="568" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="ru">КЭШ</text><text x="640" y="568" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="en">CACHE</text>
+
+        <line x1="736" y1="564" x2="764" y2="564" stroke="#5c6b62" stroke-width="1" stroke-dasharray="4,3"/>
+        <text x="772" y="568" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="ru">ПО ЗАПРОСУ</text><text x="772" y="568" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="en">ON DEMAND</text>
+      </svg>
+      </figure>
+      <p class="sd-scroll-hint">
+        <span class="en">Wide diagram — scroll it sideways, or focus it and use the arrow keys.</span>
+        <span class="ru">Широкая диаграмма — прокрутите её вбок или сфокусируйтесь и используйте стрелки.</span>
+      </p>
+
+    <div class="sd-note">
+      <p class="ru"><strong>Почему параллельность именно 4.</strong> Восемь потоков собирали
+      429-е от data-api, а копи-движок ходит на те же хосты. Краулер обязан
+      оставаться тише движка: деньги важнее статистики.</p>
+    <p class="en"><strong>Why concurrency is 4.</strong> Eight workers drew 429s from the data API, and the copy engine talks to the same hosts. The crawler has to stay quieter than the engine: money outranks statistics.</p>
+      <p class="ru"><strong>Что метрики не обещают.</strong> Окна считаются по выборке сделок с
+      публичного API, и карточка честно показывает покрытие — сколько сделок
+      реально забрано. Реконструированные отношения (winrate и производные)
+      спрятаны за «продвинутые фильтры» именно потому, что зависят от полноты
+      выборки, а не потому, что они менее интересны.</p>
+    <p class="en"><strong>What the metrics do not promise.</strong> The windows are computed from a sample of trades pulled from the public API, and the card states its coverage honestly — how many trades were actually fetched. Reconstructed ratios (winrate and its derivatives) sit behind advanced filters precisely because they depend on that coverage, not because they matter less.</p>
+    </div>
+  </section>
+
+  <section class="sd-section" data-diagram="production-workflow">
+    <p class="sd-eyebrow">Operations · 07</p>
+    <h2 class="ru" id="production-workflow-ru">Продакшн-воркфлоу</h2>
+    <h2 class="en" id="production-workflow">Production workflow</h2>
+    <p class="ru sd-lede">
+      Три плоскости целиком: управление, копирование и фоновые циклы. Эта диаграмма заменяет
+      прежний тёмный операторский лист — та же информация в системе документации.
+    </p>
+    <p class="en sd-lede">
+      All three planes at once: control, copy execution, and the background loops. This replaces
+      the earlier dark operator sheet — same information, rendered in the documentation system.
+    </p>
+
+    <figure class="sd-figure" tabindex="0" role="group" aria-label="Diagram, scrollable">
+        <svg class="diagram" viewBox="0 0 1000 800" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="workflow-title workflow-desc">
+        <title id="workflow-title">PolyTrade production workflow</title>
+        <desc id="workflow-desc">Three planes. In the control plane a Telegram user reaches the Mini App through Caddy and the FastAPI control API, which holds the encrypted custodial signing key. In the execution plane a two-second detection loop and a five-to-thirty-second reconciler both propose actions that pass through one shared risk gate; the gate reserves a row in copy_open_claims, a fence re-checks the user risk revision at submit time, and only then is a fill-or-kill order sent to the Polymarket exchange. The result is committed to the database before any Telegram alert is sent, and an ambiguous submission becomes an uncertain claim that the reconciler resolves against the wallet. In the support plane a fifteen-minute statistics loop and a five-minute equity loop write the screener cache and equity snapshots. The invariant: detection proposes, the shared risk gate authorises, Polymarket executes, the database records, and reconciliation verifies.</desc>
+        <defs>
+        <marker id="wf-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#5c6b62"/></marker>
+        <marker id="wf-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#0b9e63"/></marker>
+        <marker id="wf-arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#0879c9"/></marker>
+        </defs>
+        <rect width="100%" height="100%" fill="#eef2ef"/>
+        <rect x="40" y="56" width="920" height="100" rx="8" fill="rgba(20,32,26,0.02)" stroke="rgba(20,32,26,0.10)" stroke-width="0.8"/>
+        <rect x="64" y="50" width="210" height="12" rx="2" fill="#eef2ef"/>
+        <text x="72" y="59" fill="rgba(20,32,26,0.45)" font-size="7" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.14em" class="ru">A · ПОЛЬЗОВАТЕЛЬ И УПРАВЛЕНИЕ</text>
+        <text x="72" y="59" fill="rgba(20,32,26,0.45)" font-size="7" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.14em" class="en">A · USER AND CONTROL PLANE</text>
+        <path d="M 252,110 H 284" fill="none" stroke="#0879c9" stroke-width="1.2" marker-end="url(#wf-arrow-link)"/>
+        <path d="M 480,110 H 512" fill="none" stroke="#0879c9" stroke-width="1.2" marker-end="url(#wf-arrow-link)"/>
+        <path d="M 708,110 H 740" fill="none" stroke="#0879c9" stroke-width="1.2" marker-end="url(#wf-arrow-link)"/>
+        <rect x="64" y="80" width="188" height="60" rx="6" fill="#eef2ef"/>
+        <rect x="64" y="80" width="188" height="60" rx="6" fill="rgba(92,107,98,0.10)" stroke="#66756c" stroke-width="1"/>
+        <rect x="72" y="86" width="28" height="12" rx="2" fill="transparent" stroke="rgba(102,117,108,0.40)" stroke-width="0.8"/>
+        <text x="86.0" y="95" fill="#5c6b62" font-size="7" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.08em">USER</text>
+        <circle cx="237" cy="92" r="7.5" fill="#0b9e63"/>
+        <text x="237" y="95" fill="#eef2ef" font-size="8" font-weight="700" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle">1</text>
+        <text x="158.0" y="118" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="ru">Пользователь Telegram</text>
+        <text x="158.0" y="118" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="en">Telegram user</text>
+        <text x="158.0" y="132" fill="#5c6b62" font-size="8.5" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="ru">@cpolytrade_bot</text>
+        <text x="158.0" y="132" fill="#5c6b62" font-size="8.5" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="en">@cpolytrade_bot</text>
+        <rect x="292" y="80" width="188" height="60" rx="6" fill="#eef2ef"/>
+        <rect x="292" y="80" width="188" height="60" rx="6" fill="#ffffff" stroke="#14201a" stroke-width="1"/>
+        <rect x="300" y="86" width="23" height="12" rx="2" fill="transparent" stroke="rgba(20,32,26,0.40)" stroke-width="0.8"/>
+        <text x="311.5" y="95" fill="#14201a" font-size="7" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.08em">TLS</text>
+        <circle cx="465" cy="92" r="7.5" fill="#0b9e63"/>
+        <text x="465" y="95" fill="#eef2ef" font-size="8" font-weight="700" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle">2</text>
+        <text x="386.0" y="118" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="ru">Caddy + React</text>
+        <text x="386.0" y="118" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="en">Caddy + React</text>
+        <text x="386.0" y="132" fill="#5c6b62" font-size="8.5" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="ru">:443 · статика</text>
+        <text x="386.0" y="132" fill="#5c6b62" font-size="8.5" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="en">:443 · static UI</text>
+        <rect x="520" y="80" width="188" height="60" rx="6" fill="#eef2ef"/>
+        <rect x="520" y="80" width="188" height="60" rx="6" fill="#ffffff" stroke="#14201a" stroke-width="1"/>
+        <rect x="528" y="86" width="23" height="12" rx="2" fill="transparent" stroke="rgba(20,32,26,0.40)" stroke-width="0.8"/>
+        <text x="539.5" y="95" fill="#14201a" font-size="7" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.08em">API</text>
+        <circle cx="693" cy="92" r="7.5" fill="#0b9e63"/>
+        <text x="693" y="95" fill="#eef2ef" font-size="8" font-weight="700" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle">3</text>
+        <text x="614.0" y="118" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="ru">Управляющий API</text>
+        <text x="614.0" y="118" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="en">FastAPI control API</text>
+        <text x="614.0" y="132" fill="#5c6b62" font-size="8.5" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="ru">HMAC → сессия</text>
+        <text x="614.0" y="132" fill="#5c6b62" font-size="8.5" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="en">HMAC → session cookie</text>
+        <rect x="748" y="80" width="188" height="60" rx="6" fill="#eef2ef"/>
+        <rect x="748" y="80" width="188" height="60" rx="6" fill="rgba(20,32,26,0.05)" stroke="#5c6b62" stroke-width="1"/>
+        <rect x="756" y="86" width="23" height="12" rx="2" fill="transparent" stroke="rgba(92,107,98,0.40)" stroke-width="0.8"/>
+        <text x="767.5" y="95" fill="#5c6b62" font-size="7" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.08em">KEY</text>
+        <circle cx="921" cy="92" r="7.5" fill="#0b9e63"/>
+        <text x="921" y="95" fill="#eef2ef" font-size="8" font-weight="700" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle">4</text>
+        <text x="842.0" y="118" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="ru">Кастодиальный ключ</text>
+        <text x="842.0" y="118" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="en">Custodial signer</text>
+        <text x="842.0" y="132" fill="#5c6b62" font-size="8.5" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="ru">AES-256-GCM</text>
+        <text x="842.0" y="132" fill="#5c6b62" font-size="8.5" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="en">AES-256-GCM at rest</text>
+        <rect x="40" y="196" width="920" height="336" rx="8" fill="rgba(20,32,26,0.02)" stroke="rgba(20,32,26,0.10)" stroke-width="0.8"/>
+        <rect x="64" y="190" width="300" height="12" rx="2" fill="#eef2ef"/>
+        <text x="72" y="199" fill="rgba(20,32,26,0.45)" font-size="7" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.14em" class="ru">B · КОПИРОВАНИЕ · ОДИН РАБОЧИЙ ПРОЦЕСС</text>
+        <text x="72" y="199" fill="rgba(20,32,26,0.45)" font-size="7" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.14em" class="en">B · COPY EXECUTION PLANE · ONE PRODUCTION WORKER</text>
+        <rect x="64" y="230" width="264" height="62" rx="6" fill="#eef2ef"/>
+        <rect x="64" y="230" width="264" height="62" rx="6" fill="rgba(11,158,99,0.10)" stroke="#0b9e63" stroke-width="1.2"/>
+        <rect x="72" y="236" width="28" height="12" rx="2" fill="transparent" stroke="rgba(11,158,99,0.50)" stroke-width="0.8"/>
+        <text x="86.0" y="245" fill="#07603c" font-size="7" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.08em">FAST</text>
+        <circle cx="313" cy="242" r="7.5" fill="#0b9e63"/>
+        <text x="313" y="245" fill="#eef2ef" font-size="8" font-weight="700" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle">5</text>
+        <text x="196.0" y="268" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="ru">Быстрый цикл</text>
+        <text x="196.0" y="268" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="en">Detection loop</text>
+        <text x="196.0" y="282" fill="#5c6b62" font-size="8.5" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="ru">DETECTION_POLL_SECONDS · 2с</text>
+        <text x="196.0" y="282" fill="#5c6b62" font-size="8.5" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="en">DETECTION_POLL_SECONDS · 2s</text>
+        <rect x="368" y="230" width="264" height="62" rx="6" fill="#eef2ef"/>
+        <rect x="368" y="230" width="264" height="62" rx="6" fill="rgba(11,158,99,0.10)" stroke="#0b9e63" stroke-width="1.2"/>
+        <rect x="376" y="236" width="38" height="12" rx="2" fill="transparent" stroke="rgba(11,158,99,0.50)" stroke-width="0.8"/>
+        <text x="395.0" y="245" fill="#07603c" font-size="7" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.08em">REPAIR</text>
+        <circle cx="617" cy="242" r="7.5" fill="#0b9e63"/>
+        <text x="617" y="245" fill="#eef2ef" font-size="8" font-weight="700" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle">6</text>
+        <text x="500.0" y="268" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="ru">Сверка</text>
+        <text x="500.0" y="268" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="en">Reconciler</text>
+        <text x="500.0" y="282" fill="#5c6b62" font-size="8.5" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="ru">COPY_ENGINE_POLL_SECONDS · 5–30с</text>
+        <text x="500.0" y="282" fill="#5c6b62" font-size="8.5" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="en">COPY_ENGINE_POLL_SECONDS · 5–30s</text>
+        <rect x="672" y="230" width="264" height="62" rx="6" fill="#eef2ef"/>
+        <rect x="672" y="230" width="264" height="62" rx="6" fill="rgba(11,158,99,0.10)" stroke="#0b9e63" stroke-width="1.2"/>
+        <rect x="680" y="236" width="28" height="12" rx="2" fill="transparent" stroke="rgba(11,158,99,0.50)" stroke-width="0.8"/>
+        <text x="694.0" y="245" fill="#07603c" font-size="7" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.08em">GATE</text>
+        <circle cx="921" cy="242" r="7.5" fill="#0b9e63"/>
+        <text x="921" y="245" fill="#eef2ef" font-size="8" font-weight="700" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle">7</text>
+        <text x="804.0" y="268" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="ru">Общий контур риска</text>
+        <text x="804.0" y="268" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="en">Shared risk gate</text>
+        <text x="804.0" y="282" fill="#5c6b62" font-size="8.5" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="ru">11 настроек · один лок</text>
+        <text x="804.0" y="282" fill="#5c6b62" font-size="8.5" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="en">11 settings · one lock</text>
+        <rect x="64" y="328" width="264" height="62" rx="6" fill="#eef2ef"/>
+        <rect x="64" y="328" width="264" height="62" rx="6" fill="rgba(20,32,26,0.05)" stroke="#5c6b62" stroke-width="1"/>
+        <rect x="72" y="334" width="33" height="12" rx="2" fill="transparent" stroke="rgba(92,107,98,0.40)" stroke-width="0.8"/>
+        <text x="88.5" y="343" fill="#5c6b62" font-size="7" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.08em">CLAIM</text>
+        <circle cx="313" cy="340" r="7.5" fill="#0b9e63"/>
+        <text x="313" y="343" fill="#eef2ef" font-size="8" font-weight="700" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle">8</text>
+        <text x="196.0" y="366" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="ru">Устойчивая заявка</text>
+        <text x="196.0" y="366" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="en">Durable claim</text>
+        <text x="196.0" y="380" fill="#5c6b62" font-size="8.5" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="ru">copy_open_claims · reserved</text>
+        <text x="196.0" y="380" fill="#5c6b62" font-size="8.5" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="en">copy_open_claims · reserved</text>
+        <rect x="368" y="328" width="264" height="62" rx="6" fill="#eef2ef"/>
+        <rect x="368" y="328" width="264" height="62" rx="6" fill="#ffffff" stroke="#14201a" stroke-width="1"/>
+        <rect x="376" y="334" width="33" height="12" rx="2" fill="transparent" stroke="rgba(20,32,26,0.40)" stroke-width="0.8"/>
+        <text x="392.5" y="343" fill="#14201a" font-size="7" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.08em">FENCE</text>
+        <circle cx="617" cy="340" r="7.5" fill="#0b9e63"/>
+        <text x="617" y="343" fill="#eef2ef" font-size="8" font-weight="700" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle">9</text>
+        <text x="500.0" y="366" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="ru">Фенс перед отправкой</text>
+        <text x="500.0" y="366" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="en">Submit fence</text>
+        <text x="500.0" y="380" fill="#5c6b62" font-size="8.5" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="ru">CAS по users.risk_revision</text>
+        <text x="500.0" y="380" fill="#5c6b62" font-size="8.5" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="en">CAS on users.risk_revision</text>
+        <rect x="672" y="328" width="264" height="62" rx="6" fill="#eef2ef"/>
+        <rect x="672" y="328" width="264" height="62" rx="6" fill="rgba(20,32,26,0.03)" stroke="rgba(20,32,26,0.30)" stroke-width="1"/>
+        <rect x="680" y="334" width="28" height="12" rx="2" fill="transparent" stroke="rgba(20,32,26,0.40)" stroke-width="0.8"/>
+        <text x="694.0" y="343" fill="#14201a" font-size="7" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.08em">CLOB</text>
+        <circle cx="921" cy="340" r="7.5" fill="#0b9e63"/>
+        <text x="921" y="343" fill="#eef2ef" font-size="8" font-weight="700" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle">10</text>
+        <text x="804.0" y="366" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="ru">Реальный FOK-ордер</text>
+        <text x="804.0" y="366" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="en">Real FOK order</text>
+        <text x="804.0" y="380" fill="#5c6b62" font-size="8.5" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="ru">Polymarket · всё или ничего</text>
+        <text x="804.0" y="380" fill="#5c6b62" font-size="8.5" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="en">Polymarket · all or nothing</text>
+        <rect x="64" y="426" width="264" height="62" rx="6" fill="#eef2ef"/>
+        <rect x="64" y="426" width="264" height="62" rx="6" fill="rgba(20,32,26,0.05)" stroke="#5c6b62" stroke-width="1"/>
+        <rect x="72" y="432" width="18" height="12" rx="2" fill="transparent" stroke="rgba(92,107,98,0.40)" stroke-width="0.8"/>
+        <text x="81.0" y="441" fill="#5c6b62" font-size="7" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.08em">DB</text>
+        <circle cx="313" cy="438" r="7.5" fill="#0b9e63"/>
+        <text x="313" y="441" fill="#eef2ef" font-size="8" font-weight="700" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle">11</text>
+        <text x="196.0" y="464" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="ru">Запись результата</text>
+        <text x="196.0" y="464" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="en">Persist result</text>
+        <text x="196.0" y="478" fill="#5c6b62" font-size="8.5" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="ru">copy_positions · trade_events</text>
+        <text x="196.0" y="478" fill="#5c6b62" font-size="8.5" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="en">copy_positions · trade_events</text>
+        <rect x="368" y="426" width="264" height="62" rx="6" fill="#eef2ef"/>
+        <rect x="368" y="426" width="264" height="62" rx="6" fill="rgba(20,32,26,0.03)" stroke="rgba(20,32,26,0.30)" stroke-width="1"/>
+        <rect x="376" y="432" width="33" height="12" rx="2" fill="transparent" stroke="rgba(20,32,26,0.40)" stroke-width="0.8"/>
+        <text x="392.5" y="441" fill="#14201a" font-size="7" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.08em">ALERT</text>
+        <circle cx="617" cy="438" r="7.5" fill="#0b9e63"/>
+        <text x="617" y="441" fill="#eef2ef" font-size="8" font-weight="700" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle">12</text>
+        <text x="500.0" y="464" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="ru">Оповещение</text>
+        <text x="500.0" y="464" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="en">Telegram alert</text>
+        <text x="500.0" y="478" fill="#5c6b62" font-size="8.5" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="ru">только после коммита</text>
+        <text x="500.0" y="478" fill="#5c6b62" font-size="8.5" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="en">only after commit</text>
+        <rect x="672" y="426" width="264" height="62" rx="6" fill="#eef2ef"/>
+        <rect x="672" y="426" width="264" height="62" rx="6" fill="#ffffff" stroke="#14201a" stroke-width="1"/>
+        <rect x="680" y="432" width="43" height="12" rx="2" fill="transparent" stroke="rgba(20,32,26,0.40)" stroke-width="0.8"/>
+        <text x="701.5" y="441" fill="#14201a" font-size="7" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.08em">RECOVER</text>
+        <circle cx="921" cy="438" r="7.5" fill="#0b9e63"/>
+        <text x="921" y="441" fill="#eef2ef" font-size="8" font-weight="700" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle">13</text>
+        <text x="804.0" y="464" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="ru">Неопределённость</text>
+        <text x="804.0" y="464" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="en">Uncertain claim</text>
+        <text x="804.0" y="478" fill="#5c6b62" font-size="8.5" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="ru">решает кошелёк</text>
+        <text x="804.0" y="478" fill="#5c6b62" font-size="8.5" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="en">wallet decides · never retried</text>
+        <path d="M 328,261 H 360" fill="none" stroke="#0b9e63" stroke-width="1.2" marker-end="url(#wf-arrow-accent)"/>
+        <rect x="322.0" y="243" width="60" height="12" rx="2" fill="#eef2ef"/>
+        <text x="352" y="252" fill="#07603c" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="ru">ПРЕДЛАГАЕТ</text>
+        <text x="352" y="252" fill="#07603c" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="en">PROPOSE</text>
+        <path d="M 632,261 H 664" fill="none" stroke="#0b9e63" stroke-width="1.2" marker-end="url(#wf-arrow-accent)"/>
+        <rect x="626.0" y="243" width="60" height="12" rx="2" fill="#eef2ef"/>
+        <text x="656" y="252" fill="#07603c" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="ru">ПРЕДЛАГАЕТ</text>
+        <text x="656" y="252" fill="#07603c" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="en">PROPOSE</text>
+        <path d="M 804.0,292 V 320" fill="none" stroke="#0b9e63" stroke-width="1.2" marker-end="url(#wf-arrow-accent)"/>
+        <path d="M 672,359 H 640" fill="none" stroke="#5c6b62" stroke-width="1.2" marker-end="url(#wf-arrow)"/>
+        <path d="M 368,359 H 336" fill="none" stroke="#5c6b62" stroke-width="1.2" marker-end="url(#wf-arrow)"/>
+        <rect x="316.0" y="341" width="56" height="12" rx="2" fill="#eef2ef"/>
+        <text x="344" y="350" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="ru">РЕЗЕРВ</text>
+        <text x="344" y="350" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="en">RESERVE</text>
+        <rect x="624.0" y="341" width="48" height="12" rx="2" fill="#eef2ef"/>
+        <text x="648" y="350" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="ru">ДОПУСК</text>
+        <text x="648" y="350" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="en">AUTHZ</text>
+        <path d="M 196.0,390 V 418" fill="none" stroke="#5c6b62" stroke-width="1.2" marker-end="url(#wf-arrow)"/>
+        <rect x="216.0" y="403" width="52" height="12" rx="2" fill="#eef2ef"/>
+        <text x="242.0" y="412" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="ru">КОММИТ</text>
+        <text x="242.0" y="412" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="en">COMMIT</text>
+        <path d="M 328,457 H 360" fill="none" stroke="#5c6b62" stroke-width="1.2" marker-end="url(#wf-arrow)"/>
+        <rect x="326.0" y="439" width="52" height="12" rx="2" fill="#eef2ef"/>
+        <text x="352" y="448" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="ru">АЛЕРТ</text>
+        <text x="352" y="448" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="en">NOTIFY</text>
+        <path d="M 804.0,390 V 418" fill="none" stroke="#5c6b62" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#wf-arrow)"/>
+        <rect x="822.0" y="403" width="68" height="12" rx="2" fill="#eef2ef"/>
+        <text x="856.0" y="412" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="ru">НЕЯСНО</text>
+        <text x="856.0" y="412" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="en">AMBIGUOUS</text>
+        <path d="M 672,457 H 640" fill="none" stroke="#5c6b62" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#wf-arrow)"/>
+        <path d="M 614.0,140 V 222" fill="none" stroke="#0879c9" stroke-width="1.2" marker-end="url(#wf-arrow-link)"/>
+        <rect x="632.0" y="177" width="88" height="12" rx="2" fill="#eef2ef"/>
+        <text x="676.0" y="186" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="ru">ЗАПИСЬ НАСТРОЕК</text>
+        <text x="676.0" y="186" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em" class="en">SETTINGS WRITE</text>
+        <rect x="40" y="572" width="920" height="100" rx="8" fill="rgba(20,32,26,0.02)" stroke="rgba(20,32,26,0.10)" stroke-width="0.8"/>
+        <rect x="64" y="566" width="260" height="12" rx="2" fill="#eef2ef"/>
+        <text x="72" y="575" fill="rgba(20,32,26,0.45)" font-size="7" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.14em" class="ru">C · ФОНОВЫЕ ЦИКЛЫ И УЧЁТ</text>
+        <text x="72" y="575" fill="rgba(20,32,26,0.45)" font-size="7" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.14em" class="en">C · SUPPORT LOOPS AND ACCOUNTING</text>
+        <rect x="64" y="596" width="264" height="62" rx="6" fill="#eef2ef"/>
+        <rect x="64" y="596" width="264" height="62" rx="6" fill="rgba(11,158,99,0.10)" stroke="#0b9e63" stroke-width="1.2"/>
+        <rect x="72" y="602" width="33" height="12" rx="2" fill="transparent" stroke="rgba(11,158,99,0.50)" stroke-width="0.8"/>
+        <text x="88.5" y="611" fill="#07603c" font-size="7" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.08em">STATS</text>
+        <text x="196.0" y="634" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="ru">Цикл статистики</text>
+        <text x="196.0" y="634" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="en">Screener stats loop</text>
+        <text x="196.0" y="648" fill="#5c6b62" font-size="8.5" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="ru">15 мин · 2000 · 200 · 4</text>
+        <text x="196.0" y="648" fill="#5c6b62" font-size="8.5" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="en">15 min · 2000 · 200 · conc 4</text>
+        <rect x="368" y="596" width="264" height="62" rx="6" fill="#eef2ef"/>
+        <rect x="368" y="596" width="264" height="62" rx="6" fill="rgba(11,158,99,0.10)" stroke="#0b9e63" stroke-width="1.2"/>
+        <rect x="376" y="602" width="38" height="12" rx="2" fill="transparent" stroke="rgba(11,158,99,0.50)" stroke-width="0.8"/>
+        <text x="395.0" y="611" fill="#07603c" font-size="7" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.08em">EQUITY</text>
+        <text x="500.0" y="634" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="ru">Снимки капитала</text>
+        <text x="500.0" y="634" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="en">Equity snapshot loop</text>
+        <text x="500.0" y="648" fill="#5c6b62" font-size="8.5" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="ru">5 мин · equity_snapshots</text>
+        <text x="500.0" y="648" fill="#5c6b62" font-size="8.5" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="en">5 min · equity_snapshots</text>
+        <rect x="672" y="596" width="264" height="62" rx="6" fill="#eef2ef"/>
+        <rect x="672" y="596" width="264" height="62" rx="6" fill="rgba(20,32,26,0.05)" stroke="#5c6b62" stroke-width="1"/>
+        <rect x="680" y="602" width="33" height="12" rx="2" fill="transparent" stroke="rgba(92,107,98,0.40)" stroke-width="0.8"/>
+        <text x="696.5" y="611" fill="#5c6b62" font-size="7" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.08em">CACHE</text>
+        <text x="804.0" y="634" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="ru">SQLite / Postgres</text>
+        <text x="804.0" y="634" fill="#14201a" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle" class="en">SQLite / Postgres</text>
+        <text x="804.0" y="648" fill="#5c6b62" font-size="8.5" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="ru">trader_cache · один источник</text>
+        <text x="804.0" y="648" fill="#5c6b62" font-size="8.5" font-family="'JetBrains Mono', ui-monospace, monospace" text-anchor="middle" class="en">trader_cache · one source of truth</text>
+        <path d="M 328,627 H 360" fill="none" stroke="#5c6b62" stroke-width="1.2" marker-end="url(#wf-arrow)"/>
+        <path d="M 632,627 H 664" fill="none" stroke="#5c6b62" stroke-width="1.2" marker-end="url(#wf-arrow)"/>
+        <line x1="40" y1="706" x2="960" y2="706" stroke="rgba(20,32,26,0.10)" stroke-width="0.8"/>
+        <text x="40" y="730" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.14em">LEGEND</text>
+        <rect x="140" y="722" width="12" height="12" rx="2" fill="rgba(92,107,98,0.10)" stroke="#66756c" stroke-width="1"/>
+        <text x="160" y="731" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="ru">КЛИЕНТ</text>
+        <text x="160" y="731" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="en">CLIENT</text>
+        <rect x="252" y="722" width="12" height="12" rx="2" fill="#ffffff" stroke="#14201a" stroke-width="1"/>
+        <text x="272" y="731" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="ru">СЕРВИС</text>
+        <text x="272" y="731" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="en">SERVICE</text>
+        <rect x="364" y="722" width="12" height="12" rx="2" fill="rgba(11,158,99,0.10)" stroke="#0b9e63" stroke-width="1.2"/>
+        <text x="384" y="731" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="ru">ДВИЖОК</text>
+        <text x="384" y="731" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="en">ENGINE</text>
+        <rect x="476" y="722" width="12" height="12" rx="2" fill="rgba(20,32,26,0.05)" stroke="#5c6b62" stroke-width="1"/>
+        <text x="496" y="731" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="ru">ХРАНИЛИЩЕ</text>
+        <text x="496" y="731" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="en">STORE</text>
+        <rect x="616" y="722" width="12" height="12" rx="2" fill="rgba(20,32,26,0.03)" stroke="rgba(20,32,26,0.30)" stroke-width="1"/>
+        <text x="636" y="731" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="ru">ВНЕШНИЙ</text>
+        <text x="636" y="731" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="en">EXTERNAL</text>
+        <line x1="740" y1="728" x2="768" y2="728" stroke="#5c6b62" stroke-width="1" stroke-dasharray="4,3"/>
+        <text x="776" y="731" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="ru">ВОССТАНОВЛЕНИЕ</text>
+        <text x="776" y="731" fill="#5c6b62" font-size="8" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.06em" class="en">RECOVERY</text>
+        <text x="40" y="766" fill="#5c6b62" font-size="8.5" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.04em" class="en">INVARIANT: DETECTION PROPOSES · THE SHARED GATE AUTHORISES · POLYMARKET EXECUTES · THE DATABASE RECORDS · RECONCILIATION VERIFIES</text>
+        <text x="40" y="766" fill="#5c6b62" font-size="8.5" font-family="'JetBrains Mono', ui-monospace, monospace" letter-spacing="0.04em" class="ru">ИНВАРИАНТ: ДЕТЕКЦИЯ ПРЕДЛАГАЕТ · ОБЩИЙ КОНТУР ДОПУСКАЕТ · POLYMARKET ИСПОЛНЯЕТ · БАЗА ЗАПИСЫВАЕТ · СВЕРКА ПРОВЕРЯЕТ</text>
+        </svg>
+      </figure>
+      <p class="sd-scroll-hint">
+        <span class="en">Wide diagram — scroll it sideways, or focus it and use the arrow keys.</span>
+        <span class="ru">Широкая диаграмма — прокрутите её вбок или сфокусируйтесь и используйте стрелки.</span>
+      </p>
+
+    <div class="sd-note">
+      <p class="ru"><strong>Что здесь важно.</strong> Два цикла обнаружения предлагают действия,
+      но допускает их <em>один</em> контур риска (<code>copy_risk_lock</code> +
+      транзакция). Поэтому быстрый цикл нельзя ускорить в обход проверок — они не дублируются,
+      а разделяются.</p>
+      <p class="en"><strong>What matters here.</strong> Two loops propose actions, but exactly
+      <em>one</em> risk gate authorises them (<code>copy_risk_lock</code> plus the claim
+      transaction). The fast path cannot be made faster by going around the checks, because the
+      checks are shared rather than duplicated.</p>
+      <p class="ru">Оповещение уходит только после коммита в базу: пользователь никогда не
+      получает алерт о сделке, которой нет в <code>copy_positions</code>.</p>
+      <p class="en">The alert is sent only after the database commit, so a user is never told
+      about a fill that does not exist in <code>copy_positions</code>.</p>
+      <ul>
+        <li class="ru">Неоднозначная отправка не повторяется вслепую — заявка помечается
+        <code>uncertain</code>, и исход определяет кошелёк.</li>
+        <li class="en">An ambiguous submission is never blindly retried: the claim is marked
+        <code>uncertain</code> and the wallet settles the outcome.</li>
+        <li class="ru">Ребалансировка срабатывает только при отклонении &gt;25%
+        (<code>RESIZE_THRESHOLD</code>).</li>
+        <li class="en">A position is resized only when the target drifts more than 25% from the
+        current size (<code>RESIZE_THRESHOLD</code>).</li>
+        <li class="ru">Бюджет попыток — <code>MAX_FILL_ATTEMPTS = 3</code>, затем намерение
+        оставляется.</li>
+        <li class="en">The retry budget is <code>MAX_FILL_ATTEMPTS = 3</code>; after that the
+        intent is abandoned rather than chased to a worse price.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="sd-section sd-sources">
+    <p class="sd-eyebrow">Sources</p>
+    <h2 class="ru" id="sources-ru">Откуда это построено</h2>
+    <h2 class="en" id="sources">Where this comes from</h2>
+    <p class="ru sd-lede">Каждая диаграмма построена по коду. Если реализация меняется,
+    диаграмма считается устаревшей и правится вместе с кодом.</p>
+    <p class="en sd-lede">Every diagram is drawn from the code. If the implementation changes,
+    the diagram is out of date and is corrected alongside it.</p>
+    <div class="sd-note">
+      <ul>
+        <li><code>backend/main.py</code> — process lifespan, both engine loops, the docs router</li>
+        <li><code>backend/core/copy_engine.py</code> — detection, planning, claims, fences, retries</li>
+        <li><code>backend/core/execution.py</code> — order placement and the price band</li>
+        <li><code>backend/core/trader_stats.py</code> — screener discovery and windowed metrics</li>
+        <li><code>backend/db/models.py</code> — every table name used above</li>
+        <li><a href="/docs/api-reference">API Reference</a> · <a href="/api/docs">Interactive API</a></li>
+      </ul>
+    </div>
+  </section>

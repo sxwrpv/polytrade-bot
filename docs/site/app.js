@@ -14,6 +14,9 @@ const groups = [
   { title: 'Developers', pages: [
     ['developers', 'Developers Hub', 'developers.md'],
     ['api-reference', 'API Reference', 'api-reference.md'],
+    // Rendered from an HTML fragment rather than Markdown: it is a collection
+    // of inline SVG diagrams, which the Markdown renderer would escape.
+    ['system-design', 'System Design', 'system-design.html', 'html'],
   ]},
   { title: 'Operations', pages: [
     ['operators', 'Operators Hub', 'operators.md'],
@@ -28,7 +31,8 @@ const groups = [
 ];
 
 const pages = groups.flatMap(group => group.pages.map(page => ({
-  slug: page[0], title: page[1], file: page[2], group: group.title,
+  slug: page[0], title: page[1], file: page[2], kind: page[3] || 'markdown',
+  group: group.title,
 })));
 const pageMap = Object.fromEntries(pages.map(page => [page.slug, page]));
 
@@ -172,7 +176,10 @@ function renderSidebar(activeSlug) {
 }
 
 function renderToc() {
-  const headings = [...document.querySelectorAll('.prose h2, .prose h3')];
+  // Bilingual pages hold both languages in the DOM at once; only list the
+  // headings currently on screen, or the contents would show every entry twice.
+  const headings = [...document.querySelectorAll('.prose h2, .prose h3')]
+    .filter(heading => heading.offsetParent !== null || !heading.className);
   const nav = document.getElementById('toc-nav');
   nav.innerHTML = headings.map(h => `<a href="#${h.id}" data-id="${h.id}"${h.tagName === 'H3' ? ' style="padding-left:22px"' : ''}>${h.textContent}</a>`).join('');
   if (!headings.length) document.querySelector('.toc').style.display = 'none';
@@ -200,7 +207,14 @@ function renderPager(slug) {
    than failing, so the switch never leaves the reader on an error screen. */
 let docsLang = localStorage.getItem('polytrade-docs-lang') === 'ru' ? 'ru' : 'en';
 
-async function fetchDoc(file) {
+async function fetchDoc(file, kind = 'markdown') {
+  if (kind === 'html') {
+    // One bilingual file; the language toggle picks which spans are visible,
+    // so there is no `.ru.html` variant to fall back to.
+    const response = await fetch(`/docs/assets/${file}`, { cache: 'no-cache' });
+    if (!response.ok) throw new Error(`Documentation returned ${response.status}`);
+    return response.text();
+  }
   if (docsLang === 'ru') {
     const translated = await fetch(`/docs/content/${file.replace(/\.md$/, '.ru.md')}`, { cache: 'no-cache' });
     if (translated.ok) return translated.text();
@@ -215,10 +229,18 @@ async function loadPage() {
   const page = pageMap[slug];
   renderSidebar(slug);
   try {
-    const markdown = await fetchDoc(page.file);
+    const source = await fetchDoc(page.file, page.kind);
     const prose = document.getElementById('prose');
-    prose.innerHTML = renderMarkdown(markdown);
+    prose.classList.toggle('lang-ru', docsLang === 'ru');
+    prose.innerHTML = page.kind === 'html' ? source : renderMarkdown(source);
     prose.hidden = false;
+    if (page.kind === 'html') {
+      // Behaviour is optional: if the module fails to load, the diagrams are
+      // still fully rendered and readable.
+      import('/docs/assets/system-design.js')
+        .then(module => module.setupSystemDesign(prose))
+        .catch(() => {});
+    }
     document.getElementById('loading-state').hidden = true;
     document.title = `${page.title} - PolyTrade Documentation`;
     renderToc();
@@ -235,10 +257,11 @@ const searchData = new Map();
 async function buildSearchIndex() {
   await Promise.all(pages.map(async page => {
     try {
-      const response = { ok: true, text: () => fetchDoc(page.file) };
-      if (!response.ok) throw new Error(`Search source returned ${response.status}`);
-      const text = await response.text();
-      searchData.set(page.slug, text.replace(/```[\s\S]*?```/g, ' ').replace(/[#>*_`\[\]()-]/g, ' ').replace(/\s+/g, ' ').trim());
+      const raw = await fetchDoc(page.file, page.kind);
+      const text = page.kind === 'html'
+        ? raw.replace(/<(script|style|svg)[\s\S]*?<\/\1>/gi, ' ').replace(/<[^>]*>/g, ' ')
+        : raw.replace(/```[\s\S]*?```/g, ' ').replace(/[#>*_`\[\]()-]/g, ' ');
+      searchData.set(page.slug, text.replace(/\s+/g, ' ').trim());
     } catch { searchData.set(page.slug, ''); }
   }));
 }

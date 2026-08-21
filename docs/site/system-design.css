@@ -1,0 +1,159 @@
+/* System Design — the diagram collection inside the documentation shell.
+   Tokens come from styles.css; this sheet only adds figure framing, the
+   bilingual gate, and the reveal motion. Nothing here introduces a second
+   palette: the diagrams are drawn in the documentation greens already. */
+
+.prose .sd-intro { color: var(--muted); font-size: 17px; line-height: 1.7; }
+.prose .sd-intro + .sd-intro { margin-top: -8px; }
+
+.sd-provenance {
+  margin: 24px 0 8px;
+  padding: 15px 17px;
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--green);
+  border-radius: 0 8px 8px 0;
+  background: var(--surface);
+  color: var(--muted);
+}
+.sd-provenance p { margin: 0; }
+.sd-provenance strong { color: var(--text); font-weight: 600; }
+
+.sd-section {
+  margin-top: 52px;
+  padding-top: 34px;
+  border-top: 1px solid var(--border);
+}
+.sd-eyebrow {
+  margin: 0 0 8px;
+  font-family: var(--mono);
+  color: var(--faint);
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+.prose .sd-section h2 { margin-top: 0; }
+.prose .sd-lede { max-width: 62ch; color: var(--muted); }
+
+/* ---------- figures -------------------------------------------------------
+   The diagrams are wider than the 760px content column. The figure — not the
+   page — scrolls, and it is focusable so the scroll is reachable by keyboard.
+   `overscroll-behavior-x: contain` stops a horizontal swipe from turning into
+   a browser back-navigation on trackpads. */
+.sd-figure {
+  margin: 26px 0 0;
+  padding: 0;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+}
+.sd-figure:focus-visible {
+  outline: 2px solid var(--green);
+  outline-offset: 2px;
+}
+.sd-figure svg.diagram {
+  display: block;
+  width: 100%;
+  min-width: 940px;
+}
+/* A hint that there is more diagram to the right, shown only where the figure
+   can actually scroll. Decorative — the same fact is in the caption below. */
+.sd-scroll-hint {
+  display: none;
+  margin: 8px 2px 0;
+  font-family: var(--mono);
+  color: var(--faint);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+}
+.sd-figure.is-scrollable + .sd-scroll-hint { display: block; }
+
+.sd-note {
+  max-width: 68ch;
+  margin-top: 22px;
+  color: var(--muted);
+}
+.sd-note p { margin: 0 0 12px; }
+.sd-note p:last-child { margin-bottom: 0; }
+.sd-note strong { color: var(--text); font-weight: 600; }
+.sd-note ul { margin: 10px 0 0; padding-left: 20px; }
+.sd-note li { margin-bottom: 6px; }
+.sd-aside {
+  max-width: 56ch;
+  margin-top: 20px;
+  padding-left: 15px;
+  border-left: 2px solid var(--green);
+  font-family: var(--serif);
+  font-style: italic;
+  font-size: 17px;
+  color: var(--text);
+}
+.sd-sources .sd-note ul { list-style: none; padding-left: 0; }
+.sd-sources .sd-note li { padding-left: 0; }
+
+/* ---------- bilingual gate ------------------------------------------------
+   The docs language toggle sets one of these classes on .prose. Without a
+   class both languages would render, so the default state is English. */
+.prose .ru { display: none; }
+.prose.lang-ru .ru { display: revert; }
+.prose.lang-ru .en { display: none; }
+/* SVG text is not `display: revert`-friendly in every engine; be explicit. */
+.prose text.ru, .prose text.en { display: none; }
+.prose:not(.lang-ru) text.en { display: block; }
+.prose.lang-ru text.ru { display: block; }
+
+/* ---------- motion --------------------------------------------------------
+   One reveal per diagram, once, the first time it enters the viewport: nodes
+   fade up and the connecting lines draw themselves in. Nothing loops and
+   nothing implies live system state. The `sd-animate` class is added by
+   system-design.js only when motion is allowed and JS is running, so with the
+   script disabled — or reduced-motion on — every diagram renders finished.
+
+   Line drawing is applied inline per path by the script (it needs
+   getTotalLength), and only to paths that carry no dash pattern of their own,
+   so the dashed recovery/async arrows keep their pattern and simply fade in. */
+.sd-animate .sd-figure svg.diagram rect,
+.sd-animate .sd-figure svg.diagram circle,
+.sd-animate .sd-figure svg.diagram text,
+.sd-animate .sd-figure svg.diagram polygon {
+  opacity: 0;
+}
+.sd-animate .sd-figure.sd-revealed svg.diagram rect,
+.sd-animate .sd-figure.sd-revealed svg.diagram circle,
+.sd-animate .sd-figure.sd-revealed svg.diagram text,
+.sd-animate .sd-figure.sd-revealed svg.diagram polygon {
+  opacity: 1;
+  transition: opacity 0.45s ease var(--sd-delay, 0s);
+}
+
+/* Hover/focus emphasis: pointing at a node dims the rest of the diagram so the
+   relationship being read stands out. Opacity only — no colour is added or
+   removed, so nothing is conveyed by colour alone. */
+.sd-figure svg.diagram:hover > g[data-node],
+.sd-figure svg.diagram:focus-within > g[data-node] { opacity: 0.45; transition: opacity 0.2s ease; }
+.sd-figure svg.diagram > g[data-node]:hover,
+.sd-figure svg.diagram > g[data-node]:focus-visible { opacity: 1; }
+
+@media (max-width: 820px) {
+  /* Below the content column the diagram cannot shrink further and stay
+     legible, so it keeps its intrinsic width and the figure scrolls. The page
+     itself never scrolls sideways. */
+  .sd-section { margin-top: 42px; padding-top: 28px; }
+  .sd-figure { border-radius: 8px; }
+  .sd-figure svg.diagram { min-width: 880px; }
+  .prose .sd-intro { font-size: 16px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sd-animate .sd-figure svg.diagram path[marker-end],
+  .sd-animate .sd-figure svg.diagram line[marker-end],
+  .sd-animate .sd-figure svg.diagram rect[rx],
+  .sd-animate .sd-figure svg.diagram text,
+  .sd-animate .sd-figure svg.diagram circle {
+    opacity: 1;
+    stroke-dashoffset: 0;
+    transition: none;
+  }
+}
