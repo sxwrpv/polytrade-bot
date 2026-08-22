@@ -245,6 +245,14 @@ class AdvancedFilterTests(PublicScreenerTestBase):
                 self.assertEqual(
                     422, self.client.get(f"/api/public/screener/wallets?{query}").status_code)
 
+    def test_a_minimum_above_its_maximum_is_rejected(self):
+        response = self.client.get(
+            "/api/public/screener/wallets?fill_exit_ratio_min=300&fill_exit_ratio_max=100")
+
+        self.assertEqual(422, response.status_code)
+        self.assertIn("minimum", response.json()["detail"].lower())
+        self.assertIn("maximum", response.json()["detail"].lower())
+
     def test_both_metrics_are_published_so_a_threshold_can_be_checked(self):
         wallet = self.client.get(f"/api/public/screener/wallets/{WALLET}").json()
 
@@ -296,6 +304,74 @@ class WireContractTests(PublicScreenerTestBase):
                 body = self.client.get(
                     f"/api/public/screener/wallets?period=30d&{query}").json()
                 self.assertNotIn(WALLET, [w["address"] for w in body["wallets"]])
+
+
+class PaginationTests(PublicScreenerTestBase):
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        for index in range(5):
+            address = "0x" + f"{index + 16:02x}" * 20
+            await self.db.execute(
+                "INSERT INTO trader_cache(address, display_name, pnl_30d, history_days, "
+                "last_refreshed) VALUES(?,?,?,?,?)",
+                (address, f"Wallet {index}", float(100 - index), 30.0, now_iso()),
+            )
+
+    def test_list_reports_truthful_page_metadata(self):
+        first = self.client.get(
+            "/api/public/screener/wallets?period=30d&sort=pnl&limit=3&offset=0").json()
+        second = self.client.get(
+            "/api/public/screener/wallets?period=30d&sort=pnl&limit=3&offset=3").json()
+        final = self.client.get(
+            "/api/public/screener/wallets?period=30d&sort=pnl&limit=3&offset=6").json()
+
+        self.assertEqual(7, first["total"])
+        self.assertEqual(3, first["count"])
+        self.assertEqual(3, first["limit"])
+        self.assertEqual(0, first["offset"])
+        self.assertTrue(first["has_more"])
+
+        self.assertEqual(7, second["total"])
+        self.assertEqual(3, second["count"])
+        self.assertEqual(3, second["offset"])
+        self.assertTrue(second["has_more"])
+
+        self.assertEqual(7, final["total"])
+        self.assertEqual(1, final["count"])
+        self.assertEqual(6, final["offset"])
+        self.assertFalse(final["has_more"])
+
+        reached = {
+            wallet["address"]
+            for page in (first, second, final)
+            for wallet in page["wallets"]
+        }
+        self.assertEqual(7, len(reached))
+
+    def test_total_obeys_the_active_filters(self):
+        body = self.client.get(
+            "/api/public/screener/wallets?period=30d&limit=2&pnl_min=100").json()
+
+        self.assertEqual(2, body["total"])
+        self.assertEqual(2, body["count"])
+        self.assertFalse(body["has_more"])
+
+    def test_nonempty_page_and_total_come_from_one_query_snapshot(self):
+        original_fetchval = self.db.fetchval
+
+        async def unexpected_separate_count(*_args, **_kwargs):
+            raise AssertionError("nonempty pages must not run a separate COUNT query")
+
+        self.db.fetchval = unexpected_separate_count
+        try:
+            response = self.client.get(
+                "/api/public/screener/wallets?period=30d&limit=2&offset=0")
+        finally:
+            self.db.fetchval = original_fetchval
+
+        self.assertEqual(200, response.status_code)
+        self.assertEqual(2, response.json()["count"])
+        self.assertEqual(7, response.json()["total"])
 
 
 class RateLimitTests(PublicScreenerTestBase):

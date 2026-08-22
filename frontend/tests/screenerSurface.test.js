@@ -12,7 +12,9 @@ import {
   activeFilterChips,
   buildPublicQuery,
   coverageLabel,
+  filterValidationError,
   formatMetric,
+  paginationLabel,
   walletRows,
 } from '../src/screener/screenerModel.js'
 
@@ -40,6 +42,71 @@ test('the public query is period-aware and omits inactive filters', () => {
   assert.equal(
     buildPublicQuery({ completeHistoryOnly: true }).complete_history_only, true,
   )
+  assert.equal(buildPublicQuery({ offset: 50 }).offset, 50)
+})
+
+test('valid numeric boundaries are distinct from an inactive filter', () => {
+  const filters = {
+    ...DEFAULT_FILTERS,
+    pnlMin: '-25000',
+    winrateMin: '0',
+    volumeMin: '0',
+    consistencyRatioMin: '0',
+    fillExitMin: '0',
+    fillExitMax: '400',
+  }
+  const query = buildPublicQuery({ filters })
+
+  assert.equal(query.pnl_min, -25000)
+  assert.equal(query.winrate_min, 0)
+  assert.equal(query.volume_min, 0)
+  assert.equal(query.consistency_ratio_min, 0)
+  assert.equal(query.fill_exit_ratio_min, 0)
+  assert.equal(query.fill_exit_ratio_max, 400)
+  assert.equal(filterValidationError(query), '')
+})
+
+test('contradictory paired thresholds are explained before a request is sent', () => {
+  assert.equal(
+    filterValidationError({ fill_exit_ratio_min: 300, fill_exit_ratio_max: 100 }),
+    'Minimum sell / buy event count cannot exceed the maximum.',
+  )
+  assert.throws(
+    () => buildPublicQuery({
+      filters: { ...DEFAULT_FILTERS, fillExitMin: '300', fillExitMax: '100' },
+    }),
+    /minimum.*maximum/i,
+  )
+})
+
+test('pagination copy distinguishes the visible page from the total', () => {
+  assert.equal(
+    paginationLabel({ offset: 0, count: 50, total: 121 }),
+    'Showing 1–50 of 121 wallets',
+  )
+  assert.equal(
+    paginationLabel({ offset: 100, count: 21, total: 121 }),
+    'Showing 101–121 of 121 wallets',
+  )
+  assert.equal(paginationLabel({ offset: 0, count: 0, total: 0 }), 'No wallets')
+  assert.equal(
+    paginationLabel({ offset: 50, count: 0, total: 55 }),
+    'No wallets on this page — 55 wallets match',
+  )
+})
+
+test('the page can navigate every API page and exposes validation errors', async () => {
+  const page = await read('src/screener/ScreenerPage.jsx')
+
+  assert.match(page, /paginationLabel/)
+  assert.match(page, /payload\?\.has_more/)
+  assert.match(page, /aria-label="Wallet result pages"/)
+  assert.match(page, />Previous</)
+  assert.match(page, />Next</)
+  assert.match(page, /role="alert"/)
+  assert.match(page, /setOffset\(0\)/)
+  assert.match(page, /function ResultPagination/)
+  assert.match(page, /<ResultPagination/)
 })
 
 test('the advanced filters carried over from the retired in-app screener still work', () => {

@@ -73,7 +73,7 @@ test('tinted controls keep their label above AA over the tint', async () => {
   assert.ok(ratio >= 4.5, `deep green on the pill tint is ${ratio.toFixed(2)}:1`)
 })
 
-test('numeric filters are sliders, not bare number inputs', async () => {
+test('numeric filters use an explicit enable control so exact boundaries remain usable', async () => {
   const [page, slider] = await Promise.all([
     read('src/screener/ScreenerPage.jsx'),
     read('src/screener/RangeFilter.jsx'),
@@ -84,10 +84,21 @@ test('numeric filters are sliders, not bare number inputs', async () => {
   // No numeric text inputs left anywhere in the filter rail.
   assert.doesNotMatch(page, /type="number"/)
   assert.doesNotMatch(slider, /type="number"/)
-  // A slider parked at its "off" end must mean "no filter", never a zero
-  // threshold that silently hides every wallet below zero.
-  assert.match(slider, /offValue \? '' : String\(next\)/)
+  // Enabled state is separate from the numeric value, so 0 and exact slider
+  // endpoints can be active thresholds rather than overloaded off sentinels.
+  assert.match(slider, /type="checkbox"/)
+  assert.match(slider, /aria-label={`\$\{label\} filter enabled`}/)
+  assert.match(slider, /type="checkbox"[\s\S]*type="range"/)
+  assert.match(slider, /aria-valuetext/)
+  assert.match(slider, /disabled={!active}/)
+  assert.doesNotMatch(slider, /next === offValue \? ''/)
   assert.match(slider, /'off'/)
+})
+
+test('the notes rail detaches before a 1280px desktop squeezes the Analyze action', async () => {
+  const css = await read('src/styles/screener.css')
+
+  assert.match(css, /@media \(max-width:\s*1400px\)/)
 })
 
 test('the screener uses the documentation shell layout', async () => {

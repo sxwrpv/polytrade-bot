@@ -37,7 +37,9 @@ Returns `{"status":"ok"}`. This is process liveness only; it does not verify dat
 
 Anonymous, read-only wallet discovery for the standalone Wallet Screener. No session, no cookie.
 
-Query: `period` (`7d` | `30d` | `90d`, default `30d`), `sort` (`pnl` | `winrate` | `volume`), `search`, `limit` (≤100), `offset`, `pnl_min`, `winrate_min` (a fraction, so 0.6 is 60%), `volume_min`, `complete_history_only`. An unsupported `period` or `sort` is rejected with 422 rather than silently defaulting, so a response can never be labelled with the wrong window.
+Query: `period` (`7d` | `30d` | `90d`, default `30d`), `sort` (`pnl` | `winrate` | `volume`), `search`, `limit` (≤100), `offset`, `pnl_min`, `winrate_min` (a fraction, so 0.6 is 60%), `volume_min`, `consistency_ratio_min` (the 0..1 positive close-day ratio), `fill_exit_ratio_min`, `fill_exit_ratio_max`, and `complete_history_only`. An unsupported `period` or `sort` is rejected with 422 rather than silently defaulting, so a response can never be labelled with the wrong window. If both sell/buy count thresholds are supplied, the minimum cannot exceed the maximum; contradictory ranges return 422.
+
+Each response includes the current-page `count`, filtered-result `total`, requested `limit` and `offset`, and `has_more`. Clients should advance by the returned `limit` while `has_more` is true; `count` alone is not the size of the complete filtered result set.
 
 Reads only precomputed `trader_cache` columns. It never recomputes a wallet, never calls Polymarket, and never writes — those belong to the authenticated `/api/traders/*` routes and the background stats loop.
 
