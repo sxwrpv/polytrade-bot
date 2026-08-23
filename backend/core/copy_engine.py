@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import logging
+import os
 import time
 import uuid
 from collections import defaultdict
@@ -77,6 +78,13 @@ CLOSING_STUCK_MIN_AGE_SECONDS = 600.0
 # as uncertain — doing that froze six tokens behind unreconciled claims on
 # 2026-07-11. This bounds the damage without touching that classification.
 SUBMITTED_BASIS_TTL_SECONDS = 120.0
+# A leader trade older than this is not worth copying: the price that made it
+# worth mirroring is gone. leader_age was computed and logged since the fast
+# path was written but never enforced, so a trade detected late — after a
+# restart, a detector stall, or a funding change — was copied at whatever the
+# book said hours later (incident 2026-08-23).
+MAX_LEADER_TRADE_AGE_SECONDS = float(
+    os.environ.get("MAX_LEADER_TRADE_AGE_SECONDS", "300"))
 
 
 # ---------------------------------------------------------------------------
@@ -251,6 +259,14 @@ class CopyEngine:
         # in memory on purpose: it guards a burst of retries within seconds, and
         # a process restart re-reads the wallet anyway.
         self._submitted: dict[tuple[str, str], list] = {}
+        # (user_id, trader) -> tokens the leader ALREADY held when copying
+        # started. The reconciler mirrors a leader's whole current book, so
+        # without this a new follow back-fills positions opened long before —
+        # which is exactly what happened on 2026-08-23, and the opposite of
+        # what the UI promises. Mirrors how _cursors seeds the detector
+        # ("first sight: start now, don't retro-copy the leader's history").
+        # In memory on purpose: after a restart the safe answer is the same one.
+        self._no_backfill: dict[tuple[str, str], set] = {}
 
     # --- lifecycle ---------------------------------------------------------
     async def run(self, stop_event: asyncio.Event) -> None:
@@ -646,6 +662,14 @@ class CopyEngine:
                     "fast-open skipped %s age=%.1fs notional=%.2f reason=below_dust_floor trader=%s",
                     token, leader_age, notional, trader[:10])
                 return
+            if leader_age > MAX_LEADER_TRADE_AGE_SECONDS:
+                # Copying this now means entering at a price the leader never
+                # paid, on a decision they made long enough ago that the edge
+                # is gone. Skip rather than chase.
+                log.info(
+                    "fast-open skipped %s age=%.1fs (>%.0fs) reason=leader_trade_too_old trader=%s",
+                    token, leader_age, MAX_LEADER_TRADE_AGE_SECONDS, trader[:10])
+                return
             log.info(
                 "fast-open candidate %s age=%.1fs side=%s notional=%.2f ref=%.4f trader=%s",
                 token, leader_age, trade.side.upper(), notional, float(trade.price or 0), trader[:10])
@@ -810,8 +834,36 @@ class CopyEngine:
                         (p.condition_id, p.title, p.event_slug or p.slug,
                          (r.get("outcome") or p.outcome or "").upper(), r["id"]))
                     r.update(condition_id=p.condition_id, market_title=p.title)
+            # A BUY the exchange reported as failed may still have filled. That
+            # leaves shares in the wallet with no row, no claim and no alert —
+            # the position is invisible and will never be managed or exited
+            # (incident 2026-08-23). We only adopt what we can PROVE we
+            # submitted for, so a user's own manual trades are never swept up.
+            adopted = await self._adopt_untracked_submissions(
+                user_id, trader, positions, open_rows)
+            if adopted:
+                open_rows = [r for r in await self.db.fetchall(
+                    "SELECT * FROM copy_positions WHERE user_id=? AND status='open'",
+                    (user_id,)) if r["trader_address"] == trader]
+
             block_opens = frisk["paused"] or inactive or await self._opens_blocked(
                 user_id, trader, frisk["daily_limit"])
+
+            # First sight of this follow: everything the leader is holding right
+            # now predates us, so none of it may be opened. Tokens drop out of
+            # the set once the leader exits them, so a genuine RE-entry later is
+            # copied normally.
+            key = (user_id, trader)
+            held_now = {p.asset for p in positions if p.size > 0}
+            if key not in self._no_backfill:
+                self._no_backfill[key] = set(held_now)
+                if held_now:
+                    log.info("no-backfill seeded: %s %s holds %d position(s) that "
+                             "predate copying", user_id[:10], trader[:10], len(held_now))
+            else:
+                self._no_backfill[key] &= held_now
+            preexisting = self._no_backfill[key]
+
             actions = plan_actions(
                 positions, open_rows, follow, available,
                 max_total_exposure=frisk["max_exposure"], block_opens=block_opens,
@@ -821,10 +873,69 @@ class CopyEngine:
                 max_price=frisk["max_price"],
                 positions_complete=complete)
             for action in actions:
+                if action.kind == "open" and action.token_id in preexisting:
+                    log.info("reconcile open skipped (predates copying): %s %s %s",
+                             user_id[:10], trader[:10], action.token_id[:16])
+                    continue
                 action.trader_address = trader
                 spent = await self._execute(user_id, client, action, slippage=frisk["slippage"])
                 if action.side == "BUY":
                     available = max(0.0, available - spent)
+
+    async def _adopt_untracked_submissions(
+            self, user_id: str, trader: str, positions, open_rows) -> int:
+        """Rescue shares that filled from a BUY reported as failed.
+
+        Scope is deliberately narrow. Only tokens with a live _submitted record
+        qualify — that is proof this engine put an order on the wire for them
+        within the TTL. A holding we cannot tie to our own submission is the
+        user's own trade and is left alone.
+
+        Returns the number of rows created.
+        """
+        tracked = {r["token_id"] for r in open_rows}
+        rescued = 0
+        for p in positions:
+            token = p.asset
+            if p.size <= 0.01 or token in tracked:
+                continue
+            if self._submitted_basis(user_id, token) <= 0:
+                continue
+            claim = await self.db.fetchone(
+                "SELECT claim_id FROM copy_open_claims WHERE user_id=? AND token_id=?",
+                (user_id, token))
+            if claim:
+                continue          # the uncertain-claim path owns this one
+            notional = round(float(p.size) * float(p.avg_price or 0), 2)
+            pid = uuid.uuid4().hex
+            try:
+                async with self.db.transaction(write=True) as tx:
+                    user_sql = "SELECT id FROM users WHERE id=?" + (
+                        " FOR UPDATE" if self.db.is_pg else "")
+                    await tx.fetchone(user_sql, (user_id,))
+                    await tx.execute(
+                        "INSERT INTO copy_positions(id,user_id,trader_address,condition_id,"
+                        "token_id,market_slug,market_title,outcome,shares,entry_price,"
+                        "notional_usd,status,opened_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,'open',?)",
+                        (pid, user_id, trader, p.condition_id, token,
+                         p.event_slug or p.slug, p.title, (p.outcome or "").upper(),
+                         float(p.size), float(p.avg_price), notional, now_iso()))
+                    await self._event(user_id, pid, "open", notional, None, store=tx)
+            except aiosqlite.IntegrityError:
+                continue          # another worker rescued it first
+            self._clear_submitted(user_id, token)
+            rescued += 1
+            log.warning("ADOPTED untracked fill: %s %s %.2f shares @ %.4f ($%.2f) — a "
+                        "BUY reported as failed had actually filled",
+                        user_id[:10], token[:16], p.size, p.avg_price, notional)
+            await self._notify_position({
+                "event": "opened", "user_id": user_id, "position_id": pid,
+                "market_title": p.title, "market_slug": p.event_slug or p.slug,
+                "outcome": (p.outcome or "").upper(), "shares": float(p.size),
+                "entry_price": float(p.avg_price), "notional_usd": notional,
+                "trader_address": trader,
+            })
+        return rescued
 
     # --- execution + persistence ------------------------------------------
     # --- fill-or-kill attempt budget --------------------------------------

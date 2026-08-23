@@ -26,8 +26,47 @@ import {
   decodeScreenerState,
   walletsToCsv,
 } from './screenerModel'
+import { loadCohort, withCopyScore, scoredCount } from './cohort'
+import { CopyChip, ScoreMove, MirrorChip, Sparkline, BandRow } from './CopyScore'
+import {
+  COHORT_FILTERS,
+  COHORT_PERIOD_LABEL,
+  CLASS_ORDER,
+  RECOMMENDED,
+  STALE_DAYS,
+  bandRuns,
+  buildCohortBoard,
+  classDef,
+  cohortAge,
+  cohortFilterChips,
+  cohortToCsv,
+  money as cohortMoney,
+  pnlIn,
+  roiIn,
+  signedMoney,
+  signedPercent,
+  staleHeldBack,
+  toCohortPeriod,
+  volumeIn,
+} from './cohortModel'
 
 const short = (address) => `${address.slice(0, 6)}…${address.slice(-4)}`
+
+/* Orderings the live API cannot serve.
+ *
+ * `SORTS` above stays exactly what the public API ranks by — pnl, winrate,
+ * volume — because buildPublicQuery must keep rejecting anything else. These
+ * two are computed from the Copy Score cohort instead, so choosing one swaps
+ * the board's source rather than adding a parameter to the request. The board
+ * says which source it is reading; it never mixes them in one table. */
+export const COHORT_SORTS = [
+  ['copy', 'Copy Score'],
+  ['roi', 'ROI'],
+]
+const isCohortSort = (sort) => COHORT_SORTS.some(([key]) => key === sort)
+
+/** Categories the cohort slices wallets by, in the order the board shows. */
+const CATEGORIES = ['all', 'Sports', 'Politics', 'Crypto', 'World', 'Economy', 'Tech', 'Culture', 'Weather']
 
 const refreshed = (value) => {
   if (!value) return null
@@ -52,31 +91,69 @@ export default function ScreenerPage() {
   const [error, setError] = useState('')
   const [selected, setSelected] = useState(null)
   const [offset, setOffset] = useState(0)
+  // The Copy Score overlay. Null until it arrives, and null forever if it
+  // fails — the board is fully usable either way, with the score column
+  // reading "not scored" instead of a number nobody can stand behind.
+  const [cohort, setCohort] = useState(null)
+  const [bands, setBands] = useState(initial.bands)
+  const [category, setCategory] = useState(initial.category)
+  const [direction, setDirection] = useState(initial.direction)
+  const [visible, setVisible] = useState(50)
 
   useEffect(() => subscribeSaved(() => setSavedTick((n) => n + 1)), [])
+
+  // Off the critical path on purpose: the live board renders first and this
+  // hydrates the score column when it lands.
+  useEffect(() => {
+    let alive = true
+    loadCohort().then((loaded) => { if (alive) setCohort(loaded) })
+    return () => { alive = false }
+  }, [])
+
+  const cohortMode = isCohortSort(sort)
+  const cohortPeriod = toCohortPeriod(period)
+  // `all` is a lifetime total, so the heading says ALL rather than mislabelling
+  // it with the live board's 90D.
+  const windowLabel = cohortMode ? COHORT_PERIOD_LABEL[cohortPeriod] : period.toUpperCase()
 
   // replaceState, not push: filtering is not navigation, and a history entry
   // per slider drag would make Back useless.
   useEffect(() => {
-    const q = encodeScreenerState({ period, sort, search, filters, completeHistoryOnly })
+    const q = encodeScreenerState({
+      period, sort, search, filters, completeHistoryOnly, bands, category, direction,
+    })
     window.history.replaceState(null, '', q ? `?${q}` : window.location.pathname)
-  }, [period, sort, search, filters, completeHistoryOnly])
+  }, [period, sort, search, filters, completeHistoryOnly, bands, category, direction])
 
   const queryState = useMemo(() => {
+    // A cohort ordering is not a query the API can answer; the board reads the
+    // overlay directly instead of asking for a sort the route would reject.
+    if (isCohortSort(sort)) return { query: null, validationError: '', cohortOrdered: true }
     try {
       return {
         query: buildPublicQuery({
           period, sort, search, filters, completeHistoryOnly, offset,
         }),
         validationError: '',
+        cohortOrdered: false,
       }
     } catch (problem) {
-      return { query: null, validationError: String(problem.message || problem) }
+      return {
+        query: null,
+        validationError: String(problem.message || problem),
+        cohortOrdered: false,
+      }
     }
   }, [completeHistoryOnly, filters, offset, period, search, sort])
   const query = queryState.query
 
   useEffect(() => {
+    if (queryState.cohortOrdered) {
+      // Nothing to fetch: the cohort effect below drives this board.
+      setError('')
+      setState(cohort ? 'ready' : 'loading')
+      return undefined
+    }
     if (!query) {
       setError(queryState.validationError)
       setState('invalid')
@@ -100,34 +177,93 @@ export default function ScreenerPage() {
         })
     }, 300)
     return () => { alive = false; clearTimeout(timer) }
-  }, [query, queryState.validationError])
+  }, [query, queryState.validationError, queryState.cohortOrdered, cohort])
 
-  const rows = useMemo(() => walletRows(payload), [payload])
-  const chips = useMemo(
-    () => activeFilterChips({ filters, period, completeHistoryOnly }),
-    [completeHistoryOnly, filters, period],
+  /* Two boards, one table.
+   *
+   * Money orderings read PolyTrade's live cache and wear the Copy Score as an
+   * overlay where the cohort covers the wallet. Copy Score and ROI orderings
+   * read the cohort itself, because ranking by a figure the API does not hold
+   * cannot be done a page at a time. Which one is on screen is stated above the
+   * table — the two are never blended into one set of rows. */
+  const liveRows = useMemo(
+    () => withCopyScore(walletRows(payload), cohort),
+    [payload, cohort],
   )
+  const cohortRows = useMemo(() => {
+    if (!cohortMode || !cohort) return []
+    const term = String(search ?? '').trim().toLowerCase()
+    const board = buildCohortBoard(cohort.traders, {
+      metric: sort,
+      period: cohortPeriod,
+      category,
+      asOf: cohort.meta.windowAnchor ?? cohort.meta.generatedAt?.slice(0, 10) ?? null,
+      bands,
+      filters,
+      direction,
+    })
+    if (!term) return board
+    return board.filter((t) => (
+      t.w.includes(term) || String(t.name ?? '').toLowerCase().includes(term)
+    ))
+  }, [cohort, cohortMode, sort, cohortPeriod, category, bands, filters, direction, search])
+
+  const rows = cohortMode ? cohortRows : liveRows
+  const chips = useMemo(
+    () => (cohortMode
+      ? cohortFilterChips({ metric: sort, period: cohortPeriod, category, bands, filters })
+        .map((chip) => [chip.key, chip.text, chip.clearable])
+      : activeFilterChips({ filters, period, completeHistoryOnly })
+        .map(([key, text]) => [key, text, true])),
+    [cohortMode, sort, cohortPeriod, category, bands, filters, completeHistoryOnly, period],
+  )
+  const age = useMemo(() => cohortAge(cohort?.meta?.generatedAt), [cohort])
   const resetPage = useCallback(() => {
     setOffset(0)
     setSelected(null)
+    setVisible(50)
   }, [])
   const changePeriod = (value) => { resetPage(); setPeriod(value) }
-  const changeSort = (value) => { resetPage(); setSort(value) }
+  const changeSort = (value) => {
+    resetPage()
+    // Direction only means something on a board this surface orders itself.
+    // The API ranks descending only, so switching back to a money ordering
+    // resets it rather than showing an arrow the request cannot honour.
+    if (!isCohortSort(value)) setDirection('desc')
+    setSort(value)
+  }
   const changeSearch = (value) => { resetPage(); setSearch(value) }
   const changeCompleteHistory = (value) => { resetPage(); setCompleteHistoryOnly(value) }
+  const changeCategory = (value) => { resetPage(); setCategory(value) }
   const setFilter = (key, value) => {
     resetPage()
     setFilters((current) => ({ ...current, [key]: value }))
   }
+  const toggleBand = (band) => {
+    resetPage()
+    setBands((current) => {
+      const next = new Set(current)
+      if (next.has(band)) next.delete(band)
+      else next.add(band)
+      // An empty band set would render an empty board with no way back, so the
+      // last band cannot be switched off.
+      return next.size ? next : current
+    })
+  }
   const clearChip = (key) => {
     if (key === 'completeHistoryOnly') changeCompleteHistory(false)
+    else if (key === 'category') changeCategory('all')
+    else if (key === 'excludeHardToMirror') setFilter('excludeHardToMirror', false)
     else setFilter(key, '')
   }
   const clearAll = useCallback(() => {
     setOffset(0)
     setSelected(null)
-    setFilters({ ...DEFAULT_FILTERS })
+    setVisible(50)
+    setFilters({ ...DEFAULT_FILTERS, ...COHORT_FILTERS })
     setCompleteHistoryOnly(false)
+    setCategory('all')
+    setBands(new Set(RECOMMENDED))
   }, [])
   const pageSize = payload?.limit || query?.limit || 50
   const goToPage = (nextOffset) => {

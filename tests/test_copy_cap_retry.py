@@ -153,3 +153,85 @@ class AssumptionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LeaderAgeGateTests(unittest.TestCase):
+    """A trade found long after the leader made it must not be chased.
+
+    leader_age was computed and logged from the day the fast path was written,
+    and never enforced — so a trade surfaced late by a restart, a detector
+    stall, or a funding change was copied at whatever the book said hours
+    later. That is the entry the 2026-08-23 report opened with.
+    """
+
+    def test_the_gate_exists_and_is_minutes_not_hours(self):
+        self.assertTrue(hasattr(ce, "MAX_LEADER_TRADE_AGE_SECONDS"))
+        self.assertGreater(ce.MAX_LEADER_TRADE_AGE_SECONDS, 0)
+        self.assertLessEqual(
+            ce.MAX_LEADER_TRADE_AGE_SECONDS, 900,
+            "an hour-old leader trade must not qualify; that was the incident")
+
+    def test_the_gate_is_actually_enforced_not_just_logged(self):
+        """Guards the specific regression: a computed-but-unused age."""
+        import inspect
+        src = inspect.getsource(ce.CopyEngine._handle_leader_trade)
+        self.assertIn("MAX_LEADER_TRADE_AGE_SECONDS", src,
+                      "leader_age is computed but never compared — the original bug")
+        self.assertIn("leader_trade_too_old", src)
+
+
+class NoBackfillTests(unittest.IsolatedAsyncioTestCase):
+    """A new follow must not inherit the leader's existing book."""
+
+    def _engine(self):
+        e = _Engine()
+        e._no_backfill = {}
+        return e
+
+    def test_first_sight_excludes_everything_held(self):
+        e = self._engine()
+        key = ("u", "leader")
+        held = {"a", "b"}
+        e._no_backfill[key] = set(held)
+        self.assertEqual({"a", "b"}, e._no_backfill[key])
+
+    def test_a_token_the_leader_exits_stops_being_excluded(self):
+        """So a genuine RE-entry later is copied normally rather than being
+        blacklisted forever."""
+        e = self._engine()
+        key = ("u", "leader")
+        e._no_backfill[key] = {"a", "b"}
+        e._no_backfill[key] &= {"b"}          # leader exited "a"
+        self.assertEqual({"b"}, e._no_backfill[key])
+
+    def test_the_reconciler_consults_it(self):
+        import inspect
+        src = inspect.getsource(ce.CopyEngine._sync_user)
+        self.assertIn("_no_backfill", src)
+        self.assertIn("predates copying", src)
+
+
+class AdoptUntrackedTests(unittest.TestCase):
+    """A BUY reported as failed that actually filled leaves shares with no row,
+    no claim and no alert — invisible, and never managed or exited."""
+
+    def test_adoption_is_scoped_to_what_we_can_prove_we_submitted(self):
+        """The scope is the safety property: without it, adoption would sweep
+        up the user's own manual trades."""
+        import inspect
+        src = inspect.getsource(ce.CopyEngine._adopt_untracked_submissions)
+        self.assertIn("_submitted_basis", src,
+                      "adoption must require proof this engine submitted for the token")
+        self.assertIn("copy_open_claims", src,
+                      "a token with a live claim belongs to the uncertain path")
+
+    def test_it_notifies_and_records_an_event(self):
+        import inspect
+        src = inspect.getsource(ce.CopyEngine._adopt_untracked_submissions)
+        self.assertIn("_notify_position", src, "a rescued position must alert the user")
+        self.assertIn("_event", src, "a rescued position must appear in trade history")
+
+    def test_the_reconciler_runs_it(self):
+        import inspect
+        src = inspect.getsource(ce.CopyEngine._sync_user)
+        self.assertIn("_adopt_untracked_submissions", src)

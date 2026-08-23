@@ -159,8 +159,15 @@ export default function CopyWalletCard({ onAdded }) {
         >{state === 'working' ? 'STARTING…' : 'REVIEW AND COPY'}</button>
       )}
 
+      {/* This sentence has to stay true. It was false when first written: the
+          reconciler mirrored the leader's whole current book, so a new follow
+          back-filled positions opened long before. Both halves are now
+          enforced — _no_backfill excludes what the leader already held, and
+          MAX_LEADER_TRADE_AGE_SECONDS drops trades detected too late. */}
       <p className="copy-wallet-note">
-        Copying starts from their next qualifying trade — open positions are not back-filled.
+        Copying starts from their next trade. Positions they already hold are not
+        back-filled, and a trade found more than a few minutes late is skipped rather
+        than chased.
       </p>
     </div>
   )
