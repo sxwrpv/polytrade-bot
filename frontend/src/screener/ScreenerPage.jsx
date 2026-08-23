@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { publicApi } from './publicApi'
 import RangeFilter from './RangeFilter'
 import SeriesChart from '../components/SeriesChart'
+import { isSaved, toggleSaved, savedList, savedCount, subscribeSaved, clearSaved } from './savedWallets'
 import SiteSwitcher from '../components/SiteSwitcher'
 import {
   DEFAULT_FILTERS,
@@ -20,6 +21,10 @@ import {
   CURVES,
   curveFrom,
   dayOutcomes,
+  COLUMN_SORT,
+  encodeScreenerState,
+  decodeScreenerState,
+  walletsToCsv,
 } from './screenerModel'
 
 const short = (address) => `${address.slice(0, 6)}…${address.slice(-4)}`
@@ -32,16 +37,30 @@ const refreshed = (value) => {
 }
 
 export default function ScreenerPage() {
-  const [period, setPeriod] = useState(DEFAULT_PERIOD)
-  const [sort, setSort] = useState(DEFAULT_SORT)
-  const [search, setSearch] = useState('')
-  const [filters, setFilters] = useState(() => ({ ...DEFAULT_FILTERS }))
-  const [completeHistoryOnly, setCompleteHistoryOnly] = useState(false)
+  // A shared link must reproduce the board it was copied from, so the controls
+  // hydrate from the query string before the first request goes out.
+  const initial = useMemo(() => decodeScreenerState(window.location.search), [])
+  const [period, setPeriod] = useState(initial.period)
+  const [sort, setSort] = useState(initial.sort)
+  const [search, setSearch] = useState(initial.search)
+  const [filters, setFilters] = useState(() => ({ ...initial.filters }))
+  const [completeHistoryOnly, setCompleteHistoryOnly] = useState(initial.completeHistoryOnly)
+  const [savedTick, setSavedTick] = useState(0)
+  const [showSaved, setShowSaved] = useState(false)
   const [payload, setPayload] = useState(null)
   const [state, setState] = useState('loading')
   const [error, setError] = useState('')
   const [selected, setSelected] = useState(null)
   const [offset, setOffset] = useState(0)
+
+  useEffect(() => subscribeSaved(() => setSavedTick((n) => n + 1)), [])
+
+  // replaceState, not push: filtering is not navigation, and a history entry
+  // per slider drag would make Back useless.
+  useEffect(() => {
+    const q = encodeScreenerState({ period, sort, search, filters, completeHistoryOnly })
+    window.history.replaceState(null, '', q ? `?${q}` : window.location.pathname)
+  }, [period, sort, search, filters, completeHistoryOnly])
 
   const queryState = useMemo(() => {
     try {
@@ -171,6 +190,36 @@ export default function ScreenerPage() {
         </aside>
 
         <main className="screener-main">
+          <div className="results-toolbar">
+            <span className="coverage">
+              {payload?.total != null ? `${payload.total.toLocaleString()} wallets` : ''}
+            </span>
+            <div className="results-actions">
+              <button
+                type="button"
+                className={`btn btn-analyze${showSaved ? ' is-on' : ''}`}
+                aria-pressed={showSaved}
+                onClick={() => setShowSaved((v) => !v)}
+              >{'\u2665'} SAVED {savedCount() ? `(${savedCount()})` : ''}</button>
+              <button
+                type="button" className="btn btn-analyze"
+                disabled={rows.length === 0}
+                title="Download this page exactly as filtered and ordered"
+                onClick={() => downloadCsv(rows, period)}
+              >CSV</button>
+              <button
+                type="button" className="btn btn-analyze"
+                title="Copy a link that reproduces this exact view"
+                onClick={(e) => {
+                  navigator.clipboard?.writeText(window.location.href).catch(() => {})
+                  const b = e.currentTarget
+                  b.textContent = 'COPIED'
+                  setTimeout(() => { b.textContent = 'SHARE' }, 1400)
+                }}
+              >SHARE</button>
+            </div>
+          </div>
+
           <section
             className="screener-results" aria-label="Results"
             aria-busy={state === 'loading'}
@@ -200,6 +249,7 @@ export default function ScreenerPage() {
                   <ResultTable
                     rows={rows} period={period}
                     selected={selected} onSelect={setSelected}
+                    sort={sort} onSort={(next) => { setSort(next); setOffset(0) }}
                   />
                 )}
                 <ResultPagination
@@ -208,6 +258,15 @@ export default function ScreenerPage() {
               </>
             )}
           </section>
+
+          {showSaved && (
+            <SavedPanel
+              key={savedTick}
+              rows={rows}
+              onClose={() => setShowSaved(false)}
+              onPick={(addr) => { setSelected(addr); setShowSaved(false) }}
+            />
+          )}
 
           {selected && (
             <WalletAnalysis
@@ -378,7 +437,34 @@ function FilterRail({
   )
 }
 
-function ResultTable({ rows, period, selected, onSelect }) {
+function downloadCsv(rows, period) {
+  const blob = new Blob([walletsToCsv(rows, period)], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `polytrade-screener-${period}-${new Date().toISOString().slice(0, 10)}.csv`
+  document.body.append(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
+
+function SortableHeader({ label, column, sort, onSort }) {
+  const key = COLUMN_SORT[column]
+  const active = sort === key
+  return (
+    <th scope="col" className="num" aria-sort={active ? 'descending' : 'none'}>
+      <button type="button" className={`th-sort${active ? ' is-active' : ''}`} onClick={() => onSort(key)}>
+        <span>{label}</span>
+        {/* The API only ranks descending, so this marks the active column
+            rather than promising a direction toggle it cannot honour. */}
+        <span className="th-arrow" aria-hidden="true">{active ? '\u25be' : '\u2195'}</span>
+      </button>
+    </th>
+  )
+}
+
+function ResultTable({ rows, period, selected, onSelect, sort, onSort }) {
   const label = period.toUpperCase()
   return (
     <div className="table-scroll">
@@ -389,10 +475,11 @@ function ResultTable({ rows, period, selected, onSelect }) {
         </caption>
         <thead>
           <tr>
+            <th scope="col"><span className="visually-hidden">Saved</span></th>
             <th scope="col">Wallet</th>
-            <th scope="col" className="num">PnL {label}</th>
-            <th scope="col" className="num">Win rate {label}</th>
-            <th scope="col" className="num">Volume {label}</th>
+            <SortableHeader label={`PnL ${label}`} column="pnl" sort={sort} onSort={onSort} />
+            <SortableHeader label={`Win rate ${label}`} column="winRate" sort={sort} onSort={onSort} />
+            <SortableHeader label={`Volume ${label}`} column="volume" sort={sort} onSort={onSort} />
             <th scope="col" className="num">Active positions</th>
             <th scope="col">Fetched history</th>
             <th scope="col"><span className="visually-hidden">Actions</span></th>
@@ -401,6 +488,18 @@ function ResultTable({ rows, period, selected, onSelect }) {
         <tbody>
           {rows.map((row) => (
             <tr key={row.address} className={row.address === selected ? 'selected' : ''}>
+              <td className="save-col">
+                <button
+                  type="button"
+                  className="save-btn"
+                  aria-pressed={isSaved(row.address)}
+                  aria-label={`${isSaved(row.address) ? 'Remove' : 'Save'} ${row.address}`}
+                  title={isSaved(row.address) ? 'Saved — click to remove' : 'Save this wallet'}
+                  onClick={() => toggleSaved(row.address, {
+                    name: row.displayName, pnl: row.pnl, period,
+                  })}
+                >{isSaved(row.address) ? '\u2665' : '\u2661'}</button>
+              </td>
               <th scope="row">
                 <span className="wallet-name">{row.displayName || 'Unnamed wallet'}</span>
                 <span className="wallet-address" title={row.address}>{short(row.address)}</span>
@@ -586,6 +685,73 @@ function Provenance({ provenance }) {
           'Past wallet activity does not predict future results.',
         ]).map((line) => <li key={line}>{line}</li>)}
       </ul>
+    </section>
+  )
+}
+
+/* Saved wallets, kept in this browser.
+ *
+ * The live row wins where the wallet is on the current page; otherwise the
+ * snapshot taken at save time shows, labelled, because the cache behind the
+ * board rotates and a saved wallet may not be on screen at all. */
+function SavedPanel({ rows, onClose, onPick }) {
+  const saved = savedList()
+  const live = new Map(rows.map((r) => [r.address, r]))
+  return (
+    <section className="saved-panel" aria-label="Saved wallets">
+      <div className="analysis-head">
+        <div>
+          <p className="screener-eyebrow">SAVED WALLETS</p>
+          <h2>{saved.length} kept on this browser</h2>
+        </div>
+        <button type="button" className="btn btn-ghost" onClick={onClose}>Close</button>
+      </div>
+
+      {saved.length === 0 ? (
+        <p className="screener-state">
+          Nothing saved yet. Use the heart on any row to keep it here.
+        </p>
+      ) : (
+        <ul className="saved-list">
+          {saved.map((rec) => {
+            const row = live.get(rec.w)
+            return (
+              <li key={rec.w}>
+                <button
+                  type="button" className="save-btn" aria-pressed="true"
+                  aria-label={`Remove ${rec.w}`}
+                  onClick={() => toggleSaved(rec.w)}
+                >{'\u2665'}</button>
+                <span className="saved-who">
+                  <span className="wallet-name">{row?.displayName || rec.name || 'Unnamed wallet'}</span>
+                  <span className="wallet-address">{short(rec.w)}</span>
+                </span>
+                <span className={`num ${(row?.pnl ?? rec.pnl) >= 0 ? 'pos' : 'neg'}`}>
+                  {formatMetric(row?.pnl ?? rec.pnl, 'money')}
+                  {!row && (rec.pnl != null) && <em className="as-saved"> as saved</em>}
+                </span>
+                {row && (
+                  <button type="button" className="btn btn-analyze" onClick={() => onPick(rec.w)}>
+                    ANALYZE
+                  </button>
+                )}
+              </li>
+            )
+          })}
+        </ul>
+      )}
+
+      {saved.length > 0 && (
+        <div className="saved-foot">
+          <button type="button" className="btn btn-ghost" onClick={() => {
+            if (confirm(`Remove all ${saved.length} saved wallets? This cannot be undone.`)) clearSaved()
+          }}>Clear all</button>
+          <p className="analysis-disclaimer">
+            Stored in this browser only. It is not an account, nothing is sent anywhere, and
+            clearing site data clears it.
+          </p>
+        </div>
+      )}
     </section>
   )
 }

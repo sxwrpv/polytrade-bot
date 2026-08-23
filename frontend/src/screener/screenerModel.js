@@ -13,6 +13,9 @@ export const SORTS = [
   ['winrate', 'Win rate'],
   ['volume', 'Volume'],
 ]
+/** Which table column each server-side sort corresponds to, so a header click
+ *  and the sidebar control drive the same state instead of two orderings. */
+export const COLUMN_SORT = { pnl: 'pnl', winRate: 'winrate', volume: 'volume' }
 export const DEFAULT_PERIOD = '30d'
 export const DEFAULT_SORT = 'pnl'
 const DEFAULT_LIMIT = 50
@@ -243,3 +246,55 @@ export function botDeepLink() {
 
 export const POLYMARKET_PROFILE = (address) =>
   (isAddress(address) ? `https://polymarket.com/profile/${String(address).toLowerCase()}` : null)
+
+
+// --- shareable state --------------------------------------------------------
+// A research surface whose views cannot be linked is one people screenshot.
+// Only non-defaults are written, so a bare /screener is always the default
+// board and a shared link states exactly what it changed.
+
+const STATE_DEFAULTS = { period: DEFAULT_PERIOD, sort: DEFAULT_SORT, search: '', completeHistoryOnly: false }
+
+export function encodeScreenerState({ period, sort, search, filters, completeHistoryOnly }) {
+  const q = new URLSearchParams()
+  if (period !== STATE_DEFAULTS.period) q.set('period', period)
+  if (sort !== STATE_DEFAULTS.sort) q.set('sort', sort)
+  if (search?.trim()) q.set('q', search.trim())
+  if (completeHistoryOnly) q.set('complete', '1')
+  for (const [key, value] of Object.entries(filters || {})) {
+    if (value !== '' && value != null) q.set(key, String(value))
+  }
+  return q.toString()
+}
+
+export function decodeScreenerState(search) {
+  const q = new URLSearchParams(search || '')
+  const out = { ...STATE_DEFAULTS, filters: { ...DEFAULT_FILTERS } }
+  const period = q.get('period')
+  if (PERIODS.includes(period)) out.period = period
+  const sort = q.get('sort')
+  if (SORTS.some(([k]) => k === sort)) out.sort = sort
+  if (q.has('q')) out.search = q.get('q')
+  if (q.get('complete') === '1') out.completeHistoryOnly = true
+  for (const key of Object.keys(DEFAULT_FILTERS)) {
+    if (q.has(key)) out.filters[key] = q.get(key)
+  }
+  return out
+}
+
+/** The table exactly as filtered and ordered. Absent exports empty, never 0. */
+export function walletsToCsv(rows, period) {
+  const cell = (v) => {
+    if (v == null || (typeof v === 'number' && !Number.isFinite(v))) return ''
+    const s = String(v)
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+  }
+  const header = ['address', 'display_name', 'period', 'pnl_usd', 'win_rate',
+                  'volume_usd', 'active_positions', 'positive_close_day_ratio',
+                  'sell_buy_event_pct', 'history_days', 'history_partial', 'refreshed_at']
+  return [header.join(','), ...rows.map((r) => [
+    r.address, r.displayName, period, r.pnl, r.winRate, r.volume, r.activePositions,
+    r.consistencyRatio, r.fillExitRatio, r.historyDays, r.historyPartial ? 'yes' : 'no',
+    r.refreshedAt,
+  ].map(cell).join(','))].join('\n')
+}
