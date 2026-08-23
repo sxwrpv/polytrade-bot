@@ -61,6 +61,22 @@ MAX_FILL_ATTEMPTS = 3
 # (stuck closings) before the wallet is treated as ground truth.
 UNCERTAIN_CLAIM_MIN_AGE_SECONDS = 180.0
 CLOSING_STUCK_MIN_AGE_SECONDS = 600.0
+# How long a submitted BUY keeps counting against this token's cap even when
+# the exchange reported failure and the indexer has not shown the shares yet.
+#
+# Why this exists (incident 2026-08-23): three BUYs of ~$15.54 went out for one
+# token in 13 seconds against a $15 cap. Each attempt was reported as failed,
+# so the claim was released and nothing was written; the retry budget
+# (MAX_FILL_ATTEMPTS) then spent itself, and every attempt sized itself fresh
+# because the two guards that should have stopped it were both blind:
+# `row_basis` is 0 until a position row exists, and `wallet_cost` comes from an
+# indexer that lags a fill by seconds. All three orders actually filled.
+#
+# So a submitted notional is remembered here and counted as basis until the
+# indexer catches up. It is deliberately NOT a reclassification of the failure
+# as uncertain — doing that froze six tokens behind unreconciled claims on
+# 2026-07-11. This bounds the damage without touching that classification.
+SUBMITTED_BASIS_TTL_SECONDS = 120.0
 
 
 # ---------------------------------------------------------------------------
@@ -231,6 +247,10 @@ class CopyEngine:
         # that already 429s). Track consecutive non-fills and give up.
         # Value: [attempts, intent_fingerprint]
         self._attempts: dict[tuple, list] = {}
+        # (user_id, token_id) -> [notional_submitted, monotonic_deadline]. Held
+        # in memory on purpose: it guards a burst of retries within seconds, and
+        # a process restart re-reads the wallet anyway.
+        self._submitted: dict[tuple[str, str], list] = {}
 
     # --- lifecycle ---------------------------------------------------------
     async def run(self, stop_event: asyncio.Event) -> None:
@@ -837,6 +857,31 @@ class CopyEngine:
             return False
         return attempts >= MAX_FILL_ATTEMPTS
 
+    def _note_submitted(self, user_id: str, token_id: str, notional: float) -> None:
+        """Remember a notional we actually put on the wire for this token."""
+        key = (user_id, token_id)
+        prior, deadline = self._submitted.get(key, [0.0, 0.0])
+        now = time.monotonic()
+        if deadline <= now:
+            prior = 0.0
+        self._submitted[key] = [prior + float(notional), now + SUBMITTED_BASIS_TTL_SECONDS]
+
+    def _submitted_basis(self, user_id: str, token_id: str) -> float:
+        """Notional submitted for this token inside the TTL, or 0."""
+        entry = self._submitted.get((user_id, token_id))
+        if not entry:
+            return 0.0
+        notional, deadline = entry
+        if deadline <= time.monotonic():
+            self._submitted.pop((user_id, token_id), None)
+            return 0.0
+        return float(notional)
+
+    def _clear_submitted(self, user_id: str, token_id: str) -> None:
+        """Called once the wallet or a tracked row can speak for the shares, so
+        the remembered figure stops shadowing real basis."""
+        self._submitted.pop((user_id, token_id), None)
+
     def _record_fill_outcome(self, user_id: str, action: Action, *,
                              filled: bool, reason: str = "") -> None:
         key = self._attempt_key(user_id, action)
@@ -939,6 +984,10 @@ class CopyEngine:
             if not await self._mark_claim_submitting(user_id, action):
                 await self._release_buy_claim(user_id, action.token_id, action.claim_id)
                 return 0.0
+            # Recorded BEFORE the await, not after: if the process dies or the
+            # call raises mid-flight the order may still have reached the
+            # exchange, and the next attempt must size against it either way.
+            self._note_submitted(user_id, action.token_id, action.amount)
             try:
                 result = await self._place_order(
                     client, self.pm, action.token_id, "BUY", action.amount,
@@ -1007,10 +1056,20 @@ class CopyEngine:
     async def _clamp_to_verified_position(self, user_id: str, action: Action,
                                           risk: dict) -> Action | None:
         """Hard per-position gate against exchange ground truth. Basis = the
-        LARGER of the wallet's actual cost for this token and our tracked
-        cost, so neither bookkeeping drift nor an indexer lagging behind a
-        just-filled buy can free up headroom that isn't real. Returns the
-        (possibly clamped) action, or None when there's no room / no proof."""
+        LARGEST of three figures, because each one is blind on its own:
+
+          wallet_cost  what the wallet really holds — but the indexer lags a
+                       fill by seconds, so it reads 0 right after a buy.
+          row_basis    our tracked cost — but it is 0 until a position row
+                       exists, so it says nothing about a FIRST open.
+          submitted    what we have actually put on the wire for this token
+                       inside the TTL — the only one that is true immediately,
+                       and the one that stops a retry burst from sizing itself
+                       fresh each time (incident 2026-08-23, see
+                       SUBMITTED_BASIS_TTL_SECONDS).
+
+        Returns the (possibly clamped) action, or None when there's no room /
+        no proof."""
         verified = await self._wallet_position(
             user_id, action.token_id,
             action.condition_id or (action.row or {}).get("condition_id") or "")
@@ -1020,7 +1079,13 @@ class CopyEngine:
             return None
         wallet_cost, _ = verified
         row_basis = float((action.row or {}).get("notional_usd") or 0.0)
-        basis = max(wallet_cost, row_basis)
+        submitted = self._submitted_basis(user_id, action.token_id)
+        # The wallet is authoritative once it can see the shares; at that point
+        # the remembered figure has done its job and must not double-count.
+        if wallet_cost > 0 and wallet_cost >= submitted:
+            self._clear_submitted(user_id, action.token_id)
+            submitted = 0.0
+        basis = max(wallet_cost, row_basis, submitted)
         allowed = min(float(action.amount),
                       max(0.0, risk["max_per_trade"] - basis))
         # SINGLE SOURCE OF TRUTH for minimum size: the per-wallet
@@ -1032,9 +1097,13 @@ class CopyEngine:
         # too-low setting from retrying forever.
         floor = risk["ignore_below"]
         if allowed < floor:
-            log.info("buy skipped (%s %s): verified wallet basis %.2f leaves no "
-                     "headroom under cap %.2f", action.kind, action.token_id,
-                     basis, risk["max_per_trade"])
+            # user_id included deliberately: without it this line cannot be
+            # tied to an account, which cost real time during the 2026-08-23
+            # investigation.
+            log.info("buy skipped (%s %s %s): basis %.2f (wallet %.2f, row %.2f, "
+                     "submitted %.2f) leaves no headroom under cap %.2f",
+                     user_id[:10], action.kind, action.token_id, basis,
+                     wallet_cost, row_basis, submitted, risk["max_per_trade"])
             return None
         if allowed < float(action.amount) - 0.005:
             log.warning("buy clamped by verified wallet position: %s %.2f -> %.2f "
@@ -1175,6 +1244,8 @@ class CopyEngine:
                 "AND state='submitting'", (user_id, action.token_id, action.claim_id))
             if deleted != 1:
                 raise RuntimeError("BUY claim fencing token lost during open finalization")
+        # A tracked row now carries the basis; the remembered figure retires.
+        self._clear_submitted(user_id, action.token_id)
         await self._notify_position({
             "event": "opened", "user_id": user_id, "position_id": pid,
             "market_title": getattr(p, "title", ""),
