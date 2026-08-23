@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { publicApi } from './publicApi'
 import RangeFilter from './RangeFilter'
+import SeriesChart from '../components/SeriesChart'
 import SiteSwitcher from '../components/SiteSwitcher'
 import {
   DEFAULT_FILTERS,
@@ -16,6 +17,9 @@ import {
   isAddress,
   paginationLabel,
   walletRows,
+  CURVES,
+  curveFrom,
+  dayOutcomes,
 } from './screenerModel'
 
 const short = (address) => `${address.slice(0, 6)}…${address.slice(-4)}`
@@ -444,9 +448,14 @@ function ResultPagination({ payload, offset, pageSize, onPage }) {
 }
 
 function WalletAnalysis({ row, period, onClose }) {
+  const [curve, setCurve] = useState('cumulative')
   if (!row) return null
   const label = period.toUpperCase()
   const stamp = refreshed(row.refreshedAt)
+  const shape = (CURVES.find(([k]) => k === curve) || CURVES[0])[2]
+  const series = curveFrom(row.dailyPnl, curve)
+  const outcomes = dayOutcomes(row.dailyPnl)
+  const money = (v) => formatMetric(v, 'money')
   return (
     <section className="wallet-analysis" aria-label={`Analysis for ${row.address}`}>
       <div className="analysis-head">
@@ -456,6 +465,47 @@ function WalletAnalysis({ row, period, onClose }) {
           <p className="analysis-address">{row.address}</p>
         </div>
         <button type="button" className="btn btn-ghost" onClick={onClose}>Close</button>
+      </div>
+
+      <div className="analysis-curve">
+        <div className="analysis-curve-head">
+          <span className="control-label">REALISED PNL · {label}</span>
+          <div className="sort-row" style={{ margin: 0 }}>
+            {CURVES.map(([key, text]) => (
+              <button
+                key={key}
+                type="button"
+                className={`chip ${curve === key ? 'active' : ''}`}
+                aria-pressed={curve === key}
+                onClick={() => setCurve(key)}
+              >{text}</button>
+            ))}
+          </div>
+        </div>
+        {row.dailyPnl === null ? (
+          <p className="chart-empty">
+            This wallet&apos;s daily series has not been computed yet, so there is no curve to
+            draw. That is missing data, not a flat month.
+          </p>
+        ) : (
+          <SeriesChart
+            points={series}
+            shape={shape}
+            format={money}
+            label={`${curve} realised PnL`}
+          />
+        )}
+        {outcomes && (
+          <dl className="analysis-metrics analysis-outcomes">
+            <div>
+              <dt>Closing days · {label}</dt>
+              <dd>{outcomes.positive} up · {outcomes.negative} down · {outcomes.flat} flat</dd>
+            </div>
+            <div><dt>Average moving day</dt><dd>{money(outcomes.avgMovingDay)}</dd></div>
+            <div><dt>Best day</dt><dd>{money(outcomes.best)}</dd></div>
+            <div><dt>Worst day</dt><dd>{money(outcomes.worst)}</dd></div>
+          </dl>
+        )}
       </div>
 
       <dl className="analysis-metrics">
@@ -487,6 +537,10 @@ function WalletAnalysis({ row, period, onClose }) {
             : 'These statistics have not been recomputed yet, so period metrics are unavailable rather than zero.'}
         </li>
         <li>Win rate counts reconstructed closing events, not open positions.</li>
+        <li>
+          The curve is realised PnL per UTC day within this window. Days with no closings
+          contribute zero, and drawdown is the distance below the running peak.
+        </li>
         <li>
           The sell / buy event count is fetched SELL activity rows per 100 BUY rows. It
           is an activity-frequency ratio — not an order, position, share, or capital

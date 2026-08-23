@@ -24,9 +24,11 @@ joined in.
 """
 from __future__ import annotations
 
+import json
 import re
 import time
 from collections import deque
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
@@ -124,7 +126,36 @@ def _project(row: dict, period: str) -> dict:
         # about coverage of any other source.
         "history_partial": history_days is None or history_days < days,
         "stats_refreshed_at": refreshed,
+        # The 90-day realized-PnL series, so the analysis panel can draw a curve
+        # without a second request and without this route ever reaching
+        # upstream. Trimmed to the selected window: publishing 90 days under a
+        # "7d" heading would label one window's data with another's.
+        "daily_pnl": _daily_series(row.get("daily_pnl_90d"), days),
     }
+
+
+def _daily_series(raw, days: int) -> list[dict] | None:
+    """Parse the cached {date: pnl} blob into an ordered series for one window.
+
+    Returns None when the wallet has no stored series — absent, not an empty
+    chart, because those mean different things: one wallet has not been
+    computed yet, the other genuinely had no closing days.
+    """
+    if not raw:
+        return None
+    try:
+        blob = json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(blob, dict):
+        return None
+    cutoff = (datetime.now(timezone.utc).date() - timedelta(days=days - 1)).isoformat()
+    out = [
+        {"date": day, "pnl": _number(value)}
+        for day, value in sorted(blob.items())
+        if isinstance(day, str) and day >= cutoff
+    ]
+    return out
 
 
 _PROVENANCE = {

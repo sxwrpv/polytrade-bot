@@ -188,6 +188,43 @@ class PrivacyTests(PublicScreenerTestBase):
                      "follower_count", "is_following", "balance", "telegram"):
             self.assertNotIn(leak, payload.lower(), leak)
 
+    async def test_daily_series_is_trimmed_to_the_requested_window(self):
+        """A 7d response must not carry 90 days of points. Labelling one
+        window's data with another window's heading is the failure mode."""
+        from datetime import date, timedelta
+        today = date.today()
+        blob = {(today - timedelta(days=n)).isoformat(): float(n) for n in range(90)}
+        import json as _json
+        await self.db.execute(
+            "UPDATE trader_cache SET daily_pnl_90d = ? WHERE address = ?",
+            (_json.dumps(blob), WALLET))
+
+        for period, expected in (("7d", 7), ("30d", 30), ("90d", 90)):
+            got = self.client.get(
+                f"/api/public/screener/wallets/{WALLET}?period={period}").json()["daily_pnl"]
+            self.assertEqual(expected, len(got), period)
+            self.assertEqual(sorted(p["date"] for p in got), [p["date"] for p in got],
+                             "series must be date-ordered")
+
+    async def test_daily_series_is_absent_not_empty_when_uncomputed(self):
+        """None and [] mean different things: not computed yet, versus computed
+        and genuinely had no closing days. The wallet must not claim the second
+        when the first is true."""
+        await self.db.execute(
+            "UPDATE trader_cache SET daily_pnl_90d = NULL WHERE address = ?", (WALLET,))
+        wallet = self.client.get(f"/api/public/screener/wallets/{WALLET}").json()
+        self.assertIsNone(wallet["daily_pnl"])
+
+    async def test_daily_series_survives_a_corrupt_blob(self):
+        """A bad cache row must degrade to "unavailable", never 500 a public
+        endpoint."""
+        for junk in ("not json", "[1,2,3]", ""):
+            await self.db.execute(
+                "UPDATE trader_cache SET daily_pnl_90d = ? WHERE address = ?", (junk, WALLET))
+            r = self.client.get(f"/api/public/screener/wallets/{WALLET}")
+            self.assertEqual(200, r.status_code, junk)
+            self.assertIsNone(r.json()["daily_pnl"], junk)
+
     def test_response_fields_are_an_explicit_allowlist(self):
         wallet = self.client.get(f"/api/public/screener/wallets/{WALLET}").json()
 
@@ -196,6 +233,10 @@ class PrivacyTests(PublicScreenerTestBase):
             "period", "period_days", "pnl", "win_rate", "volume",
             "active_positions", "history_days", "history_partial",
             "consistency_ratio", "fill_exit_ratio", "stats_refreshed_at",
+            # Added 2026-08-23 so the analysis panel can draw the wallet's
+            # curve without a second request. It is derived from the already
+            # cached daily_pnl_90d blob, so it costs no upstream call.
+            "daily_pnl",
         }, set(wallet))
 
 

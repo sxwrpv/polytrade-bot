@@ -446,3 +446,41 @@
     animation: none !important;
   }
 }
+
+/* ---------- selected-wallet curve ----------------------------------------
+   The analysis panel used to be a definition list and nothing else. The curve
+   sits above it because the shape of a wallet's month is the thing a reader
+   takes in first; the numbers underneath are what they check afterwards. */
+.analysis-curve {
+  margin: 20px 0 4px;
+  padding: 16px 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--paper-surface);
+}
+.analysis-curve-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap; margin-bottom: 10px;
+}
+.analysis-outcomes { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
+
+.chart-readout {
+  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+  min-height: 26px; margin-bottom: 4px;
+}
+.chart-readout-value { font-family: var(--mono); font-size: 21px; font-weight: 500; letter-spacing: -.02em; }
+.chart-readout-value.pos { color: var(--green-deep); }
+.chart-readout-value.neg { color: var(--red); }
+.chart-readout-date { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.chart-readout-delta {
+  font-family: var(--mono); font-size: 11px; color: var(--muted);
+  margin-left: auto; white-space: nowrap;
+}
+.chart svg { cursor: crosshair; border-radius: var(--r-sm); }
+.chart svg:focus-visible { outline: 2px solid var(--green-deep); outline-offset: 2px; }
+.chart-axis {
+  display: flex; justify-content: space-between; gap: 12px; margin-top: 4px;
+  font-family: var(--mono); font-size: 9px; color: var(--muted);
+}
+.chart-axis-range { color: var(--muted); }
+.chart-empty { color: var(--muted); font-size: 12px; padding: 26px 0; text-align: center; line-height: 1.6; }

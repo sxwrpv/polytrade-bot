@@ -115,6 +115,62 @@ export function activeFilterChips({ filters = DEFAULT_FILTERS, period = DEFAULT_
   return chips
 }
 
+export const CURVES = [
+  ['cumulative', 'Cumulative', 'area'],
+  ['daily', 'Daily', 'bar'],
+  ['drawdown', 'Drawdown', 'area'],
+]
+
+/**
+ * Turn the daily realized-PnL series into the curve the reader picked.
+ *
+ * Cumulative and drawdown are both running figures, so they are derived here
+ * rather than in the component: the rule is what matters and it should be
+ * testable without a browser. Drawdown is distance below the running peak, so
+ * it is always <= 0 and reads as "how far down from the best it had been".
+ */
+export function curveFrom(dailyPnl, kind = 'cumulative') {
+  if (!Array.isArray(dailyPnl) || dailyPnl.length === 0) return []
+  if (kind === 'daily') {
+    return dailyPnl.map((d) => ({ date: d.date, value: Number(d.pnl) || 0 }))
+  }
+  let running = 0
+  let peak = 0
+  return dailyPnl.map((d) => {
+    running += Number(d.pnl) || 0
+    peak = Math.max(peak, running)
+    return { date: d.date, value: kind === 'drawdown' ? running - peak : running }
+  })
+}
+
+/** Day outcomes over the window: how often it went up, down, or nowhere. */
+export function dayOutcomes(dailyPnl) {
+  if (!Array.isArray(dailyPnl) || dailyPnl.length === 0) return null
+  let positive = 0
+  let negative = 0
+  let flat = 0
+  let total = 0
+  for (const d of dailyPnl) {
+    const v = Number(d.pnl) || 0
+    total += v
+    if (v > 0) positive += 1
+    else if (v < 0) negative += 1
+    else flat += 1
+  }
+  const moved = positive + negative
+  return {
+    positive,
+    negative,
+    flat,
+    days: dailyPnl.length,
+    // Averaged over days that actually closed something. Dividing by every
+    // calendar day would quietly understate a wallet that trades in bursts.
+    avgMovingDay: moved ? total / moved : null,
+    best: Math.max(...dailyPnl.map((d) => Number(d.pnl) || 0)),
+    worst: Math.min(...dailyPnl.map((d) => Number(d.pnl) || 0)),
+  }
+}
+
 const UNAVAILABLE = '—'
 
 /** Render a metric, or say it is unavailable. A null is not a zero: the
@@ -172,6 +228,9 @@ export function walletRows(payload) {
       coverage: coverageLabel(withPeriod),
       refreshedAt: wallet.stats_refreshed_at ?? null,
       periodDays: withPeriod.period_days,
+      // Ordered {date, pnl} for the selected window, or null when the wallet
+      // has not been computed yet. Null and [] mean different things here.
+      dailyPnl: Array.isArray(wallet.daily_pnl) ? wallet.daily_pnl : null,
     }
   })
 }
