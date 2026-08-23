@@ -616,3 +616,62 @@ a { color: inherit; }
   margin: -1px; padding: 0; border: 0; overflow: hidden;
   clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap;
 }
+
+/* ---------- Home balance card ---------------------------------------------
+   The glance surface: one figure, one shape, and the window it covers. No
+   axes, gridlines or tick labels — the figure above the chart already states
+   the current value and hovering states any other point, so the axes were
+   only spending height. The whole card lands near 190px against the ~380px
+   the stat-grid-plus-Chart.js version needed. */
+.balance-card { padding: 14px 16px 12px; }
+
+.balance-head {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+}
+.balance-label {
+  font-family: var(--mono); font-size: 9px; font-weight: 500;
+  letter-spacing: .16em; text-transform: uppercase; color: var(--muted);
+}
+.balance-claimable {
+  font-family: var(--mono); font-size: 9.5px; color: var(--yellow);
+  white-space: nowrap; cursor: help;
+}
+
+.balance-figure { display: flex; align-items: baseline; gap: 9px; margin-top: 4px; }
+.balance-value {
+  font-family: var(--mono); font-size: 27px; font-weight: 600;
+  letter-spacing: -.02em; line-height: 1.1;
+}
+.balance-delta { font-family: var(--mono); font-size: 11.5px; font-weight: 500; }
+.balance-delta.pos { color: var(--green-deep); }
+.balance-delta.neg { color: var(--red); }
+
+.balance-chart { position: relative; margin-top: 10px; }
+.balance-chart svg {
+  display: block; width: 100%; height: 78px;
+  cursor: crosshair; touch-action: pan-y;
+}
+.balance-empty {
+  color: var(--muted); font-size: 11.5px; line-height: 1.55;
+  padding: 22px 2px; text-align: center;
+}
+
+/* Floating readout, translated onto its own centre so it tracks the cursor
+   without the left percentage having to account for its width. It sits INSIDE
+   the top of the plot rather than above it: floating it above collided with
+   the balance figure, and the figure is the one thing on this card that must
+   never be covered. */
+.balance-tip {
+  position: absolute; top: 0; transform: translateX(-50%);
+  z-index: 2; pointer-events: none; white-space: nowrap;
+  padding: 4px 8px; border-radius: var(--r-sm);
+  background: rgba(238, 242, 239, 0.94);
+  border: 1px solid var(--border-strong);
+  box-shadow: 0 4px 14px -8px rgba(20, 32, 26, 0.4);
+  font-family: var(--mono); font-size: 10px; line-height: 1.35; text-align: center;
+}
+.balance-tip b { display: block; font-weight: 500; color: var(--muted); }
+.balance-tip i { display: block; font-style: normal; font-weight: 600; color: var(--text); }
+
+.balance-periods { display: flex; gap: 6px; margin-top: 10px; }
+.balance-periods .chip { padding: 4px 12px; font-size: 10px; }

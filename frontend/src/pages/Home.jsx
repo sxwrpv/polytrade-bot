@@ -1,6 +1,6 @@
 import Folder from '../components/Folder'
 import CopiedWallets from '../components/CopiedWallets'
-import AccountSummary from '../components/AccountSummary'
+import BalanceCard from '../components/BalanceCard'
 
 /* Home leads with the account's own money — balance and the equity curve —
    because that is what the account opens the app to see. Wallet research stays
@@ -9,7 +9,7 @@ import AccountSummary from '../components/AccountSummary'
 export default function Home() {
   return (
     <div>
-      <AccountSummary />
+      <BalanceCard />
 
       <ScreenerEntryPoint />
 
