@@ -13,6 +13,7 @@ import {
   buildPublicQuery,
   formatMetric,
   isAddress,
+  paginationLabel,
   walletRows,
 } from './screenerModel'
 
@@ -35,14 +36,30 @@ export default function ScreenerPage() {
   const [state, setState] = useState('loading')
   const [error, setError] = useState('')
   const [selected, setSelected] = useState(null)
+  const [offset, setOffset] = useState(0)
 
-  const query = useMemo(
-    () => buildPublicQuery({ period, sort, search, filters, completeHistoryOnly }),
-    [completeHistoryOnly, filters, period, search, sort],
-  )
+  const queryState = useMemo(() => {
+    try {
+      return {
+        query: buildPublicQuery({
+          period, sort, search, filters, completeHistoryOnly, offset,
+        }),
+        validationError: '',
+      }
+    } catch (problem) {
+      return { query: null, validationError: String(problem.message || problem) }
+    }
+  }, [completeHistoryOnly, filters, offset, period, search, sort])
+  const query = queryState.query
 
   useEffect(() => {
+    if (!query) {
+      setError(queryState.validationError)
+      setState('invalid')
+      return undefined
+    }
     let alive = true
+    setError('')
     setState('loading')
     const timer = setTimeout(() => {
       publicApi
@@ -59,22 +76,40 @@ export default function ScreenerPage() {
         })
     }, 300)
     return () => { alive = false; clearTimeout(timer) }
-  }, [query])
+  }, [query, queryState.validationError])
 
   const rows = useMemo(() => walletRows(payload), [payload])
   const chips = useMemo(
     () => activeFilterChips({ filters, period, completeHistoryOnly }),
     [completeHistoryOnly, filters, period],
   )
-  const setFilter = (key, value) => setFilters((current) => ({ ...current, [key]: value }))
+  const resetPage = useCallback(() => {
+    setOffset(0)
+    setSelected(null)
+  }, [])
+  const changePeriod = (value) => { resetPage(); setPeriod(value) }
+  const changeSort = (value) => { resetPage(); setSort(value) }
+  const changeSearch = (value) => { resetPage(); setSearch(value) }
+  const changeCompleteHistory = (value) => { resetPage(); setCompleteHistoryOnly(value) }
+  const setFilter = (key, value) => {
+    resetPage()
+    setFilters((current) => ({ ...current, [key]: value }))
+  }
   const clearChip = (key) => {
-    if (key === 'completeHistoryOnly') setCompleteHistoryOnly(false)
+    if (key === 'completeHistoryOnly') changeCompleteHistory(false)
     else setFilter(key, '')
   }
   const clearAll = useCallback(() => {
+    setOffset(0)
+    setSelected(null)
     setFilters({ ...DEFAULT_FILTERS })
     setCompleteHistoryOnly(false)
   }, [])
+  const pageSize = payload?.limit || query?.limit || 50
+  const goToPage = (nextOffset) => {
+    setSelected(null)
+    setOffset(Math.max(0, nextOffset))
+  }
 
   const exactLookup = isAddress(search) ? search.trim().toLowerCase() : null
 
@@ -94,7 +129,7 @@ export default function ScreenerPage() {
           <input
             id="screener-search" type="search" value={search}
             placeholder="Search a name, X handle, or 0x address…"
-            onChange={(event) => setSearch(event.target.value)}
+            onChange={(event) => changeSearch(event.target.value)}
           />
         </div>
         <nav className="screener-nav-links" aria-label="Site">
@@ -117,11 +152,11 @@ export default function ScreenerPage() {
 
         <aside className="screener-sidebar" aria-label="Filters">
           <FilterRail
-            period={period} onPeriod={setPeriod}
-            sort={sort} onSort={setSort}
+            period={period} onPeriod={changePeriod}
+            sort={sort} onSort={changeSort}
             filters={filters} setFilter={setFilter}
             completeHistoryOnly={completeHistoryOnly}
-            onCompleteHistoryOnly={setCompleteHistoryOnly}
+            onCompleteHistoryOnly={changeCompleteHistory}
             chips={chips} onClearChip={clearChip} onClearAll={clearAll}
           />
         </aside>
@@ -131,7 +166,9 @@ export default function ScreenerPage() {
             className="screener-results" aria-label="Results"
             aria-busy={state === 'loading'}
           >
-            {state === 'throttled' ? (
+            {state === 'invalid' ? (
+              <p className="screener-state" role="alert">Invalid filters: {error}</p>
+            ) : state === 'throttled' ? (
               <p className="screener-state" role="status">
                 The public screener is rate limited and this client has hit the limit. Wait a
                 minute and try again.
@@ -140,17 +177,26 @@ export default function ScreenerPage() {
               <p className="screener-state" role="alert">Could not load wallets: {error}</p>
             ) : state === 'loading' ? (
               <p className="screener-state" role="status">Loading wallets…</p>
-            ) : rows.length === 0 ? (
-              <p className="screener-state">
-                {exactLookup
-                  ? 'That wallet is not in the public screener cache yet.'
-                  : 'No cached wallet matches these filters.'}
-              </p>
             ) : (
-              <ResultTable
-                rows={rows} period={period}
-                selected={selected} onSelect={setSelected}
-              />
+              <>
+                {rows.length === 0 ? (
+                  <p className="screener-state">
+                    {offset > 0 && payload?.total > 0
+                      ? 'No wallets on this page. Use Previous to return to available results.'
+                      : exactLookup
+                        ? 'That wallet is not in the public screener cache yet.'
+                        : 'No cached wallet matches these filters.'}
+                  </p>
+                ) : (
+                  <ResultTable
+                    rows={rows} period={period}
+                    selected={selected} onSelect={setSelected}
+                  />
+                )}
+                <ResultPagination
+                  payload={payload} offset={offset} pageSize={pageSize} onPage={goToPage}
+                />
+              </>
             )}
           </section>
 
@@ -190,9 +236,9 @@ export default function ScreenerPage() {
   )
 }
 
-/* Filter rail. Period and sort are pills; every numeric threshold is a slider
-   whose "off" end means no filter, so an untouched control never narrows the
-   result set.
+/* Filter rail. Period and sort are pills; every numeric threshold has an
+   explicit Apply control, so an untouched slider never narrows the result set
+   and every numeric endpoint remains usable.
 
    On a narrow screen the rail stacks above the results, and left expanded it
    pushed the first wallet roughly 900px down the page. The numeric sliders
@@ -369,6 +415,26 @@ function ResultTable({ rows, period, selected, onSelect }) {
         </tbody>
       </table>
     </div>
+  )
+}
+
+function ResultPagination({ payload, offset, pageSize, onPage }) {
+  return (
+    <nav className="screener-pagination" aria-label="Wallet result pages">
+      <span aria-live="polite">{paginationLabel(payload)}</span>
+      <div>
+        <button
+          type="button" className="btn btn-ghost"
+          disabled={offset <= 0}
+          onClick={() => onPage(offset - pageSize)}
+        >Previous</button>
+        <button
+          type="button" className="btn btn-ghost"
+          disabled={!payload?.has_more}
+          onClick={() => onPage(offset + pageSize)}
+        >Next</button>
+      </div>
+    </nav>
   )
 }
 

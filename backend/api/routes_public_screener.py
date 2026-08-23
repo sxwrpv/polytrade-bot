@@ -182,6 +182,12 @@ async def public_wallets(
         raise HTTPException(422, "period must be one of 7d, 30d, 90d")
     if sort not in SORTS:
         raise HTTPException(422, "sort must be one of pnl, winrate, volume")
+    if (fill_exit_ratio_min is not None and fill_exit_ratio_max is not None
+            and fill_exit_ratio_min > fill_exit_ratio_max):
+        raise HTTPException(
+            422,
+            "minimum sell / buy event count cannot exceed the maximum",
+        )
 
     column = _SORT_COLUMNS[(sort, period)]
     clauses: list[str] = []
@@ -215,16 +221,28 @@ async def public_wallets(
 
     where_sql = ("WHERE " + " AND ".join(clauses)) if clauses else ""
     rows = await db.fetchall(
-        f"SELECT * FROM trader_cache {where_sql} "
+        f"SELECT trader_cache.*, COUNT(*) OVER() AS _total "
+        f"FROM trader_cache {where_sql} "
         f"ORDER BY CASE WHEN {column} IS NULL THEN 1 ELSE 0 END ASC, "
         f"{column} DESC, address ASC LIMIT ? OFFSET ?",
         [*params, limit, offset])
+    # A window count and its page rows share one statement snapshot on both
+    # SQLite and Postgres. An out-of-range page has no row carrying _total, so
+    # only that exceptional case needs a separate count to let clients go back.
+    total = int(rows[0]["_total"]) if rows else int(await db.fetchval(
+        f"SELECT COUNT(*) FROM trader_cache {where_sql}",
+        params,
+    ) or 0)
 
     return {
         "period": period,
         "period_days": PERIODS[period],
         "sort": sort,
         "count": len(rows),
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "has_more": offset + len(rows) < total,
         "wallets": [_project(row, period) for row in rows],
         "provenance": _PROVENANCE,
     }

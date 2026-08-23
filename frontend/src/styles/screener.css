@@ -142,18 +142,25 @@
 .segmented button:focus-visible { outline: 2px solid var(--green-deep); outline-offset: 2px; }
 
 /* --- sliders ---------------------------------------------------------------
-   Parked at the "off" end the control means no filter at all, which is why
-   the value reads "off" rather than a number: a zero threshold would be a
-   real filter that hides every wallet below zero. */
+   Activation is separate from the numeric track. This keeps exact boundaries
+   (including zero and the configured min/max) available as real filters. */
 .range-filter { margin-bottom: 18px; }
-.range-filter label {
+.range-filter-head {
   display: flex; justify-content: space-between; align-items: baseline; gap: 10px;
   margin-bottom: 8px; color: var(--muted); font-size: 12px;
 }
-.range-filter label b {
+.range-filter-head b {
   color: var(--muted); font-family: var(--mono); font-size: 11px; font-weight: 500;
 }
-.range-filter.is-active label b { color: var(--green-deep); font-weight: 600; }
+.range-filter.is-active .range-filter-head b { color: var(--green-deep); font-weight: 600; }
+.range-filter-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center; }
+.range-filter-controls > input[type='range'] { grid-column: 1; grid-row: 1; }
+.range-filter-toggle {
+  grid-column: 2; grid-row: 1;
+  display: inline-flex; align-items: center; gap: 5px;
+  color: var(--muted); font-family: var(--mono); font-size: 9px; cursor: pointer;
+}
+.range-filter-toggle input { width: 14px; height: 14px; accent-color: var(--green); }
 
 .range-filter input[type='range'] {
   -webkit-appearance: none; appearance: none;
@@ -162,6 +169,7 @@
   background: rgba(20, 32, 26, 0.10);
   cursor: pointer;
 }
+.range-filter input[type='range']:disabled { cursor: not-allowed; opacity: .55; }
 .range-filter input[type='range']::-webkit-slider-thumb {
   -webkit-appearance: none; appearance: none;
   width: 17px; height: 17px; border-radius: 50%;
@@ -174,7 +182,8 @@
   cursor: pointer;
 }
 .range-filter.is-active input[type='range'] { background: var(--pill-tint); }
-.range-filter input[type='range']:focus-visible { outline: 2px solid var(--green-deep); outline-offset: 4px; }
+.range-filter input[type='range']:focus-visible,
+.range-filter-toggle input:focus-visible { outline: 2px solid var(--green-deep); outline-offset: 4px; }
 
 .screener-numeric, .screener-advanced { margin: 4px 0 18px; }
 .screener-numeric > summary, .screener-advanced summary {
@@ -290,6 +299,15 @@
   color: var(--green-deep);
   font-weight: 700;
 }
+.screener-pagination {
+  display: flex; justify-content: space-between; align-items: center; gap: 16px;
+  padding: 14px 16px;
+  border-top: 1px solid var(--border);
+  color: var(--muted); font-family: var(--mono); font-size: 11px;
+}
+.screener-pagination > div { display: flex; gap: 8px; }
+.screener-pagination .btn { min-width: 84px; padding: 7px 12px; font-size: 10px; }
+.screener-pagination .btn:disabled { cursor: not-allowed; opacity: .45; }
 
 /* ---------- selected wallet ---------------------------------------------- */
 .wallet-analysis {
@@ -352,7 +370,7 @@
    first, then the filter rail unsticks and stacks above the results. The table
    always keeps its intrinsic width and scrolls inside .table-scroll, so the
    page itself never pans sideways. */
-@media (max-width: 1240px) {
+@media (max-width: 1400px) {
   .screener-shell {
     grid-template-columns: 248px minmax(0, 1fr);
     grid-template-areas: "intro intro" "sidebar main";
@@ -391,6 +409,7 @@
   .analysis-metrics > div,
   .analysis-metrics > div + div { padding: 14px 0; border-right: 0; border-top: 1px solid var(--border); }
   .screener-footer { flex-direction: column; gap: 8px; }
+  .screener-pagination { align-items: flex-start; flex-direction: column; }
   .wallet-analysis { padding: 18px; }
 }
 

@@ -43,6 +43,17 @@ def test_docs_markdown_is_available_to_the_documentation_site():
     assert response.text.startswith("# Getting Started")
 
 
+def test_public_screener_pagination_and_range_validation_are_documented():
+    reference = client.get("/docs/content/api-reference.md").text
+
+    for field in ("`total`", "`count`", "`limit`", "`offset`", "`has_more`"):
+        assert field in reference
+    assert "`consistency_ratio_min`" in reference
+    assert "`consistency_min`" not in reference
+    assert "`positive_close_day_ratio_min`" not in reference
+    assert "minimum cannot exceed the maximum" in reference.lower()
+
+
 def test_consumer_docs_are_telegram_first_and_keep_material_facts():
     overview = client.get("/docs/content/README.md").text
     getting_started = client.get("/docs/content/getting-started.md").text

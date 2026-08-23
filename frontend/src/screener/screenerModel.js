@@ -39,6 +39,15 @@ function finiteFilter(value) {
   return Number.isFinite(number) ? number : null
 }
 
+export function filterValidationError(query = {}) {
+  const minimum = finiteFilter(query.fill_exit_ratio_min)
+  const maximum = finiteFilter(query.fill_exit_ratio_max)
+  if (minimum !== null && maximum !== null && minimum > maximum) {
+    return 'Minimum sell / buy event count cannot exceed the maximum.'
+  }
+  return ''
+}
+
 export function buildPublicQuery({
   period = DEFAULT_PERIOD,
   sort = DEFAULT_SORT,
@@ -77,7 +86,15 @@ export function buildPublicQuery({
   if (fillExitMax !== null) query.fill_exit_ratio_max = fillExitMax
   if (completeHistoryOnly) query.complete_history_only = true
 
+  const validationError = filterValidationError(query)
+  if (validationError) throw new Error(validationError)
   return query
+}
+
+export function paginationLabel({ offset = 0, count = 0, total = 0 } = {}) {
+  if (!total) return 'No wallets'
+  if (!count) return `No wallets on this page — ${total} wallets match`
+  return `Showing ${offset + 1}–${offset + count} of ${total} wallets`
 }
 
 export function activeFilterChips({ filters = DEFAULT_FILTERS, period = DEFAULT_PERIOD,
