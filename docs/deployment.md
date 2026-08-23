@@ -55,6 +55,29 @@ docker compose up -d --no-deps --force-recreate app
 
 Verify one engine and fresh reconciliation logs. Never run local and cloud engines against the same users/database simultaneously.
 
+## Deploying a Caddyfile change
+
+The Caddyfile is bind-mounted as a single FILE. Any sync that replaces it —
+rsync and scp both do, writing a temp file then renaming — gives the host a new
+inode while the container keeps holding the old one. `caddy reload` then
+succeeds, reports the new config, and changes nothing, because it is re-reading
+the stale inode through the mount.
+
+So a Caddyfile change needs the container recreated, not reloaded:
+
+```bash
+docker compose up -d --force-recreate --no-deps caddy
+```
+
+Verify against the container, never the host:
+
+```bash
+docker compose exec caddy grep -c Cache-Control /etc/caddy/Caddyfile
+```
+
+Editing the file in place on the box (`nano`, `sed -i` without a rename) keeps
+the inode and does work with a plain reload. Syncing does not.
+
 ## Caddy and TLS
 
 The Caddyfile serves `polytradebot.live` and `www.polytradebot.live`, obtains and renews certificates, redirects HTTP, proxies internally, permits Telegram framing, and adds HSTS, `nosniff`, and referrer policy.
