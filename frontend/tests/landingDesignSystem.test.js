@@ -178,14 +178,48 @@ test('landing motion stays subtle and reduced-motion safe', async () => {
   assert.doesNotMatch(landing, /infinite/)
 })
 
-test('flat paper surfaces replace the glass card treatment', async () => {
+test('reading surfaces stay flat paper; only controls may be glass', async () => {
   const landing = await read('src/styles/public-landing.css')
   const css = await read('src/styles/brutalism.css')
 
-  assert.doesNotMatch(landing, /backdrop-filter/)
-  // Heavy drop shadows give way to hairline rules.
+  // The original rule here was a blanket ban on backdrop-filter, written when
+  // the frosted-panel skin was removed for reading as generic SaaS next to the
+  // documentation. That intent still holds for PANELS. It was narrowed on
+  // 2026-08-23, deliberately and by the owner, to allow glass on interactive
+  // chrome — buttons, progress marks, the step dots — where the treatment
+  // signals affordance instead of dressing up a slab of prose.
+  //
+  // So the ban now applies per selector rather than per file: anything that is
+  // a card, panel, section or hero must not blur what is behind it.
+  const PANEL = /(^|[\s,])\.(card|panel|public-hero|benefits|know|final|public-footer|demo-result|feature)\b[^{]*$/
+  for (const rule of landing.split('}')) {
+    if (!/backdrop-filter/.test(rule)) continue
+    const selector = rule.split('{')[0].trim()
+    assert.doesNotMatch(
+      selector, PANEL,
+      `"${selector}" is a reading surface and must stay flat paper`,
+    )
+  }
+
+  // Heavy drop shadows still give way to hairline rules on those surfaces.
   assert.doesNotMatch(landing, /box-shadow:\s*0 \d\d+px/)
   assert.doesNotMatch(css, /radial-gradient/)
+})
+
+test('glass controls keep their no-backdrop-filter fallback', async () => {
+  const css = await read('src/styles/brutalism.css')
+
+  // Glass without a fallback leaves a label on a near-transparent panel over
+  // whatever happens to be behind it. Every file that blurs must also say what
+  // happens when the browser cannot.
+  assert.match(css, /@supports not \(\(backdrop-filter/)
+  // The primary button is the one that carries a label on the tint, so it is
+  // the one that must never lose its opaque fallback.
+  const fallbacks = css.match(/@supports not \(\(backdrop-filter[^}]*\{[^@]*?\n\}/gs) || []
+  assert.ok(
+    fallbacks.some((block) => /\.btn\b/.test(block)),
+    'the primary button has no opaque fallback for browsers without backdrop-filter',
+  )
 })
 
 test('diagrams render complete when the reveal script never runs', async () => {

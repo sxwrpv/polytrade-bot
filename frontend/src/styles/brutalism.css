@@ -382,9 +382,13 @@ input:focus, select:focus {
   padding: 6px 12px; cursor: pointer; border-radius: 999px;
 }
 .chip.active {
-  color: var(--green);
+  /* --green (#0b9e63) on a 10% tint is 3.05:1 — under AA at this size. The
+     deep token on the same tint is 6.08:1, so the state reads without the
+     label getting harder to see. */
+  color: var(--green-deep);
   border-color: rgba(11, 158, 99, 0.45);
   background: var(--green-soft);
+  font-weight: 600;
 }
 .chip-icon { display: inline-flex; align-items: center; gap: 6px; }
 
@@ -593,8 +597,8 @@ a { color: inherit; }
 .public-footer small { grid-column: 1/-1; border-top: 1px solid var(--border); padding-top: 20px; color: var(--muted); }
 
 /* Telegram onboarding and funding notices */
-.onboard-flow { max-width: 560px; margin-top: 35px; }.onboard-flow h1,.launch-state h1{font-size:29px;line-height:1.2;letter-spacing:-.03em}.onboard .logo{display:flex;align-items:center;gap:10px;letter-spacing:0;text-transform:none}.onboard .logo span{display:grid;place-items:center;width:32px;height:32px;border-radius:10px;background:var(--green-fill);color:var(--green-ink);font-family:var(--mono)}
-.onboard-progress{display:flex;align-items:center;margin:10px 0 4px}.onboard-progress span{display:grid;place-items:center;width:25px;height:25px;border:1px solid var(--border);border-radius:50%;font:10px var(--mono);color:var(--muted);background:var(--surface2)}.onboard-progress span.active,.onboard-progress span.done{color:var(--green-ink);background:var(--green-fill)}.onboard-progress i{width:45px;height:1px;background:var(--border)}
+.onboard-flow { max-width: 560px; margin-top: 35px; }.onboard-flow h1,.launch-state h1{font-size:29px;line-height:1.2;letter-spacing:-.03em}.onboard .logo{display:flex;align-items:center;gap:10px;letter-spacing:0;text-transform:none}.onboard .logo span{display:grid;place-items:center;width:32px;height:32px;border-radius:10px;background:linear-gradient(158deg,rgba(255,255,255,.58) 0%,rgba(255,255,255,.16) 44%,rgba(11,158,99,.24) 100%),rgba(11,158,99,.18);-webkit-backdrop-filter:blur(12px) saturate(180%);backdrop-filter:blur(12px) saturate(180%);border:1px solid rgba(255,255,255,.5);box-shadow:inset 0 1px 0 rgba(255,255,255,.8);color:var(--green-deep);font-family:var(--mono)}
+.onboard-progress{display:flex;align-items:center;margin:10px 0 4px}.onboard-progress span{display:grid;place-items:center;width:25px;height:25px;border:1px solid var(--border);border-radius:50%;font:10px var(--mono);color:var(--muted);background:var(--surface2)}.onboard-progress span.active,.onboard-progress span.done{color:var(--green-deep);font-weight:600;background:linear-gradient(158deg,rgba(255,255,255,.56) 0%,rgba(255,255,255,.14) 44%,rgba(11,158,99,.24) 100%),rgba(11,158,99,.18);-webkit-backdrop-filter:blur(10px) saturate(180%);backdrop-filter:blur(10px) saturate(180%);border-color:rgba(255,255,255,.5);box-shadow:inset 0 1px 0 rgba(255,255,255,.75)}.onboard-progress i{width:45px;height:1px;background:var(--border)}
 .onboard-terms{display:grid;grid-template-columns:1fr 1fr;gap:9px}.onboard-terms article{padding:14px;background:var(--surface);border:1px solid var(--border);border-radius:var(--r-md)}.onboard-terms p{margin-top:6px;color:var(--muted);font-size:14px;line-height:1.6}
 .ack-row{display:flex;align-items:flex-start;gap:11px;cursor:pointer;font-size:14px;line-height:1.55}.ack-row input{width:18px;height:18px;accent-color:var(--green);flex:none}.ack-row.card{margin:3px 0;padding:14px}.security-check{margin-top:7px}.security-check h2{font-size:17px;margin-bottom:6px}.security-check p{color:var(--muted);font-size:14px;line-height:1.6;margin-bottom:13px}.notice-box{padding:10px 12px;border:1px solid rgba(180,125,10,.28);border-radius:var(--r-md);background:rgba(255,196,61,.09);color:#72520e;font-size:14px;line-height:1.6}.funding-disclosure{margin-bottom:12px}.funding-instructions{font-size:14px;line-height:1.6}.funding-note{margin-top:9px;border-top:1px solid var(--border);padding-top:9px}.logout-note{font-size:14px;line-height:1.55;margin-top:16px}.center{text-align:center}.center-link{text-align:center}.launch-state{margin-top:90px}.launch-loading{min-height:50vh;justify-content:center}
 
