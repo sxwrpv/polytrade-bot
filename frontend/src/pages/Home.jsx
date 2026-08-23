@@ -16,7 +16,9 @@ export default function Home() {
     <div>
       <BalanceCard />
 
-      <CopyWalletCard onAdded={() => setAdded((n) => n + 1)} />
+      <Folder id="home-copy-wallet" title="COPY A WALLET">
+        <CopyWalletCard onAdded={() => setAdded((n) => n + 1)} />
+      </Folder>
 
       <ScreenerEntryPoint />
 

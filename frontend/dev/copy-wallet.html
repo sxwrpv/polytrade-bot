@@ -1,7 +1,7 @@
 <!doctype html>
 <!-- Dev-only harness for the copy-a-wallet card. Not a vite entry, never built.
-     Stubs fetch so the real component and real api wrapper run without a session
-     — and without actually starting a copy. -->
+     Stubs fetch so the real component and real api wrapper run without a
+     session — and without actually starting a copy. -->
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CopyWalletCard — dev harness</title>
@@ -13,13 +13,17 @@ import '../src/styles/brutalism.css'
 const real = window.fetch
 window.fetch = async (u, o) => {
   if (String(u).includes('/follow')) {
-    await new Promise(r => setTimeout(r, 400))
+    window.__lastFollow = { url: String(u), body: JSON.parse(o?.body || '{}') }
+    await new Promise(r => setTimeout(r, 300))
     return new Response(JSON.stringify({ ok: true }), { headers: { 'content-type': 'application/json' } })
   }
   return real(u, o)
 }
 const React = (await import('react')).default
 const { createRoot } = await import('react-dom/client')
+const Folder = (await import('../src/components/Folder.jsx')).default
 const Card = (await import('../src/components/CopyWalletCard.jsx')).default
-createRoot(document.getElementById('root')).render(React.createElement(Card))
+createRoot(document.getElementById('root')).render(
+  React.createElement(Folder, { id: 'dev-copy-wallet', title: 'COPY A WALLET', open: true },
+    React.createElement(Card)))
 </script></body></html>

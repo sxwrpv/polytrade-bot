@@ -720,9 +720,19 @@ button.hm-cell.is-pinned { box-shadow: 0 0 0 2px var(--green-deep); z-index: 3; 
 .hm-legend-none { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; }
 
 /* ---------- copy-a-wallet card --------------------------------------------
-   The one control on Home that spends money, so it is deliberately two steps:
-   a valid address arms a confirm that states in words what is about to start. */
+   Progressive disclosure: address, then limits, then an explicit confirm. The
+   limits block only exists once an address parses, so an untouched card is one
+   field and one disabled button rather than three decisions. */
 .copy-wallet .fld { margin-top: 10px; }
+.copy-wallet-settings {
+  margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border);
+}
+.copy-wallet-settings .control-label {
+  font-family: var(--mono); font-size: 9px; font-weight: 500;
+  letter-spacing: .14em; text-transform: uppercase; color: var(--muted);
+  display: block; margin-bottom: 10px;
+}
+.copy-wallet-settings .fld-slider { margin-top: 12px; }
 .copy-wallet .btn { width: 100%; margin-top: 10px; }
 .copy-wallet-err { margin-top: 8px; color: var(--red); font-size: 11.5px; line-height: 1.5; }
 .copy-wallet-ok { margin-top: 10px; color: var(--green-deep); font-size: 12px; line-height: 1.5; }
