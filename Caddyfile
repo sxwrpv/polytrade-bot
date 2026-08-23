@@ -25,6 +25,30 @@ polytradebot.live, www.polytradebot.live {
 		Content-Security-Policy "frame-ancestors 'self' https://web.telegram.org https://*.telegram.org"
 	}
 
+	# Cache policy. Nothing set one before, so browsers fell back to HEURISTIC
+	# freshness — roughly a tenth of the file's age — and happily served a
+	# stale index.html for hours after a deploy. The HTML names the hashed
+	# bundles, so a stale entry document pins every asset with it: the deploy
+	# lands on the server and the browser never sees any of it. Telegram's
+	# WebView is the worst case, since a Mini App user cannot hard-refresh.
+	#
+	# Vite fingerprints everything under /assets, so those are immutable and
+	# can be cached forever. Everything else must revalidate: `no-cache` still
+	# caches, it just forces an ETag check first, which is one cheap 304.
+	@immutable path /assets/*
+	header @immutable Cache-Control "public, max-age=31536000, immutable"
+
+	# The docs ship UNHASHED filenames (/docs/assets/app.js, styles.css), so
+	# they are the most exposed of all — without revalidation a cached copy
+	# never updates at any point in the future.
+	@revalidate {
+		path /
+		path /screener /screener/*
+		path /docs /docs/*
+		path *.html
+	}
+	header @revalidate Cache-Control "no-cache"
+
 	reverse_proxy app:8080
 }
 
