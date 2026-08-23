@@ -5,7 +5,12 @@
  * history is described. The rules matter more than the rendering — this
  * surface publishes other people's money, and overstating what we know about
  * it is the failure mode to avoid.
+ *
+ * The Copy Score overlay's rules live in cohortModel.js, deliberately apart:
+ * that figure is a third party's, and nothing in this module — least of all
+ * buildPublicQuery's sort vocabulary — changes to accommodate it.
  */
+import { CLASS_ORDER, COHORT_FILTERS, RECOMMENDED } from './cohortModel.js'
 
 export const PERIODS = ['7d', '30d', '90d']
 export const SORTS = [
@@ -255,29 +260,61 @@ export const POLYMARKET_PROFILE = (address) =>
 
 const STATE_DEFAULTS = { period: DEFAULT_PERIOD, sort: DEFAULT_SORT, search: '', completeHistoryOnly: false }
 
-export function encodeScreenerState({ period, sort, search, filters, completeHistoryOnly }) {
+/* The cohort board's own state travels too, so a Copy Score view links like
+ * any other. These keys are validated here but never reach buildPublicQuery —
+ * the API's sort vocabulary is unchanged. */
+const COHORT_SORT_KEYS = ['copy', 'roi']
+const DEFAULT_CATEGORY = 'all'
+const DEFAULT_DIRECTION = 'desc'
+
+export function encodeScreenerState({
+  period, sort, search, filters, completeHistoryOnly,
+  bands, category, direction,
+}) {
   const q = new URLSearchParams()
   if (period !== STATE_DEFAULTS.period) q.set('period', period)
   if (sort !== STATE_DEFAULTS.sort) q.set('sort', sort)
   if (search?.trim()) q.set('q', search.trim())
   if (completeHistoryOnly) q.set('complete', '1')
+  if (category && category !== DEFAULT_CATEGORY) q.set('cat', category)
+  if (direction && direction !== DEFAULT_DIRECTION) q.set('direction', direction)
+  // Bands only travel when they differ from the default recommendation.
+  const chosen = [...(bands ?? [])].sort()
+  const fallback = [...RECOMMENDED].sort()
+  if (chosen.length && chosen.join(',') !== fallback.join(',')) q.set('bands', chosen.join(','))
   for (const [key, value] of Object.entries(filters || {})) {
-    if (value !== '' && value != null) q.set(key, String(value))
+    if (value === true) q.set(key, '1')
+    else if (value !== '' && value != null && value !== false) q.set(key, String(value))
   }
   return q.toString()
 }
 
 export function decodeScreenerState(search) {
   const q = new URLSearchParams(search || '')
-  const out = { ...STATE_DEFAULTS, filters: { ...DEFAULT_FILTERS } }
+  const out = {
+    ...STATE_DEFAULTS,
+    filters: { ...DEFAULT_FILTERS, ...COHORT_FILTERS },
+    bands: new Set(RECOMMENDED),
+    category: DEFAULT_CATEGORY,
+    direction: DEFAULT_DIRECTION,
+  }
   const period = q.get('period')
   if (PERIODS.includes(period)) out.period = period
   const sort = q.get('sort')
-  if (SORTS.some(([k]) => k === sort)) out.sort = sort
+  if (SORTS.some(([k]) => k === sort) || COHORT_SORT_KEYS.includes(sort)) out.sort = sort
   if (q.has('q')) out.search = q.get('q')
   if (q.get('complete') === '1') out.completeHistoryOnly = true
-  for (const key of Object.keys(DEFAULT_FILTERS)) {
-    if (q.has(key)) out.filters[key] = q.get(key)
+  if (q.has('cat')) out.category = q.get('cat')
+  const direction = q.get('direction')
+  if (direction === 'asc' || direction === 'desc') out.direction = direction
+  if (q.has('bands')) {
+    const chosen = q.get('bands').split(',').filter((band) => CLASS_ORDER.includes(band))
+    if (chosen.length) out.bands = new Set(chosen)
+  }
+  for (const key of Object.keys(out.filters)) {
+    if (!q.has(key)) continue
+    const raw = q.get(key)
+    out.filters[key] = typeof COHORT_FILTERS[key] === 'boolean' ? raw === '1' : raw
   }
   return out
 }

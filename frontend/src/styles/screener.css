@@ -537,3 +537,115 @@
 .as-saved { font-style: normal; font-size: 9px; color: var(--muted); letter-spacing: .06em; }
 .saved-foot { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
 .saved-foot .analysis-disclaimer { margin-top: 10px; }
+
+/* ===== COPY SCORE OVERLAY =====
+
+   Everything below renders Polycopy's figure, not PolyTrade's. It is additive:
+   deleting this block and the `showScore` branches leaves the live board
+   exactly as it was.
+
+   Ported from the standalone screener, keeping the token layer untouched — no
+   new colour is introduced here, every band reads from the three greens, the
+   red, the cyan and the decorative faint already defined in brutalism.css. */
+
+/* Whose number this is, and how old. Sits above the table, once. */
+.cohort-notice {
+  display: flex; gap: 12px; align-items: flex-start;
+  padding: 11px 14px; margin-bottom: 12px;
+  background: var(--green-wash);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--green);
+  border-radius: var(--r-md);
+}
+.cohort-notice p { font-size: 11.5px; line-height: 1.6; color: var(--muted); margin: 0; }
+.cohort-notice strong { color: var(--text); font-weight: 600; }
+.cohort-notice-label {
+  font-family: var(--mono); font-size: 9px; letter-spacing: .16em;
+  color: var(--green-deep); white-space: nowrap; padding-top: 2px; flex: none;
+}
+/* Past two days the cohort is describing a board that has already moved, so
+   the notice stops being a footnote and starts being a warning. */
+.cohort-notice.is-stale { border-left-color: var(--yellow); background: rgba(138, 93, 6, 0.05); }
+.cohort-notice.is-stale .cohort-notice-label { color: var(--yellow); }
+
+/* The score pill. --tone is set per band from the component. */
+.cchip {
+  display: inline-flex; align-items: center; gap: 5px; white-space: nowrap;
+  border: 1px solid color-mix(in srgb, var(--tone) 34%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--tone) 9%, transparent);
+  color: var(--tone);
+  padding: 3px 9px; font-family: var(--mono); font-size: 10px;
+  cursor: help; vertical-align: middle;
+}
+.cchip-state { font-weight: 500; letter-spacing: .04em; }
+.cchip-num { font-weight: 700; }
+
+/* Week-over-week move, suppressed below 5 points by the component. */
+.smove { font-family: var(--mono); font-size: 9.5px; white-space: nowrap; cursor: help; margin-left: 6px; }
+.smove.up { color: var(--green-deep); }
+.smove.down { color: var(--red); }
+
+/* "Harder to mirror" flag, beside the wallet name. */
+.hchip {
+  display: inline-block; margin-top: 3px;
+  font-family: var(--mono); font-size: 9px; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--muted); background: var(--surface2); border: 1px solid var(--border);
+  border-radius: var(--r-sm); padding: 2px 6px; white-space: nowrap; cursor: help;
+}
+
+.score-col { white-space: nowrap; }
+.trend-col { width: 92px; }
+
+/* Band headers inside the table body, one per run of equal bands. */
+.band-row > td { padding: 0; border-bottom: 1px solid var(--border); }
+.band {
+  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+  padding: 13px 16px;
+  background: color-mix(in srgb, var(--band) 5%, transparent);
+  border-left: 3px solid var(--band);
+}
+.band-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--band); align-self: center; flex: none; }
+.band-name {
+  font-family: var(--mono); font-size: 10px; font-weight: 500;
+  letter-spacing: .16em; text-transform: uppercase; color: var(--band);
+}
+.band-n { font-family: var(--mono); font-size: 10px; color: var(--muted); }
+.band-line { font-size: 11.5px; color: var(--muted); flex: 1 1 320px; min-width: 0; line-height: 1.5; }
+
+/* One band, one token. Nothing here invents a colour. */
+.band-strong { --band: var(--green-deep); }
+.band-marginal { --band: var(--green-text); }
+.band-uneconomic, .band-loss_making { --band: var(--red); }
+.band-not_measurable { --band: var(--cyan); }
+.band-unproven, .band-none { --band: var(--faint); }
+
+.band-swatch {
+  display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--band); flex: none;
+}
+
+/* Band picker in the rail. */
+.band-picker { display: flex; flex-direction: column; gap: 6px; }
+.band-check {
+  display: flex; align-items: center; gap: 7px;
+  font-size: 11.5px; color: var(--muted); cursor: pointer;
+}
+.band-check input { accent-color: var(--green); flex: none; }
+.band-check:hover { color: var(--text); }
+
+/* Category pills wrap: nine of them will not sit on one rail line. */
+.segmented-wrap { flex-wrap: wrap; }
+
+/* A chip the ordering imposes rather than one the reader set. Dashed and
+   inert, but shown — nothing may narrow the board invisibly. */
+.chip-fixed {
+  border-style: dashed; cursor: help; opacity: .85;
+  background: transparent; color: var(--muted);
+}
+
+/* Band legend in the right rail. */
+.rail-bands { list-style: none; display: flex; flex-direction: column; gap: 9px; margin: 0 0 12px; }
+.rail-bands li { display: grid; grid-template-columns: 10px 1fr; gap: 8px; align-items: baseline; font-size: 11px; line-height: 1.55; color: var(--muted); }
+.rail-bands b { color: var(--text); font-weight: 600; }
+.rail-bands .band-swatch { align-self: center; }

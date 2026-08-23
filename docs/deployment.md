@@ -78,6 +78,24 @@ docker compose exec caddy grep -c Cache-Control /etc/caddy/Caddyfile
 Editing the file in place on the box (`nano`, `sed -i` without a rename) keeps
 the inode and does work with a plain reload. Syncing does not.
 
+## The screener's Copy Score asset
+
+`frontend/public/screener-cohort.json` is a committed, unhashed ~3MB asset that
+the wallet screener loads for its Copy Score column. Two consequences for a
+deploy:
+
+1. It ships with the frontend build (`npm run build` copies `public/` into
+   `dist/`), so `git pull` plus a rebuild is all that moves it. There is no
+   third-party fetch at deploy time, by design.
+2. It is served `Cache-Control: no-cache`, which is a Caddyfile rule. If that
+   rule is ever changed, the Caddyfile change needs the container **recreated,
+   not reloaded** — see the section above.
+
+The board prints the asset's generation date and warns once it is more than two
+days old, so a deploy that forgets to regenerate it degrades visibly rather than
+silently. Regeneration is documented in
+[Screener metric contract](screener-metric-contract.md).
+
 ## Caddy and TLS
 
 The Caddyfile serves `polytradebot.live` and `www.polytradebot.live`, obtains and renews certificates, redirects HTTP, proxies internally, permits Telegram framing, and adds HSTS, `nosniff`, and referrer policy.

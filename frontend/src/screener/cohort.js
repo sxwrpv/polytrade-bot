@@ -98,3 +98,97 @@ export function withCopyScore(rows, cohort) {
 /** How many of the rows on screen the cohort actually covers, so the board can
  *  say "score for 12 of 50" instead of leaving the gaps unexplained. */
 export const scoredCount = (rows) => rows.filter((row) => row.scored).length
+
+/**
+ * Put a cohort row into the same shape the live rows use.
+ *
+ * One table, one row shape: the alternative is two renderers drifting apart.
+ * Fields the cohort does not carry stay null rather than being filled with a
+ * plausible zero — `activePositions` is genuinely unknown here, and coverage
+ * describes the cohort's own active-day count, not PolyTrade's fetched
+ * history, so it is labelled differently on purpose.
+ */
+export function fromCohortRow(trader, period, spark = null, scoreMove = null) {
+  const windowed = (d7, d30, all) => (period === 'd7' ? d7 : period === 'd30' ? d30 : all)
+  const pnl = windowed(trader.d7, trader.d30, trader.pnl)
+  const volume = windowed(trader.d7Vol, trader.d30Vol, trader.vol)
+  const days = period === 'd7' ? 7 : period === 'd30' ? 30 : null
+  return {
+    address: trader.w,
+    displayName: trader.name || null,
+    xUsername: null,
+    verified: false,
+    pnl: pnl ?? null,
+    winRate: trader.winRate ?? null,
+    volume: volume ?? null,
+    openValue: trader.openVal ?? null,
+    // PolyTrade's cache holds this; the cohort does not. Absent, not zero.
+    activePositions: null,
+    consistencyRatio: null,
+    fillExitRatio: null,
+    historyDays: trader.activeDays ?? null,
+    historyPartial: days != null && trader.activeDays != null && trader.activeDays < days,
+    coverage: trader.activeDays == null
+      ? 'UNAVAILABLE'
+      : days == null
+        ? `${Number(trader.activeDays).toLocaleString('en-US')}D ACTIVE`
+        : trader.activeDays < days
+          ? `PARTIAL · ${trader.activeDays}D OF ${days}D`
+          : `~${days}D OBSERVED`,
+    refreshedAt: null,
+    periodDays: days,
+    // The cohort carries weekly points, not the daily series the live analysis
+    // panel draws, so the panel says it has none rather than drawing weeks
+    // under a daily heading.
+    dailyPnl: null,
+    lastTradeDay: trader.lastTradeDay ?? null,
+    copyClass: trader.copyClass ?? null,
+    copyNet: trader.copyNet ?? null,
+    mm: trader.mm ?? null,
+    arb: trader.arb ?? null,
+    freq: trader.freq ?? null,
+    cats: trader.cats ?? [],
+    avgSize: trader.avgSize ?? null,
+    niche: trader.niche ?? null,
+    maxDD: trader.maxDD ?? null,
+    maker: trader.maker ?? null,
+    spark,
+    scoreMove,
+    scored: true,
+  }
+}
+
+/**
+ * Put a displayed row back into cohort shape for the CSV writer.
+ *
+ * The row on screen already resolved PnL and volume for the selected window,
+ * so all three window slots carry that same figure: the export states its
+ * period in the filename and the `period` column, and there is no second
+ * window in the file to confuse it with.
+ */
+export function toCohortShape(row) {
+  return {
+    w: row.address,
+    name: row.displayName,
+    copyClass: row.copyClass ?? null,
+    copyNet: row.copyNet ?? null,
+    pnl: row.pnl ?? null,
+    d7: row.pnl ?? null,
+    d30: row.pnl ?? null,
+    vol: row.volume ?? null,
+    d7Vol: row.volume ?? null,
+    d30Vol: row.volume ?? null,
+    openVal: row.openValue ?? null,
+    winRate: row.winRate ?? null,
+    activeDays: row.historyDays ?? null,
+    avgSize: row.avgSize ?? null,
+    maxDD: row.maxDD ?? null,
+    maker: row.maker ?? null,
+    niche: row.niche ?? null,
+    cats: row.cats ?? [],
+    lastTradeDay: row.lastTradeDay ?? null,
+    mm: row.mm ?? null,
+    arb: row.arb ?? null,
+    freq: row.freq ?? null,
+  }
+}

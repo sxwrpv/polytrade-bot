@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
 import { publicApi } from './publicApi'
 import RangeFilter from './RangeFilter'
 import SeriesChart from '../components/SeriesChart'
@@ -26,7 +26,7 @@ import {
   decodeScreenerState,
   walletsToCsv,
 } from './screenerModel'
-import { loadCohort, withCopyScore, scoredCount } from './cohort'
+import { loadCohort, withCopyScore, scoredCount, fromCohortRow, toCohortShape } from './cohort'
 import { CopyChip, ScoreMove, MirrorChip, Sparkline, BandRow } from './CopyScore'
 import {
   COHORT_FILTERS,
@@ -202,9 +202,14 @@ export default function ScreenerPage() {
       filters,
       direction,
     })
-    if (!term) return board
-    return board.filter((t) => (
-      t.w.includes(term) || String(t.name ?? '').toLowerCase().includes(term)
+    const matched = term
+      ? board.filter((t) => (
+        t.w.includes(term) || String(t.name ?? '').toLowerCase().includes(term)
+      ))
+      : board
+    const key = (address) => String(address).toLowerCase()
+    return matched.map((t) => fromCohortRow(
+      t, cohortPeriod, cohort.spark[key(t.w)] ?? null, cohort.copyDelta?.[key(t.w)] ?? null,
     ))
   }, [cohort, cohortMode, sort, cohortPeriod, category, bands, filters, direction, search])
 
@@ -218,6 +223,32 @@ export default function ScreenerPage() {
     [cohortMode, sort, cohortPeriod, category, bands, filters, completeHistoryOnly, period],
   )
   const age = useMemo(() => cohortAge(cohort?.meta?.generatedAt), [cohort])
+
+  // The cohort board is client-side, so it grows in place rather than paging:
+  // there is no request behind "show more".
+  const shown = cohortMode ? rows.slice(0, visible) : rows
+  const heldBack = useMemo(() => (
+    cohortMode && cohort
+      ? staleHeldBack(cohort.traders, {
+        category,
+        period: cohortPeriod,
+        asOf: cohort.meta.windowAnchor ?? cohort.meta.generatedAt?.slice(0, 10) ?? null,
+      })
+      : 0
+  ), [cohortMode, cohort, category, cohortPeriod])
+
+  /* Clicking the active column flips direction; clicking another switches to
+     it, starting descending because that is what a leaderboard means by "top".
+     Only the two orderings this surface computes can flip — the API ranks
+     descending only. */
+  const changeColumnSort = (next) => {
+    if (next === sort && isCohortSort(next)) {
+      resetPage()
+      setDirection((current) => (current === 'desc' ? 'asc' : 'desc'))
+      return
+    }
+    changeSort(next)
+  }
   const resetPage = useCallback(() => {
     setOffset(0)
     setSelected(null)
@@ -322,13 +353,26 @@ export default function ScreenerPage() {
             completeHistoryOnly={completeHistoryOnly}
             onCompleteHistoryOnly={changeCompleteHistory}
             chips={chips} onClearChip={clearChip} onClearAll={clearAll}
+            cohortMode={cohortMode} hasCohort={Boolean(cohort)}
+            bands={bands} onToggleBand={toggleBand}
+            category={category} onCategory={changeCategory}
+            windowLabel={windowLabel}
           />
         </aside>
 
         <main className="screener-main">
+          {cohort && (
+            <CohortNotice
+              meta={cohort.meta} age={age} cohortMode={cohortMode}
+              scored={scoredCount(rows)} total={rows.length}
+            />
+          )}
+
           <div className="results-toolbar">
             <span className="coverage">
-              {payload?.total != null ? `${payload.total.toLocaleString()} wallets` : ''}
+              {cohortMode
+                ? `${rows.length.toLocaleString()} wallets`
+                : payload?.total != null ? `${payload.total.toLocaleString()} wallets` : ''}
             </span>
             <div className="results-actions">
               <button
@@ -341,7 +385,7 @@ export default function ScreenerPage() {
                 type="button" className="btn btn-analyze"
                 disabled={rows.length === 0}
                 title="Download this page exactly as filtered and ordered"
-                onClick={() => downloadCsv(rows, period)}
+                onClick={() => downloadCsv(rows, period, { cohortMode, cohortPeriod, cohort })}
               >CSV</button>
               <button
                 type="button" className="btn btn-analyze"
@@ -375,22 +419,32 @@ export default function ScreenerPage() {
               <>
                 {rows.length === 0 ? (
                   <p className="screener-state">
-                    {offset > 0 && payload?.total > 0
-                      ? 'No wallets on this page. Use Previous to return to available results.'
-                      : exactLookup
-                        ? 'That wallet is not in the public screener cache yet.'
-                        : 'No cached wallet matches these filters.'}
+                    {cohortMode
+                      ? emptyCohortMessage({ sort, bands, category })
+                      : offset > 0 && payload?.total > 0
+                        ? 'No wallets on this page. Use Previous to return to available results.'
+                        : exactLookup
+                          ? 'That wallet is not in the public screener cache yet.'
+                          : 'No cached wallet matches these filters.'}
                   </p>
                 ) : (
                   <ResultTable
-                    rows={rows} period={period}
+                    rows={shown} period={period} windowLabel={windowLabel}
                     selected={selected} onSelect={setSelected}
-                    sort={sort} onSort={(next) => { setSort(next); setOffset(0) }}
+                    sort={sort} direction={direction} onSort={changeColumnSort}
+                    showScore={Boolean(cohort)} cohortMode={cohortMode}
                   />
                 )}
-                <ResultPagination
-                  payload={payload} offset={offset} pageSize={pageSize} onPage={goToPage}
-                />
+                {cohortMode ? (
+                  <CohortFooter
+                    rows={rows} visible={visible} onMore={() => setVisible((n) => n + 20)}
+                    heldBack={heldBack}
+                  />
+                ) : (
+                  <ResultPagination
+                    payload={payload} offset={offset} pageSize={pageSize} onPage={goToPage}
+                  />
+                )}
               </>
             )}
           </section>
@@ -427,10 +481,35 @@ export default function ScreenerPage() {
         <aside className="screener-rail" aria-label="About these results">
           <div className="rail-title">Reading this table</div>
           <ul className="rail-notes">
-            <li>Metrics cover the selected {period.toUpperCase()} window only.</li>
+            <li>Metrics cover the selected {windowLabel} window only.</li>
             <li>“—” means unavailable, not zero.</li>
             <li>“Partial” describes fetched trade history, nothing else.</li>
           </ul>
+
+          {cohort && (
+            <>
+              <div className="rail-title">Copy Score bands</div>
+              <ul className="rail-bands">
+                {CLASS_ORDER.map((band) => (
+                  <li key={band}>
+                    <span className={`band-swatch band-${band}`} aria-hidden="true" />
+                    <b>{classDef(band).chip}</b> — {classDef(band).line}
+                  </li>
+                ))}
+              </ul>
+              <p className="rail-hint">
+                Wallets flagged <b>Market maker</b>, <b>Arbitrage</b> or <b>Very high
+                frequency</b> are harder to mirror: their edge is the spread, holding both
+                sides, or speed a copy cannot match.
+              </p>
+              <p className="rail-hint">
+                Copy Score is {cohort.meta.scoreOwner || 'Polycopy'}&rsquo;s measurement over
+                their own cohort, not PolyTrade&rsquo;s. PolyTrade publishes no composite
+                score of its own — its inputs are partial by construction and one number
+                would hide that.
+              </p>
+            </>
+          )}
           <a className="rail-link" href="/docs/system-design">
             How the metrics are computed&nbsp;<span aria-hidden="true">↗</span>
           </a>
@@ -455,8 +534,9 @@ const RAIL_IS_STACKED = '(max-width: 940px)'
 function FilterRail({
   period, onPeriod, sort, onSort, filters, setFilter,
   completeHistoryOnly, onCompleteHistoryOnly, chips, onClearChip, onClearAll,
+  cohortMode, hasCohort, bands, onToggleBand, category, onCategory, windowLabel,
 }) {
-  const label = period.toUpperCase()
+  const label = windowLabel ?? period.toUpperCase()
   const [numericOpen] = useState(
     () => !(typeof window !== 'undefined' && window.matchMedia?.(RAIL_IS_STACKED).matches),
   )
@@ -478,8 +558,8 @@ function FilterRail({
         </div>
       </div>
 
-      <div className="control" role="group" aria-label="Sort by">
-        <span className="control-label">SORT BY</span>
+      <div className="control" role="group" aria-label="Order by">
+        <span className="control-label">ORDER BY</span>
         <div className="segmented">
           {SORTS.map(([key, text]) => (
             <button
@@ -489,8 +569,60 @@ function FilterRail({
               onClick={() => onSort(key)}
             >{text}</button>
           ))}
+          {/* These two rank the Copy Score cohort rather than the live cache,
+              so they are unavailable until that overlay has loaded — and the
+              title says why rather than leaving a dead control. */}
+          {COHORT_SORTS.map(([key, text]) => (
+            <button
+              key={key} type="button"
+              className={key === sort ? 'active' : ''}
+              aria-pressed={key === sort}
+              disabled={!hasCohort}
+              title={hasCohort
+                ? 'Ranks the Copy Score cohort — a dated snapshot, not the live cache'
+                : 'Loading the Copy Score cohort…'}
+              onClick={() => onSort(key)}
+            >{text}</button>
+          ))}
         </div>
       </div>
+
+      {cohortMode && (
+        <>
+          <div className="control" role="group" aria-label="Category">
+            <span className="control-label">CATEGORY</span>
+            <div className="segmented segmented-wrap">
+              {CATEGORIES.map((value) => (
+                <button
+                  key={value} type="button"
+                  className={value === category ? 'active' : ''}
+                  aria-pressed={value === category}
+                  onClick={() => onCategory(value)}
+                >{value === 'all' ? 'All' : value}</button>
+              ))}
+            </div>
+          </div>
+
+          {sort === 'copy' && (
+            <div className="control" role="group" aria-label="Copy Score bands">
+              <span className="control-label">BANDS</span>
+              <div className="band-picker">
+                {CLASS_ORDER.filter((band) => band !== 'none').map((band) => (
+                  <label key={band} className="band-check" title={classDef(band).line}>
+                    <input
+                      type="checkbox"
+                      checked={bands.has(band)}
+                      onChange={() => onToggleBand(band)}
+                    />
+                    <span className={`band-swatch band-${band}`} aria-hidden="true" />
+                    {classDef(band).chip}
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
+        </>
+      )}
 
       <details className="screener-numeric" open={numericOpen}>
         <summary>Thresholds</summary>
@@ -511,6 +643,33 @@ function FilterRail({
         min={0} max={250000} step={2500}
         format={(n) => `$${n.toLocaleString('en-US')}`}
       />
+      {cohortMode && (
+        <>
+          <RangeFilter
+            id="f-roi" label={`ROI ${label} ≥`} value={filters.roiMin}
+            onChange={(v) => setFilter('roiMin', v)}
+            min={-50} max={100} step={5} format={(n) => `${n}%`}
+          />
+          <RangeFilter
+            id="f-copynet" label="Copy Score ≥" value={filters.copyNetMin}
+            onChange={(v) => setFilter('copyNetMin', v)}
+            min={-50} max={50} step={1} format={(n) => (n > 0 ? `+${n}` : String(n))}
+          />
+          <RangeFilter
+            id="f-activedays" label="Active days ≥" value={filters.activeDaysMin}
+            onChange={(v) => setFilter('activeDaysMin', v)}
+            min={0} max={365} step={5} format={(n) => `${n}D`}
+          />
+          {/* A ceiling, not a floor: a wallet whose average fill is $220K is
+              one you cannot mirror at a retail budget however good its score. */}
+          <RangeFilter
+            id="f-avgsize" label="Average fill ≤" value={filters.avgSizeMax}
+            onChange={(v) => setFilter('avgSizeMax', v)}
+            min={10} max={5000} step={10} off="max"
+            format={(n) => `$${n.toLocaleString('en-US')}`}
+          />
+        </>
+      )}
       </details>
 
       <details className="screener-advanced">
@@ -557,13 +716,37 @@ function FilterRail({
         </span>
       </label>
 
+      {cohortMode && (
+        <label className="filter-check">
+          <input
+            type="checkbox" checked={Boolean(filters.excludeHardToMirror)}
+            onChange={(event) => setFilter('excludeHardToMirror', event.target.checked)}
+          />
+          <span>
+            <strong>Drop wallets you cannot mirror</strong>
+            <small>
+              Hides market makers, arbitrage and very-high-frequency wallets. Their edge is
+              the spread, both sides at once, or raw speed — none of which a copy can follow,
+              whatever the score says.
+            </small>
+          </span>
+        </label>
+      )}
+
       {chips.length > 0 && (
         <div className="chip-row" aria-label="Active filters">
-          {chips.map(([key, text]) => (
+          {/* Structural chips — the volume floor an ordering imposes, the band
+              filter, the freshness cut — are shown too, dashed and inert, so
+              nothing narrows the board invisibly. */}
+          {chips.map(([key, text, clearable]) => (clearable ? (
             <button key={key} type="button" className="chip" onClick={() => onClearChip(key)}>
               {text} ×
             </button>
-          ))}
+          ) : (
+            <span key={key} className="chip chip-fixed" title="Imposed by this ordering — not a filter you set">
+              {text}
+            </span>
+          )))}
           <button type="button" className="chip chip-clear" onClick={onClearAll}>
             Clear all
           </button>
@@ -573,93 +756,243 @@ function FilterRail({
   )
 }
 
-function downloadCsv(rows, period) {
-  const blob = new Blob([walletsToCsv(rows, period)], { type: 'text/csv;charset=utf-8' })
+function downloadCsv(rows, period, { cohortMode = false, cohortPeriod = 'd30', cohort = null } = {}) {
+  // The cohort export carries the score columns and is stamped with the
+  // snapshot's own date, not today's — the file describes that snapshot.
+  const body = cohortMode
+    ? cohortToCsv(rows.map((row) => toCohortShape(row)), cohortPeriod)
+    : walletsToCsv(rows, period)
+  const stamp = cohortMode
+    ? (cohort?.meta?.windowAnchor || cohort?.meta?.generatedAt || '').slice(0, 10)
+    : new Date().toISOString().slice(0, 10)
+  const blob = new Blob([body], { type: 'text/csv;charset=utf-8' })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = `polytrade-screener-${period}-${new Date().toISOString().slice(0, 10)}.csv`
+  a.download = `polytrade-screener-${cohortMode ? 'copyscore-' : ''}${period}-${stamp}.csv`
   document.body.append(a)
   a.click()
   a.remove()
   URL.revokeObjectURL(url)
 }
 
-function SortableHeader({ label, column, sort, onSort }) {
-  const key = COLUMN_SORT[column]
+function SortableHeader({ label, column, sort, direction, onSort, help }) {
+  // Money columns map to the API's sort keys; Copy Score and ROI are the two
+  // this surface orders itself.
+  const key = COLUMN_SORT[column] ?? column
   const active = sort === key
+  const cohortOrdered = isCohortSort(key)
+  const ascending = active && direction === 'asc'
   return (
-    <th scope="col" className="num" aria-sort={active ? 'descending' : 'none'}>
+    <th
+      scope="col" className="num" title={help}
+      aria-sort={active ? (ascending ? 'ascending' : 'descending') : 'none'}
+    >
       <button type="button" className={`th-sort${active ? ' is-active' : ''}`} onClick={() => onSort(key)}>
         <span>{label}</span>
-        {/* The API only ranks descending, so this marks the active column
-            rather than promising a direction toggle it cannot honour. */}
-        <span className="th-arrow" aria-hidden="true">{active ? '\u25be' : '\u2195'}</span>
+        {/* Only a board this surface orders itself can honour a direction
+            toggle. The API ranks descending only, so a live column marks the
+            active sort rather than promising a flip it cannot deliver. */}
+        <span className="th-arrow" aria-hidden="true">
+          {active ? (cohortOrdered && ascending ? '▴' : '▾') : '↕'}
+        </span>
       </button>
     </th>
   )
 }
 
-function ResultTable({ rows, period, selected, onSelect, sort, onSort }) {
-  const label = period.toUpperCase()
+function ResultTable({
+  rows, period, windowLabel, selected, onSelect, sort, direction, onSort,
+  showScore, cohortMode,
+}) {
+  const label = windowLabel ?? period.toUpperCase()
+  // One band header per run of equal bands, and only under Copy Score
+  // ordering — under any other ordering the bands are interleaved, and a
+  // header there would be a claim about rows that do not follow it.
+  const runs = useMemo(() => new Map(
+    bandRuns(rows, cohortMode && sort === 'copy' ? 'copy' : null).map((run) => [run.index, run]),
+  ), [rows, sort, cohortMode])
+  const columnCount = showScore ? 11 : 8
   return (
     <div className="table-scroll">
       <table className="screener-table">
         <caption className="visually-hidden">
           Polymarket wallets ranked over the selected {label} window. Metrics without a value
           are unavailable, not zero.
+          {showScore && ' Copy Score is Polycopy’s figure over their own cohort, not PolyTrade’s.'}
         </caption>
         <thead>
           <tr>
             <th scope="col"><span className="visually-hidden">Saved</span></th>
             <th scope="col">Wallet</th>
-            <SortableHeader label={`PnL ${label}`} column="pnl" sort={sort} onSort={onSort} />
-            <SortableHeader label={`Win rate ${label}`} column="winRate" sort={sort} onSort={onSort} />
-            <SortableHeader label={`Volume ${label}`} column="volume" sort={sort} onSort={onSort} />
+            {showScore && (
+              <SortableHeader
+                label="Copy Score" column="copy" sort={sort} direction={direction} onSort={onSort}
+                help="What is left of a wallet's edge after the spread and fees a copier pays. Polycopy's figure, over their cohort."
+              />
+            )}
+            {showScore && (
+              <SortableHeader
+                label={`ROI ${label}`} column="roi" sort={sort} direction={direction} onSort={onSort}
+                help="PnL as a share of volume over this window. Unavailable when volume is zero — a wallet that traded nothing is not a 0% wallet."
+              />
+            )}
+            <SortableHeader label={`PnL ${label}`} column="pnl" sort={sort} direction={direction} onSort={onSort} />
+            <SortableHeader label={`Win rate ${label}`} column="winRate" sort={sort} direction={direction} onSort={onSort} />
+            <SortableHeader label={`Volume ${label}`} column="volume" sort={sort} direction={direction} onSort={onSort} />
+            {showScore && <th scope="col">Trend</th>}
             <th scope="col" className="num">Active positions</th>
             <th scope="col">Fetched history</th>
             <th scope="col"><span className="visually-hidden">Actions</span></th>
           </tr>
         </thead>
         <tbody>
-          {rows.map((row) => (
-            <tr key={row.address} className={row.address === selected ? 'selected' : ''}>
-              <td className="save-col">
-                <button
-                  type="button"
-                  className="save-btn"
-                  aria-pressed={isSaved(row.address)}
-                  aria-label={`${isSaved(row.address) ? 'Remove' : 'Save'} ${row.address}`}
-                  title={isSaved(row.address) ? 'Saved — click to remove' : 'Save this wallet'}
-                  onClick={() => toggleSaved(row.address, {
-                    name: row.displayName, pnl: row.pnl, period,
-                  })}
-                >{isSaved(row.address) ? '\u2665' : '\u2661'}</button>
-              </td>
-              <th scope="row">
-                <span className="wallet-name">{row.displayName || 'Unnamed wallet'}</span>
-                <span className="wallet-address" title={row.address}>{short(row.address)}</span>
-              </th>
-              <td className={`num ${row.pnl == null ? '' : row.pnl >= 0 ? 'pos' : 'neg'}`}>
-                {formatMetric(row.pnl, 'money')}
-              </td>
-              <td className="num">{formatMetric(row.winRate, 'percent')}</td>
-              <td className="num">{formatMetric(row.volume, 'money')}</td>
-              <td className="num">{formatMetric(row.activePositions, 'count')}</td>
-              <td className="coverage">{row.coverage}</td>
-              <td>
-                <button
-                  type="button" className="btn btn-analyze"
-                  aria-pressed={row.address === selected}
-                  onClick={() => onSelect(row.address === selected ? null : row.address)}
-                >ANALYZE</button>
-              </td>
-            </tr>
-          ))}
+          {rows.map((row, index) => {
+            const run = runs.get(index)
+            // ROI is undefined without volume; a zero-volume wallet is not a
+            // 0% wallet, so it stays unavailable.
+            const roi = row.volume > 0 && row.pnl != null ? (row.pnl / row.volume) * 100 : null
+            return (
+              <Fragment key={row.address}>
+                {run && <BandRow band={run.band} total={run.total} colSpan={columnCount} />}
+                <tr className={row.address === selected ? 'selected' : ''}>
+                  <td className="save-col">
+                    <button
+                      type="button"
+                      className="save-btn"
+                      aria-pressed={isSaved(row.address)}
+                      aria-label={`${isSaved(row.address) ? 'Remove' : 'Save'} ${row.address}`}
+                      title={isSaved(row.address) ? 'Saved — click to remove' : 'Save this wallet'}
+                      onClick={() => toggleSaved(row.address, {
+                        name: row.displayName, pnl: row.pnl, period,
+                      })}
+                    >{isSaved(row.address) ? '♥' : '♡'}</button>
+                  </td>
+                  <th scope="row">
+                    <span className="wallet-name">{row.displayName || 'Unnamed wallet'}</span>
+                    {/* The cohort labels unnamed wallets with their own short
+                        address, so printing it again underneath is a second
+                        copy of the same string, not a second fact. */}
+                    {row.displayName !== short(row.address) && (
+                      <span className="wallet-address" title={row.address}>{short(row.address)}</span>
+                    )}
+                    <MirrorChip row={row} />
+                  </th>
+                  {showScore && (
+                    <td className="score-col">
+                      <CopyChip copyClass={row.copyClass} copyNet={row.copyNet} />
+                      <ScoreMove delta={row.scoreMove} />
+                    </td>
+                  )}
+                  {showScore && (
+                    <td className={`num ${roi == null ? '' : roi > 0 ? 'pos' : roi < 0 ? 'neg' : ''}`}>
+                      {signedPercent(roi)}
+                    </td>
+                  )}
+                  <td className={`num ${row.pnl == null ? '' : row.pnl >= 0 ? 'pos' : 'neg'}`}>
+                    {formatMetric(row.pnl, 'money')}
+                  </td>
+                  <td className="num">{formatMetric(row.winRate, 'percent')}</td>
+                  <td className="num">{formatMetric(row.volume, 'money')}</td>
+                  {showScore && (
+                    <td className="trend-col"><Sparkline values={row.spark} /></td>
+                  )}
+                  <td className="num">{formatMetric(row.activePositions, 'count')}</td>
+                  <td
+                    className="coverage"
+                    title={row.lastTradeDay ? `Last trade ${row.lastTradeDay}` : undefined}
+                  >{row.coverage}</td>
+                  <td>
+                    <button
+                      type="button" className="btn btn-analyze"
+                      aria-pressed={row.address === selected}
+                      onClick={() => onSelect(row.address === selected ? null : row.address)}
+                    >ANALYZE</button>
+                  </td>
+                </tr>
+              </Fragment>
+            )
+          })}
         </tbody>
       </table>
     </div>
   )
+}
+
+/* Whose number the Copy Score is, and how old it is.
+ *
+ * Stated once above the table rather than repeated on fifty rows. Two things
+ * have to reach the reader: the score is Polycopy's and not PolyTrade's, and
+ * the cohort behind it is a dated snapshot — upstream regenerates daily, so
+ * past two days these rankings describe a board that has already moved. */
+function CohortNotice({ meta, age, cohortMode, scored, total }) {
+  const generated = (meta.generatedAt || '').slice(0, 10)
+  return (
+    <div className={`cohort-notice${age.stale ? ' is-stale' : ''}`} role="note">
+      <span className="cohort-notice-label">COPY SCORE</span>
+      <p>
+        {cohortMode ? (
+          <>
+            This board ranks the <strong>Copy Score cohort</strong> — {' '}
+            a snapshot of {meta.scoreOwner || 'Polycopy'}&rsquo;s ranked wallets taken{' '}
+            {generated} ({age.label}), not PolyTrade&rsquo;s live cache. Money columns are
+            that snapshot&rsquo;s too.
+          </>
+        ) : (
+          <>
+            Rows are PolyTrade&rsquo;s live cache. Copy Score beside them is{' '}
+            {meta.scoreOwner || 'Polycopy'}&rsquo;s figure from a snapshot taken {generated}{' '}
+            ({age.label}), and it covers {scored.toLocaleString()} of the{' '}
+            {total.toLocaleString()} wallets on this page — the rest are not scored, which is
+            the absence of a score rather than a low one.
+          </>
+        )}
+        {age.stale && ' That snapshot is regenerated daily upstream, so it is now describing a board that has already moved.'}
+      </p>
+    </div>
+  )
+}
+
+/* The cohort board is already in the browser, so it grows in place. The count
+   and the held-back note both say what is NOT on screen — a board that hides
+   rows without saying so is the failure mode this surface exists to avoid. */
+function CohortFooter({ rows, visible, onMore, heldBack }) {
+  const remaining = rows.length - visible
+  return (
+    <nav className="screener-pagination" aria-label="Cohort board size">
+      <span aria-live="polite">
+        {rows.length
+          ? `Showing ${Math.min(visible, rows.length).toLocaleString()} of ${rows.length.toLocaleString()} wallets`
+          : 'No wallets'}
+        {heldBack > 0 && (
+          <>
+            {' · '}
+            <span title={`Lifetime totals never decay, so wallets that have not traded in ${STALE_DAYS} days are held back. They still rank on Polymarket's all-time board; this one answers who you could copy today.`}>
+              {heldBack.toLocaleString()} held back as stale
+            </span>
+          </>
+        )}
+      </span>
+      <div>
+        {remaining > 0 && (
+          <button type="button" className="btn btn-ghost" onClick={onMore}>
+            Show {Math.min(20, remaining)} more
+          </button>
+        )}
+      </div>
+    </nav>
+  )
+}
+
+/** Why a cohort board came back empty, in the terms the reader set it with. */
+function emptyCohortMessage({ sort, bands, category }) {
+  if (sort === 'copy') {
+    const shown = [...(bands ?? RECOMMENDED)].map((band) => classDef(band).chip).join(' or ')
+    return `No ${shown} wallet in ${category === 'all' ? 'this cohort' : category} traded `
+      + 'enough in this window. Try a longer period, or widen the bands.'
+  }
+  return `No wallet in ${category === 'all' ? 'this cohort' : category} clears the volume `
+    + 'floor this measure needs.'
 }
 
 function ResultPagination({ payload, offset, pageSize, onPage }) {

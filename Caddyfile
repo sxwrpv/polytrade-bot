@@ -41,9 +41,16 @@ polytradebot.live, www.polytradebot.live {
 	# The docs ship UNHASHED filenames (/docs/assets/app.js, styles.css), so
 	# they are the most exposed of all — without revalidation a cached copy
 	# never updates at any point in the future.
+	# The Copy Score cohort is an UNHASHED 3MB asset that is regenerated and
+	# re-committed periodically, and the board prints its generation date. A
+	# heuristically-cached copy would keep showing an old date as though it
+	# were current, which is the one thing that surface must not do. `no-cache`
+	# still caches it — StaticFiles sends an ETag, so a repeat visit is one
+	# cheap 304, not 3MB again.
 	@revalidate {
 		path /
 		path /screener /screener/*
+		path /screener-cohort.json
 		path /docs /docs/*
 		path *.html
 	}
