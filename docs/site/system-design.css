@@ -36,10 +36,27 @@
 .prose .sd-lede { max-width: 62ch; color: var(--muted); }
 
 /* ---------- figures -------------------------------------------------------
-   The diagrams are wider than the 760px content column. The figure — not the
-   page — scrolls, and it is focusable so the scroll is reachable by keyboard.
-   `overscroll-behavior-x: contain` stops a horizontal swipe from turning into
-   a browser back-navigation on trackpads. */
+   The diagrams need ~940px and the default prose column is 760px, so every
+   figure used to scroll sideways. Widening the column is the fix, but only for
+   this page: `.docs-shell.is-wide` (set by app.js for this slug alone) trades
+   some rail width for content width.
+
+   Prose does not follow the column out. Body text keeps its measure through
+   the max-width rules further down, because a 1040px line length costs more
+   readability than the extra width buys. Only figures use the full column.
+
+   overflow-x stays as the last resort. On a viewport too narrow for the wide
+   column the figure still scrolls rather than clipping, and it stays focusable
+   so that scroll is reachable by keyboard. `overscroll-behavior-x: contain`
+   stops a horizontal swipe becoming a browser back-navigation on trackpads. */
+.docs-shell.is-wide {
+  --content-w: 1040px;
+  --sidebar-w: 244px;
+  --toc-w: 208px;
+  column-gap: 36px;
+}
+/* The rails are sized off the same tokens, so they narrow with the shell. */
+
 .sd-figure {
   margin: 26px 0 0;
   padding: 0;
@@ -69,6 +86,15 @@
   letter-spacing: 0.08em;
 }
 .sd-figure.is-scrollable + .sd-scroll-hint { display: block; }
+/* The caption belongs to the prose, not to the break-out, so it stays put. */
+.sd-figure + .sd-scroll-hint, .sd-figure + figcaption { margin-left: 0; }
+
+/* Prose measure, held independently of the column so the wide layout does not
+   stretch body text to 1040px. */
+.docs-shell.is-wide .prose > p,
+.docs-shell.is-wide .prose > ul,
+.docs-shell.is-wide .prose > ol,
+.docs-shell.is-wide .sd-lede { max-width: 72ch; }
 
 .sd-note {
   max-width: 68ch;

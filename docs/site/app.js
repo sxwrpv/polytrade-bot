@@ -228,6 +228,9 @@ async function loadPage() {
   const slug = currentSlug();
   const page = pageMap[slug];
   renderSidebar(slug);
+  // Diagram-heavy pages get a wider content column and narrower rails. Set on
+  // the shell rather than the prose, because the column widths are grid tracks.
+  document.querySelector('.docs-shell')?.classList.toggle('is-wide', slug === 'system-design');
   try {
     const source = await fetchDoc(page.file, page.kind);
     const prose = document.getElementById('prose');

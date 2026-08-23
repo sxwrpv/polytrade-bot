@@ -675,3 +675,64 @@ a { color: inherit; }
 
 .balance-periods { display: flex; gap: 6px; margin-top: 10px; }
 .balance-periods .chip { padding: 4px 12px; font-size: 10px; }
+
+/* ---------- daily PnL heat-map --------------------------------------------
+   Monday-first calendar of the last 30 days. Intensity rides on --t (0..1),
+   set per cell, and wins and losses are normalised against their own extremes
+   so one huge loss cannot wash every winning day out to the same pale tint. */
+.hm { display: grid; gap: 9px; }
+.hm-readout {
+  font-family: var(--mono); font-size: 10.5px; color: var(--muted);
+  min-height: 15px; line-height: 1.4;
+}
+.hm-week, .hm-grid {
+  display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px;
+  /* Capped so five weeks of cells stay heat-map sized rather than growing into
+     40px+ tiles on a wide card. */
+  max-width: 296px;
+}
+.hm-week {
+  font-family: var(--mono); font-size: 8px; color: var(--muted); text-align: center;
+}
+
+.hm-cell {
+  aspect-ratio: 1; min-width: 0; padding: 0; border: 0; border-radius: 3px;
+  background: rgba(20, 32, 26, 0.055);
+  transition: transform .08s ease, box-shadow .08s ease;
+}
+button.hm-cell { cursor: pointer; }
+.hm-up   { background: color-mix(in srgb, var(--green) calc(var(--t, 0) * 82%), rgba(11, 158, 99, 0.1)); }
+.hm-down { background: color-mix(in srgb, var(--red)   calc(var(--t, 0) * 78%), rgba(179, 36, 47, 0.1)); }
+/* Closed, but netted nothing — distinct from a day with no closings at all. */
+.hm-zero { background: rgba(20, 32, 26, 0.16); }
+.hm-none { background: rgba(20, 32, 26, 0.05); box-shadow: inset 0 0 0 1px rgba(20, 32, 26, 0.05); }
+.hm-pad  { background: none; }
+
+button.hm-cell:hover { transform: scale(1.3); box-shadow: 0 0 0 1px var(--green-deep); z-index: 2; }
+button.hm-cell:focus-visible { outline: 2px solid var(--green-deep); outline-offset: 1px; z-index: 2; }
+button.hm-cell.is-pinned { box-shadow: 0 0 0 2px var(--green-deep); z-index: 3; }
+
+.hm-legend {
+  display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
+  font-family: var(--mono); font-size: 8.5px; color: var(--muted);
+}
+.hm-legend i { width: 10px; height: 10px; display: block; }
+.hm-legend-none { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; }
+
+/* ---------- copy-a-wallet card --------------------------------------------
+   The one control on Home that spends money, so it is deliberately two steps:
+   a valid address arms a confirm that states in words what is about to start. */
+.copy-wallet .fld { margin-top: 10px; }
+.copy-wallet .btn { width: 100%; margin-top: 10px; }
+.copy-wallet-err { margin-top: 8px; color: var(--red); font-size: 11.5px; line-height: 1.5; }
+.copy-wallet-ok { margin-top: 10px; color: var(--green-deep); font-size: 12px; line-height: 1.5; }
+.copy-wallet-note { margin-top: 9px; color: var(--muted); font-size: 10.5px; line-height: 1.5; }
+.copy-wallet-confirm {
+  margin-top: 10px; padding: 11px 13px;
+  border: 1px solid rgba(138, 93, 6, .32); border-left: 3px solid var(--yellow);
+  border-radius: var(--r-md); background: rgba(138, 93, 6, .06);
+}
+.copy-wallet-confirm p { font-size: 12px; line-height: 1.6; }
+.copy-wallet-confirm b { font-family: var(--mono); font-weight: 600; }
+.copy-wallet-actions { display: grid; grid-template-columns: 1fr auto; gap: 8px; margin-top: 10px; }
+.copy-wallet-actions .btn { width: 100%; margin-top: 0; }

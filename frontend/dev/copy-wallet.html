@@ -1,0 +1,25 @@
+<!doctype html>
+<!-- Dev-only harness for the copy-a-wallet card. Not a vite entry, never built.
+     Stubs fetch so the real component and real api wrapper run without a session
+     — and without actually starting a copy. -->
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CopyWalletCard — dev harness</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>body{margin:0;padding:18px;max-width:430px}</style>
+</head><body><div id="root"></div>
+<script type="module">
+import '../src/styles/brutalism.css'
+const real = window.fetch
+window.fetch = async (u, o) => {
+  if (String(u).includes('/follow')) {
+    await new Promise(r => setTimeout(r, 400))
+    return new Response(JSON.stringify({ ok: true }), { headers: { 'content-type': 'application/json' } })
+  }
+  return real(u, o)
+}
+const React = (await import('react')).default
+const { createRoot } = await import('react-dom/client')
+const Card = (await import('../src/components/CopyWalletCard.jsx')).default
+createRoot(document.getElementById('root')).render(React.createElement(Card))
+</script></body></html>

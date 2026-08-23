@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { api, getWallet, clearWallet } from '../api'
 import CopyText from '../components/CopyText'
 import StatGrid from '../components/StatGrid'
-import DotStrip from '../components/DotStrip'
+import PnlHeatmap from '../components/PnlHeatmap'
 import Modal from '../components/Modal'
 import Folder from '../components/Folder'
 import { FundingAccess } from '../components/DepositAddresses'
@@ -11,7 +11,6 @@ import { performLogout } from '../authBootstrap'
 export default function User({ onLogout }) {
   const [me, setMe] = useState(null)
   const [pnl, setPnl] = useState(null)
-  const [period, setPeriod] = useState('7d')
   const [byWallet, setByWallet] = useState([])
   const [name, setName] = useState('')
   const [exp, setExp] = useState(false)
@@ -33,8 +32,10 @@ export default function User({ onLogout }) {
   }, [])
 
   useEffect(() => {
-    api.pnl(period).then(setPnl).catch(() => {})
-  }, [period])
+    // 30d: the only period-scoped thing left in this section is the heat-map's
+    // calendar, and it is a fixed 30-day window.
+    api.pnl('30d').then(setPnl).catch(() => {})
+  }, [])
 
   async function saveName() {
     try {
@@ -74,8 +75,6 @@ export default function User({ onLogout }) {
   }
 
   const curve = pnl?.equity_curve || []
-  const dayValues = curve.map((d) => d.pnl)
-  const dayTitles = curve.map((d) => `${d.date}: ${d.pnl >= 0 ? '+' : '-'}$${Math.abs(d.pnl).toFixed(2)}`)
 
   return (
     <div>
@@ -127,20 +126,13 @@ export default function User({ onLogout }) {
 
       <Folder id="user-performance" title="PERFORMANCE" open>
         <StatGrid pnl={pnl} />
-        <div className="sort-row" style={{ margin: 0 }}>
-          {['7d', '30d', 'all'].map((p) => (
-            <button
-              key={p}
-              className={`chip ${period === p ? 'active' : ''}`}
-              aria-pressed={period === p}
-              onClick={() => setPeriod(p)}
-            >{p.toUpperCase()}</button>
-          ))}
-        </div>
 
-        <div className="section-header">DAILY PNL ({period.toUpperCase()})</div>
+        {/* The window buttons went with the chart they used to drive. Nothing
+            left in this section is period-scoped: StatGrid already shows 7D and
+            30D side by side, and the heat-map is a fixed 30-day calendar. */}
+        <div className="section-header">DAILY PNL · LAST 30 DAYS</div>
         <div className="card">
-          <DotStrip values={dayValues} titles={dayTitles} max={90} />
+          <PnlHeatmap curve={curve} />
         </div>
 
         <Folder id="user-breakdown" title="BREAKDOWN BY COPIED WALLET">
