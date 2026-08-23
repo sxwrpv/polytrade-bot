@@ -10,6 +10,10 @@ wider windows downsample it at query time:
   7d  -> ~5-minute points   (native)
   30d -> 30-minute buckets
   all -> 4-hour buckets
+
+Storage is compacted on the same boundaries. Once a row is old enough that no
+window still renders it at 5-minute resolution, keeping it at 5-minute
+resolution only costs disk. See COMPACTION_TIERS.
 """
 from __future__ import annotations
 
@@ -26,6 +30,30 @@ _BUCKETS = {
     "30d": (30, 1800),     # 30 min
     "all": (3650, 14400),  # 4 h
 }
+
+# (older_than_days, bucket_seconds) — storage compaction, coarsest tier last.
+#
+# Each tier is set to the finest resolution any window still SHOWS at that age,
+# so compaction is invisible in the UI:
+#
+#   0-7 days    every window that reaches here uses 5-min points  -> keep raw
+#   7-30 days   only 30d (30-min) and all (4-h) reach here        -> 30-min
+#   30+ days    only all (4-h) reaches here                       -> 4-h
+#
+# A row older than 30 days is never rendered at finer than 4-hour resolution by
+# any caller, so collapsing it to one row per 4 hours loses nothing a reader
+# could have seen. Change a bucket in _BUCKETS and the matching tier here has to
+# move with it, or the chart starts asking for detail that has been discarded —
+# test_equity_compaction pins that relationship.
+COMPACTION_TIERS = (
+    (7, 1800),
+    (30, 14400),
+)
+
+# Bound on one pass, so a long-neglected database is compacted over several
+# runs instead of one statement that holds a write lock for minutes.
+COMPACTION_SCAN_LIMIT = 50_000
+_DELETE_CHUNK = 400
 
 
 async def _cumulative_realized(db, user_id: str) -> float:
@@ -152,3 +180,68 @@ async def get_series(db, user_id: str, period: str = "7d") -> list[dict]:
             "pnl": round(float(r["realized_pnl"] or 0.0) + float(r["unrealized_pnl"] or 0.0), 2),
         }
     return [by_bucket[k] for k in sorted(by_bucket)]
+
+
+async def compact_snapshots(
+    db,
+    *,
+    tiers: tuple[tuple[int, int], ...] = COMPACTION_TIERS,
+    scan_limit: int = COMPACTION_SCAN_LIMIT,
+    now: dt.datetime | None = None,
+) -> int:
+    """Collapse aged snapshots to one row per bucket. Returns rows deleted.
+
+    The survivor is the LAST row in each bucket, which is exactly what
+    `get_series` already renders for that bucket — so a compacted series draws
+    the identical line it drew before, just without the rows nobody could see.
+
+    Bucketing happens in Python rather than SQL because `ts` is stored as ISO
+    text and the epoch conversion differs between SQLite and Postgres; doing it
+    here keeps one implementation and makes it directly testable.
+
+    Safe to run repeatedly: a compacted range has one row per bucket and so
+    yields nothing to delete on the next pass.
+    """
+    reference = now or dt.datetime.now(dt.timezone.utc)
+    total = 0
+
+    # Coarsest tier first. A row older than the 30-day boundary is handled by
+    # the 4-hour tier and must not then be re-examined by the 30-minute one,
+    # which would keep a survivor per 30-minute bucket and undo the coarser pass.
+    ordered = sorted(tiers, key=lambda t: t[0], reverse=True)
+    previous_days: int | None = None
+
+    for days, bucket in ordered:
+        cutoff = (reference - dt.timedelta(days=days)).isoformat()
+        params: list = [cutoff]
+        sql = ("SELECT id, user_id, ts FROM equity_snapshots WHERE ts < ?")
+        if previous_days is not None:
+            # Lower bound: this tier owns only the band above the coarser one.
+            floor = (reference - dt.timedelta(days=previous_days)).isoformat()
+            sql += " AND ts >= ?"
+            params.append(floor)
+        sql += " ORDER BY user_id, ts LIMIT ?"
+        params.append(scan_limit)
+
+        rows = await db.fetchall(sql, tuple(params))
+        previous_days = days
+        if not rows:
+            continue
+
+        # Last row in each (user, bucket) survives; everything before it goes.
+        survivors: dict[tuple[str, int], int] = {}
+        seen: list[tuple[tuple[str, int], int]] = []
+        for r in rows:
+            key = (r["user_id"], int(_epoch(r["ts"]) // bucket))
+            survivors[key] = r["id"]
+            seen.append((key, r["id"]))
+
+        doomed = [rid for key, rid in seen if survivors[key] != rid]
+        for i in range(0, len(doomed), _DELETE_CHUNK):
+            chunk = doomed[i:i + _DELETE_CHUNK]
+            marks = ",".join("?" for _ in chunk)
+            await db.execute(
+                f"DELETE FROM equity_snapshots WHERE id IN ({marks})", tuple(chunk))
+            total += len(chunk)
+
+    return total

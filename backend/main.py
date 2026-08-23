@@ -130,6 +130,16 @@ async def _telemetry_retention_loop(db, stop: asyncio.Event) -> None:
                 log.info("product telemetry: pruned %d expired event(s)", pruned)
         except Exception:
             log.exception("product telemetry retention prune failed (continuing)")
+        try:
+            # Equity snapshots have no expiry — the curve is the product — so
+            # they are compacted rather than deleted. Aged rows collapse to the
+            # coarsest resolution any chart still renders them at, which is
+            # invisible to a reader and ~20x smaller over a year.
+            collapsed = await equity.compact_snapshots(db)
+            if collapsed:
+                log.info("equity snapshots: compacted %d aged row(s)", collapsed)
+        except Exception:
+            log.exception("equity snapshot compaction failed (continuing)")
 
 
 async def _equity_snapshot_loop(app, stop: asyncio.Event) -> None:
