@@ -1,12 +1,16 @@
 import Folder from '../components/Folder'
 import CopiedWallets from '../components/CopiedWallets'
+import AccountSummary from '../components/AccountSummary'
 
-/* Wallet research is a standalone public surface at /screener. The authenticated
-   Mini App home is intentionally limited to the wallets already copied by this
-   account and the settings attached to them. */
+/* Home leads with the account's own money — balance and the equity curve —
+   because that is what the account opens the app to see. Wallet research stays
+   a standalone public surface at /screener; everything else here is the wallets
+   already copied by this account. */
 export default function Home() {
   return (
     <div>
+      <AccountSummary />
+
       <ScreenerEntryPoint />
 
       <Folder id="home-copied" title="COPIED WALLETS">

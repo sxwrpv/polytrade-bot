@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react'
 import { api, getWallet, clearWallet } from '../api'
 import CopyText from '../components/CopyText'
 import StatGrid from '../components/StatGrid'
-import PnLChart from '../components/PnLChart'
 import DotStrip from '../components/DotStrip'
 import Modal from '../components/Modal'
 import Folder from '../components/Folder'
@@ -13,8 +12,6 @@ export default function User({ onLogout }) {
   const [me, setMe] = useState(null)
   const [pnl, setPnl] = useState(null)
   const [period, setPeriod] = useState('7d')
-  const [series, setSeries] = useState([])
-  const [metric, setMetric] = useState('equity')   // 'equity' | 'pnl'
   const [byWallet, setByWallet] = useState([])
   const [name, setName] = useState('')
   const [exp, setExp] = useState(false)
@@ -37,7 +34,6 @@ export default function User({ onLogout }) {
 
   useEffect(() => {
     api.pnl(period).then(setPnl).catch(() => {})
-    api.equitySeries(period).then(setSeries).catch(() => setSeries([]))
   }, [period])
 
   async function saveName() {
@@ -91,33 +87,9 @@ export default function User({ onLogout }) {
             DISPLAY NAME
             <input value={name} onChange={(e) => setName(e.target.value)} onBlur={saveName} />
           </label>
-          <div className="stat-grid" style={{ marginTop: 10 }}>
-            <div className="stat-cell">
-              <div className="label">BALANCE (CASH)</div>
-              <div className="value">{me?.balance != null ? `$${me.balance.toFixed(2)}` : '—'}</div>
-            </div>
-            <div className="stat-cell">
-              <div className="label">IN POSITIONS</div>
-              <div className="value">{me?.positions_value != null ? `$${me.positions_value.toFixed(2)}` : '—'}</div>
-            </div>
-            <div className="stat-cell">
-              <div className="label" title="resolved wins not yet redeemed — claim on polymarket.com">CLAIMABLE</div>
-              <div className="value">{me?.claimable != null ? `$${me.claimable.toFixed(2)}` : '—'}</div>
-            </div>
-            <div className="stat-cell">
-              <div className="label">EQUITY (TOTAL)</div>
-              <div className="value">{me?.equity != null ? `$${me.equity.toFixed(2)}` : '—'}</div>
-            </div>
-          </div>
-          {me?.balance == null && (
-            <div className="muted small" style={{ marginTop: 6 }}>fund wallet to trade</div>
-          )}
-          {me?.claimable > 0 && (
-            <div className="warn-box" style={{ marginTop: 8 }}>
-              ${me.claimable.toFixed(2)} in resolved winnings isn&apos;t auto-claimed yet —
-              redeem it on polymarket.com to turn it into spendable cash.
-            </div>
-          )}
+          {/* Balance, equity and the curve now lead the Home tab — see
+              components/AccountSummary.jsx. Kept out of here rather than shown
+              twice, so there is one place the account reads its money. */}
         </div>
       </Folder>
 
@@ -127,26 +99,16 @@ export default function User({ onLogout }) {
 
       <Folder id="user-performance" title="PERFORMANCE" open>
         <StatGrid pnl={pnl} />
-        <div className="sort-row" style={{ justifyContent: 'space-between' }}>
-          <div className="sort-row" style={{ margin: 0 }}>
-            {['7d', '30d', 'all'].map((p) => (
-              <button key={p} className={`chip ${period === p ? 'active' : ''}`} onClick={() => setPeriod(p)}>
-                {p.toUpperCase()}
-              </button>
-            ))}
-          </div>
-          <div className="sort-row" style={{ margin: 0 }}>
-            {[['equity', 'EQUITY'], ['pnl', 'PNL']].map(([k, l]) => (
-              <button key={k} className={`chip ${metric === k ? 'active' : ''}`} onClick={() => setMetric(k)}>
-                {l}
-              </button>
-            ))}
-          </div>
+        <div className="sort-row" style={{ margin: 0 }}>
+          {['7d', '30d', 'all'].map((p) => (
+            <button
+              key={p}
+              className={`chip ${period === p ? 'active' : ''}`}
+              aria-pressed={period === p}
+              onClick={() => setPeriod(p)}
+            >{p.toUpperCase()}</button>
+          ))}
         </div>
-        <PnLChart
-          data={series.map((s) => ({ t: s.ts, y: metric === 'equity' ? s.equity : s.pnl }))}
-          kind={metric}
-        />
 
         <div className="section-header">DAILY PNL ({period.toUpperCase()})</div>
         <div className="card">

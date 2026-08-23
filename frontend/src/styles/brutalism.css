@@ -120,11 +120,32 @@ body {
 }
 .stat-cell .value { font-size: 15px; font-weight: 600; font-family: var(--mono); color: var(--text); }
 
-/* Buttons — one solid green primary per view; ghost/danger stay glass */
+/* Buttons — tinted liquid glass.
+ *
+ * The primary was a flat green fill with ink-coloured text. It is now glass:
+ * a blurred, over-saturated backdrop under a green-tinted body, with a bright
+ * specular rim along the top edge and a soft lift beneath. Four layers is what
+ * separates glass from a translucent rectangle.
+ *
+ * Contrast is the constraint that shapes the recipe. Label text sits on the
+ * TINTED body, never on the thinnest part, and the tint is heavy enough that
+ * --green-deep on it stays past 4.5:1 on both the paper and the surface
+ * backgrounds this button appears over. That is why the body carries a solid
+ * colour underneath the gradient rather than relying on the backdrop alone. */
 .btn {
-  background: var(--green-fill);
-  border: 1px solid var(--green-deep);
-  color: var(--green-ink);
+  position: relative;
+  isolation: isolate;
+  background:
+    linear-gradient(158deg, rgba(255, 255, 255, 0.58) 0%, rgba(255, 255, 255, 0.16) 44%, rgba(11, 158, 99, 0.22) 100%),
+    rgba(11, 158, 99, 0.16);
+  backdrop-filter: blur(14px) saturate(185%);
+  -webkit-backdrop-filter: blur(14px) saturate(185%);
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.8),
+    inset 0 -1px 0 rgba(11, 158, 99, 0.16),
+    0 6px 18px -8px rgba(20, 32, 26, 0.34);
+  color: var(--green-deep);
   font-family: inherit;
   font-size: 12px;
   font-weight: 600;
@@ -132,24 +153,83 @@ body {
   padding: 9px 16px;
   cursor: pointer;
   border-radius: var(--r-md);
-  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+  transition: background 0.14s ease, box-shadow 0.14s ease, border-color 0.14s ease, transform 0.14s ease;
 }
-.btn:hover { background: var(--green-deep); color: var(--bg); }
-.btn:active { opacity: 0.9; }
+/* The specular sweep, as its own layer so hover can brighten it without
+   touching the tint underneath. */
+.btn::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  pointer-events: none;
+  background: linear-gradient(138deg, rgba(255, 255, 255, 0.52) 0%, rgba(255, 255, 255, 0) 40%);
+  opacity: 0.9;
+  transition: opacity 0.14s ease;
+}
+.btn:hover {
+  background:
+    linear-gradient(158deg, rgba(255, 255, 255, 0.66) 0%, rgba(255, 255, 255, 0.2) 44%, rgba(11, 158, 99, 0.3) 100%),
+    rgba(11, 158, 99, 0.24);
+  border-color: rgba(255, 255, 255, 0.7);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    inset 0 -1px 0 rgba(11, 158, 99, 0.22),
+    0 10px 24px -10px rgba(11, 158, 99, 0.5);
+  color: var(--green-deep);
+}
+.btn:hover::before { opacity: 1; }
+.btn:active { transform: translateY(1px); box-shadow: inset 0 1px 3px rgba(20, 32, 26, 0.18); }
 .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn:disabled:hover { transform: none; }
 .btn:focus-visible { outline: 2px solid var(--green-deep); outline-offset: 2px; }
+
+/* Without backdrop-filter the blur silently does nothing and the label would
+   sit on a near-transparent panel over arbitrary content. Fall back to an
+   opaque tint that keeps the same contrast promise. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .btn { background: #d3e6dc; border-color: var(--border-strong); }
+  .btn:hover { background: #c4ddd1; }
+}
 .btn-danger {
-  background: rgba(217, 45, 63, 0.08);
-  border-color: rgba(217, 45, 63, 0.4);
+  background:
+    linear-gradient(158deg, rgba(255, 255, 255, 0.5) 0%, rgba(255, 255, 255, 0.12) 44%, rgba(179, 36, 47, 0.2) 100%),
+    rgba(179, 36, 47, 0.12);
+  border-color: rgba(255, 255, 255, 0.45);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.7),
+    inset 0 -1px 0 rgba(179, 36, 47, 0.18),
+    0 6px 18px -8px rgba(20, 32, 26, 0.3);
   color: var(--red);
 }
-.btn-danger:hover { background: var(--red); color: var(--bg); }
+.btn-danger:hover {
+  background:
+    linear-gradient(158deg, rgba(255, 255, 255, 0.6) 0%, rgba(255, 255, 255, 0.16) 44%, rgba(179, 36, 47, 0.28) 100%),
+    rgba(179, 36, 47, 0.18);
+  border-color: rgba(255, 255, 255, 0.62);
+  color: var(--red);
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .btn-danger { background: #f0d7d9; }
+  .btn-danger:hover { background: #e8c6c9; }
+}
+/* Ghost is the quiet one: it keeps the glass rim and lift but drops the tint,
+   so a view with two buttons still reads as one primary and one secondary. */
 .btn-ghost {
-  background: transparent;
-  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.22);
+  border: 1px solid rgba(255, 255, 255, 0.42);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6), 0 4px 14px -8px rgba(20, 32, 26, 0.26);
   color: var(--muted);
 }
-.btn-ghost:hover { color: var(--green-deep); border-color: var(--green); }
+.btn-ghost:hover {
+  background: rgba(255, 255, 255, 0.36);
+  border-color: rgba(255, 255, 255, 0.6);
+  color: var(--green-deep);
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .btn-ghost { background: var(--surface2); border-color: var(--border); }
+}
 
 /* Positive / negative PnL colors */
 .pos { color: var(--green-text); }
