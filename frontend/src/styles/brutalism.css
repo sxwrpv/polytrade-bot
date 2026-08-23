@@ -256,14 +256,17 @@ input:focus, select:focus {
 .app { display: flex; flex-direction: column; min-height: 100vh; }
 .app-header {
   position: sticky; top: 0; z-index: 15;
+  display: flex; align-items: center;
   background: var(--bg);
   border-bottom: 1px solid var(--border);
   color: var(--text);
   font-size: 13px;
   font-weight: 600;
-  letter-spacing: 0.14em;
-  padding: 13px 16px;
+  letter-spacing: 0.04em;
+  padding: 9px 16px;
 }
+.app-brand { display: inline-flex; align-items: center; gap: 9px; }
+.app-brand .brand-logo { width: 28px; height: 28px; border-radius: 9px; }
 .content { flex: 1; padding: 12px 16px 100px; max-width: 900px; width: 100%; margin: 0 auto; }
 .muted { color: var(--muted); }
 .small { font-size: 11px; }
@@ -416,18 +419,56 @@ a { color: inherit; }
 .public-site { min-height: 100vh; font-size: 15px; }
 .public-wrap { width: min(1080px, calc(100% - 48px)); margin-inline: auto; }
 
-/* Navigation — a hairline rule under flat paper, not a floating glass pill. */
+/* Shared site navigation: one restrained liquid-glass capsule, inspired by the
+   Saved control. Dense data surfaces remain flat; only this wayfinding control
+   receives blur and layered highlights. */
+.site-switcher {
+  display: inline-flex; align-items: center; gap: 3px;
+  padding: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.72);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.48);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    inset 0 -1px 0 rgba(20, 32, 26, 0.06),
+    0 8px 24px rgba(20, 32, 26, 0.09);
+  backdrop-filter: blur(18px) saturate(150%);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+}
+.site-switcher a {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-height: 32px; padding: 0 14px;
+  border: 1px solid transparent; border-radius: 999px;
+  color: var(--muted); font-size: 11px; font-weight: 600;
+  letter-spacing: .08em; text-decoration: none; text-transform: uppercase;
+  transition: background .16s ease, border-color .16s ease, color .16s ease;
+}
+.site-switcher a:hover { color: var(--green-deep); background: rgba(255, 255, 255, 0.48); }
+.site-switcher a[aria-current='page'] {
+  color: var(--green-deep);
+  border-color: rgba(20, 32, 26, 0.1);
+  background: rgba(238, 248, 243, 0.82);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 2px 8px rgba(20, 32, 26, 0.08);
+}
+.site-switcher a:focus-visible { outline: 2px solid var(--green-deep); outline-offset: 2px; }
+
+/* Navigation — flat paper supports a centered glass site switcher. */
 .public-nav {
   position: sticky; top: 0; z-index: 30;
-  display: flex; align-items: center; gap: 30px;
-  width: 100%; padding: 14px max(24px, calc((100% - 1080px) / 2));
-  background: color-mix(in srgb, var(--bg) 94%, transparent);
+  display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center; gap: 24px;
+  width: 100%; padding: 10px max(24px, calc((100% - 1240px) / 2));
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
   border-bottom: 1px solid var(--border);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
 }
 @supports not (background: color-mix(in srgb, red 50%, transparent)) {
-  .public-nav { background: var(--bg); }
+  .public-nav { background: rgba(238, 242, 239, 0.94); }
 }
-.public-brand { display: inline-flex; align-items: center; gap: 10px; font-size: 16px; font-weight: 700; letter-spacing: -.01em; text-decoration: none; margin-right: auto; color: var(--text); }
+.public-brand { display: inline-flex; align-items: center; gap: 10px; font-size: 16px; font-weight: 700; letter-spacing: -.01em; text-decoration: none; color: var(--text); }
+.public-nav > .public-brand { justify-self: start; }
+.public-nav-actions { display: flex; align-items: center; justify-self: end; gap: 20px; }
 .public-nav-link { color: var(--muted); text-decoration: none; font-size: 13px; font-weight: 600; }
 .public-nav-link:hover, .public-text-link:hover { color: var(--green-deep); }
 .btn[href] { display: inline-flex; align-items: center; justify-content: center; gap: 8px; text-decoration: none; }
@@ -478,7 +519,7 @@ a { color: inherit; }
 .ack-row{display:flex;align-items:flex-start;gap:11px;cursor:pointer;font-size:14px;line-height:1.55}.ack-row input{width:18px;height:18px;accent-color:var(--green);flex:none}.ack-row.card{margin:3px 0;padding:14px}.security-check{margin-top:7px}.security-check h2{font-size:17px;margin-bottom:6px}.security-check p{color:var(--muted);font-size:14px;line-height:1.6;margin-bottom:13px}.notice-box{padding:10px 12px;border:1px solid rgba(180,125,10,.28);border-radius:var(--r-md);background:rgba(255,196,61,.09);color:#72520e;font-size:14px;line-height:1.6}.funding-disclosure{margin-bottom:12px}.funding-instructions{font-size:14px;line-height:1.6}.funding-note{margin-top:9px;border-top:1px solid var(--border);padding-top:9px}.logout-note{font-size:14px;line-height:1.55;margin-top:16px}.center{text-align:center}.center-link{text-align:center}.launch-state{margin-top:90px}.launch-loading{min-height:50vh;justify-content:center}
 
 @media (max-width: 760px) {
-  .public-wrap{width:min(100% - 28px, 620px)}.public-nav{top:7px}.public-nav-link{display:none}.public-small-cta{font-size:10px}.public-hero{grid-template-columns:1fr;min-height:0;padding:75px 0 70px;gap:55px}.public-site h1{font-size:clamp(42px,14vw,62px)}.hero-lede{font-size:16px}.hero-actions{align-items:flex-start;flex-direction:column;gap:17px}.benefits,.know{padding-block:72px}.benefits>div:first-child{display:block}.know{grid-template-columns:1fr;gap:45px}.know-list article{grid-template-columns:1fr;gap:7px}.final-inner{align-items:flex-start;flex-direction:column}.public-footer{grid-template-columns:1fr}.public-footer small{grid-column:auto}.onboard{margin:20px auto;padding:18px}.onboard-terms{grid-template-columns:1fr}
+  .public-wrap{width:min(100% - 28px, 620px)}.public-nav{top:7px;grid-template-columns:minmax(0,1fr) auto;gap:8px 12px;padding:8px 14px}.public-nav>.site-switcher{grid-column:1/-1;grid-row:2;justify-self:center}.public-nav-actions{gap:8px}.public-nav-link{display:none}.public-small-cta{font-size:10px}.site-switcher a{min-height:29px;padding:0 11px;font-size:9px}.public-hero{grid-template-columns:1fr;min-height:0;padding:75px 0 70px;gap:55px}.public-site h1{font-size:clamp(42px,14vw,62px)}.hero-lede{font-size:16px}.hero-actions{align-items:flex-start;flex-direction:column;gap:17px}.benefits,.know{padding-block:72px}.benefits>div:first-child{display:block}.know{grid-template-columns:1fr;gap:45px}.know-list article{grid-template-columns:1fr;gap:7px}.final-inner{align-items:flex-start;flex-direction:column}.public-footer{grid-template-columns:1fr}.public-footer small{grid-column:auto}.onboard{margin:20px auto;padding:18px}.onboard-terms{grid-template-columns:1fr}
 }
 @media (prefers-reduced-motion: reduce) {
   html{scroll-behavior:auto}*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}.product-preview{animation:none}

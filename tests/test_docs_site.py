@@ -146,6 +146,49 @@ def test_brand_mark_and_typography_are_consistent_across_docs_surfaces():
     assert '>Glossary</a>' not in docs.text
 
 
+def test_public_headers_share_home_screener_docs_liquid_glass_navigation():
+    docs = client.get("/docs")
+    api_docs = client.get("/api/docs")
+    redoc = client.get("/api/redoc")
+    styles = client.get("/docs/assets/styles.css").text
+
+    for response in (docs, api_docs, redoc):
+        assert response.status_code == 200
+        assert 'src="/docs/assets/polytrade-mark.png"' in response.text
+        assert 'class="site-switcher"' in response.text
+        assert 'href="/">Home</a>' in response.text
+        assert 'href="/screener">Screener</a>' in response.text
+        assert 'href="/docs"' in response.text
+        assert '>Docs</a>' in response.text
+
+    assert 'aria-current="page">Docs</a>' in docs.text
+    assert "backdrop-filter: blur(" in styles
+    assert ".site-switcher" in styles
+    assert "border-radius: 999px" in styles
+
+
+def test_docs_header_compacts_search_before_it_can_overlap_center_navigation():
+    styles = client.get("/docs/assets/styles.css").text
+    responsive = styles[styles.index("@media (max-width: 1380px)") :]
+
+    assert ".search-trigger span" in responsive
+    assert ".search-trigger kbd" in responsive
+    assert "display: none" in responsive
+    assert ".search-trigger { width: 36px" in responsive
+
+
+def test_docs_and_api_headers_collapse_long_brand_labels_before_narrow_overlap():
+    styles = client.get("/docs/assets/styles.css").text
+    narrow = styles[styles.index("@media (max-width: 680px)") :]
+    api_styles = client.get("/docs/assets/api-docs.css").text
+    api_tablet = api_styles[api_styles.index("@media (max-width: 820px)") :]
+
+    assert ".brand > span" in narrow
+    assert "display: none" in narrow
+    assert ".api-topbar .brand > span" in api_tablet
+    assert "display: none" in api_tablet
+
+
 def test_existing_documentation_urls_remain_available():
     existing_slugs = {
         "overview",

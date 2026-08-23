@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import SiteSwitcher from '../components/SiteSwitcher'
 
 const BOT_URL = 'https://t.me/cpolytrade_bot'
 
@@ -47,11 +48,11 @@ export default function PublicHome() {
         <a className="public-brand" href="#top" aria-label="PolyTrade home">
           <img className="brand-logo" src="/brand/polytrade-mark.png" alt="" /><span>PolyTrade</span>
         </a>
-        <a className="public-nav-link" href="#speed">Speed</a>
-        <a className="public-nav-link" href="#how-it-works">How it works</a>
-        <a className="public-nav-link" href="/screener">Wallet Screener</a>
-        <a className="public-nav-link" href="/docs/system-design">System Design</a>
-        <a className="btn public-small-cta" href={BOT_URL}>Open Telegram <Arrow /></a>
+        <SiteSwitcher active="home" />
+        <div className="public-nav-actions">
+          <a className="public-nav-link" href="/docs/system-design">System Design</a>
+          <a className="btn public-small-cta" href={BOT_URL}>Open Telegram <Arrow /></a>
+        </div>
       </header>
 
       <main id="top">

@@ -123,7 +123,10 @@ test('landing explains the product with diagrams, not more generic cards', async
 })
 
 test('public landing gives the standalone Wallet Screener its own discoverable section', async () => {
-  const home = await read('src/pages/PublicHome.jsx')
+  const [home, switcher] = await Promise.all([
+    read('src/pages/PublicHome.jsx'),
+    read('src/components/SiteSwitcher.jsx'),
+  ])
   const start = home.indexOf('id="wallet-screener"')
   const end = home.indexOf('</section>', start)
 
@@ -134,7 +137,8 @@ test('public landing gives the standalone Wallet Screener its own discoverable s
   assert.match(section, /public history/i)
 
   const nav = home.slice(home.indexOf('public-nav'), home.indexOf('</header>'))
-  assert.match(nav, /href="\/screener"/)
+  assert.match(nav, /<SiteSwitcher active="home" \/>/)
+  assert.match(switcher, /\['screener', '\/screener', 'Screener'\]/)
   assert.doesNotMatch(section, /INSIDE THE APP/)
 })
 

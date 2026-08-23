@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { publicApi } from './publicApi'
 import RangeFilter from './RangeFilter'
+import SiteSwitcher from '../components/SiteSwitcher'
 import {
   DEFAULT_FILTERS,
   DEFAULT_PERIOD,
@@ -116,24 +117,28 @@ export default function ScreenerPage() {
   return (
     <div className="screener">
       <header className="screener-nav">
-        <a className="screener-brand" href="/" aria-label="PolyTrade home">
-          <img className="brand-logo" src="/brand/polytrade-mark.png" alt="" />
-          <span>PolyTrade</span>
-          <span className="screener-brand-divider" />
-          <span className="screener-brand-label">Wallet Screener</span>
-        </a>
-        <div className="screener-search">
-          <label className="visually-hidden" htmlFor="screener-search">
-            Search name, X handle or 0x address
-          </label>
-          <input
-            id="screener-search" type="search" value={search}
-            placeholder="Search a name, X handle, or 0x address…"
-            onChange={(event) => changeSearch(event.target.value)}
-          />
+        <div className="screener-nav-primary">
+          <a className="screener-brand" href="/" aria-label="PolyTrade home">
+            <img className="brand-logo" src="/brand/polytrade-mark.png" alt="" />
+            <span>PolyTrade</span>
+            <span className="screener-brand-divider" />
+            <span className="screener-brand-label">Wallet Screener</span>
+          </a>
+          <div className="screener-search">
+            <label className="visually-hidden" htmlFor="screener-search">
+              Search name, X handle or 0x address
+            </label>
+            <input
+              id="screener-search" type="search" value={search}
+              placeholder="Search a name, X handle, or 0x address…"
+              onChange={(event) => changeSearch(event.target.value)}
+            />
+          </div>
         </div>
-        <nav className="screener-nav-links" aria-label="Site">
-          <a href="/docs">Documentation</a>
+
+        <SiteSwitcher active="screener" />
+
+        <nav className="screener-nav-links" aria-label="Product links">
           <a href="/docs/system-design">System design</a>
           <a className="btn screener-nav-cta" href={botDeepLink()}>Open Telegram ↗</a>
         </nav>

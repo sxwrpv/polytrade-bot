@@ -21,15 +21,19 @@ test('public product loads the documentation typography and supplied PolyTrade m
   assert.doesNotMatch(home, /className="brand-mark">P</)
 })
 
-test('onboarding uses the supplied mark while authenticated app header remains wordmark-only', async () => {
+test('onboarding and the authenticated app header use the supplied mark', async () => {
   const [app, onboarding, legacy] = await Promise.all([
     read('src/App.jsx'),
     read('src/pages/Onboarding.jsx'),
     read('src/pages/LegacyLink.jsx'),
   ])
 
-  assert.match(app, /<header className="app-header">POLYTRADE<\/header>/)
-  assert.doesNotMatch(app, /<header className="app-header">[^<]*<img/)
+  const header = app.slice(
+    app.indexOf('<header className="app-header">'),
+    app.indexOf('</header>', app.indexOf('<header className="app-header">')),
+  )
+  assert.match(header, /src="\/brand\/polytrade-mark\.png"/)
+  assert.match(header, /className="app-brand"/)
   for (const source of [app, onboarding, legacy]) {
     assert.match(source, /src="\/brand\/polytrade-mark\.png"/)
     assert.doesNotMatch(source, /<div className="logo"><span>P<\/span>/)
