@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wallet — PolyTrade Screener</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/screener/tokens.css">
+<link rel="stylesheet" href="/screener/screener.css">
+<link rel="stylesheet" href="/screener/wallet.css">
+<link rel="stylesheet" href="/screener/glass.css">
+</head>
+<body class="screener">
+<nav class="screener-nav">
+  <a class="screener-brand" href="/"><span class="brand-logo" aria-hidden="true">PT</span>PolyTrade</a>
+  <span class="screener-brand-divider" aria-hidden="true"></span>
+  <span class="screener-brand-label">Wallet</span>
+  <div class="screener-nav-links">
+    <a href="/screener/">← Screener</a>
+    <a id="pm-link" href="https://polymarket.com" target="_blank" rel="noreferrer">Polymarket ↗</a>
+    <span id="saved-slot"></span>
+  </div>
+</nav>
+<div class="wallet-shell" id="page">
+  <p class="screener-state">Reading this wallet's tape from Polymarket…</p>
+</div>
+<script type="module" src="/screener/wallet.js"></script>
+</body>
+</html>

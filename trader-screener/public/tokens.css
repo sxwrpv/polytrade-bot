@@ -1,0 +1,62 @@
+/* PolyTrade design tokens.
+ *
+ * Copied from polytrade/frontend/src/styles/brutalism.css so this surface can
+ * be lifted into that app without a palette fork. Keep the values identical —
+ * if brutalism.css changes, change this file, do not diverge.
+ *
+ * Type roles, applied identically on every surface:
+ *   Instrument Serif — editorial display headings only.
+ *   Inter            — body copy, navigation, controls, buttons, tables.
+ *   JetBrains Mono   — addresses, numbers, periods, statuses, API paths, times.
+ *
+ * Green has three jobs and three tokens, because one value cannot do all three
+ * accessibly against #eef2ef paper (WCAG 2.1):
+ *   --green      #0b9e63  fills, rules, swatches. Never body-size text (3.05).
+ *   --green-text #087a4b  green text on paper: 4.77, passes AA.
+ *   --green-deep #07603c  emphasised green text: 6.76.
+ */
+
+:root {
+  --bg:            #eef2ef;
+  --surface:       #e7ece9;
+  --surface2:      #e3e9e5;
+  --green:         #0b9e63;
+  --green-text:    #087a4b;
+  --green-deep:    #07603c;
+  --green-fill:    #0b9e63;
+  --green-ink:     #14201a;
+  --green-soft:    rgba(11, 158, 99, 0.10);
+  --green-wash:    rgba(11, 158, 99, 0.05);
+  --red:           #b3242f;
+  --yellow:        #8a5d06;
+  --cyan:          #0879c9;
+  --text:          #14201a;
+  --muted:         #5c6b62;
+  --faint:         #7b8a81;
+  --border:        rgba(20, 32, 26, 0.12);
+  --border-strong: #c3cec7;
+  --r-lg: 12px;
+  --r-md: 8px;
+  --r-sm: 6px;
+  --serif: 'Instrument Serif', Georgia, serif;
+  --mono: 'JetBrains Mono', 'Consolas', monospace;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-size: 13px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: inherit; }
+
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px;
+  margin: -1px; padding: 0; border: 0; overflow: hidden;
+  clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap;
+}

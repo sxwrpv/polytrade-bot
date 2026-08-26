@@ -56,11 +56,27 @@ polytradebot.live, www.polytradebot.live {
 	}
 	header @revalidate Cache-Control "no-cache"
 
-	reverse_proxy app:8080
+	# The canonical /screener surface is the dedicated Trader Screener service.
+	# handle_path strips /screener before proxying, so its internal routes remain
+	# /, /api/* and /trader/* without colliding with the main FastAPI app.
+	redir /screener /screener/ 308
+	handle_path /screener/* {
+		reverse_proxy trader-screener:4310
+	}
+
+	handle {
+		reverse_proxy app:8080
+	}
 }
 
 # Plain-HTTP access by IP, kept so health checks and monitoring don't depend on
 # DNS or a certificate. No TLS here (a public CA will not issue for a bare IP).
 http://52.51.200.58 {
-	reverse_proxy app:8080
+	redir /screener /screener/ 308
+	handle_path /screener/* {
+		reverse_proxy trader-screener:4310
+	}
+	handle {
+		reverse_proxy app:8080
+	}
 }

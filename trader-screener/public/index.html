@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trader Screener — PolyTrade</title>
+<meta name="description" content="Rank Polymarket wallets by what survives being copied, not by bankroll.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/screener/tokens.css">
+<link rel="stylesheet" href="/screener/screener.css">
+<link rel="stylesheet" href="/screener/glass.css">
+</head>
+<body class="screener">
+
+<nav class="screener-nav">
+  <a class="screener-brand" href="/">
+    <span class="brand-logo" aria-hidden="true">PT</span>
+    PolyTrade
+  </a>
+  <span class="screener-brand-divider" aria-hidden="true"></span>
+  <span class="screener-brand-label">Screener</span>
+
+  <div class="screener-search">
+    <label class="visually-hidden" for="q">Search wallets</label>
+    <input id="q" type="search" placeholder="0x… or trader name" autocomplete="off" spellcheck="false">
+    <div class="hits" id="hits" hidden></div>
+  </div>
+
+  <div class="screener-nav-links">
+    <a href="#angles">Boards</a>
+    <a href="#methodology">Method</a>
+    <span id="saved-slot"></span>
+    <a class="btn btn-primary" href="https://t.me/cpolytrade_bot" target="_blank" rel="noreferrer">Open bot</a>
+  </div>
+</nav>
+
+<div class="screener-shell">
+
+  <header class="screener-intro">
+    <p class="screener-eyebrow">Trader screener</p>
+    <h1>Rank by what survives being copied.</h1>
+    <p class="screener-lede">
+      A profit leaderboard tells you who has the biggest bankroll. This ranks wallets by what was
+      left on their <b>finished</b> trades after the spread you pay for filling behind them and the
+      fees on the way in — then shows who is genuinely good at <b>one specific thing</b>, from NBA
+      spreads to election props to Bitcoin longshots.
+    </p>
+  </header>
+
+  <aside class="screener-sidebar" id="sidebar"></aside>
+
+  <main class="screener-main">
+    <div class="notice" id="staleness" hidden></div>
+
+    <section class="sec" style="margin-top:0" data-section="Board">
+      <div class="sec-head">
+        <div>
+          <p class="sec-kicker">The copy board</p>
+          <h2>Wallets worth copying</h2>
+        </div>
+        <span class="coverage" id="count">loading…</span>
+      </div>
+      <p class="sec-lede">
+        Copy Score is what puts a wallet on this board and how high; the money column beside it only
+        separates wallets that scored the same. It asks whether following them has historically left
+        anything after costs.
+      </p>
+      <div class="screener-results" id="results">
+        <p class="screener-state">Loading the cohort…</p>
+      </div>
+    </section>
+
+    <section class="sec" id="trending" hidden></section>
+    <section class="sec" id="index" hidden></section>
+    <section class="sec" id="angles" hidden></section>
+    <section class="sec" id="events" hidden></section>
+
+    <section class="sec" id="methodology">
+      <div class="sec-head"><div>
+        <p class="sec-kicker">Method</p>
+        <h2>What each number is, and is not</h2>
+      </div></div>
+      <ul class="rail-notes" style="margin-top:16px">
+        <li><b>Copy Score</b> is a trader-level verdict on their finished record after copy costs, not a
+          forecast and not a grade on any individual trade. It assumes every one of their trades was
+          copied exactly; your filters, budget and timing will change it.</li>
+        <li><b>A missing metric is shown as unavailable, never as zero.</b> A wallet with no volume in a
+          window has no ROI — it is not a 0% wallet.</li>
+        <li><b>Board figures are a snapshot</b> of a ranked cohort, not the whole of Polymarket, and they
+          are refreshed periodically rather than live. The wallet pages behind them read Polymarket's
+          public API at request time.</li>
+        <li><b>Angle boards are measured inside one slice only</b> — resolved trades in that exact market
+          and bet type, not overall profit. A wallet can lead a board and still be losing overall.</li>
+        <li><b>Past wallet activity does not predict future results.</b></li>
+      </ul>
+    </section>
+
+    <footer class="screener-footer">
+      <p>
+        Local research surface. Not affiliated with Polymarket. Nothing here is financial advice, and
+        no order is placed from this page — the Copy action hands you off to the PolyTrade bot.
+        <span id="provenance"></span>
+      </p>
+    </footer>
+  </main>
+
+  <aside class="screener-rail">
+    <p class="rail-heading">Reading the board</p>
+    <ul class="rail-notes">
+      <li><b>Proven</b> — copying them has worked on their finished trades.</li>
+      <li><b>Ahead</b> — they finish ahead of what copying costs, but only just.</li>
+      <li><b>Caution</b> — they make money; it does not survive being copied.</li>
+      <li><b>Losing</b> — losing on their own trades, before copy costs start.</li>
+      <li><b>Not comparable</b> — they close out early, so the number is not measuring the same thing.</li>
+    </ul>
+    <p class="rail-hint">
+      Wallets flagged <b>Market maker</b>, <b>Arbitrage</b> or <b>Very high frequency</b> are harder to
+      mirror: the edge lives in the spread, in holding both sides, or in speed a copy cannot match.
+    </p>
+    <p class="rail-hint">
+      <a class="rail-link" href="https://polymarket.com" target="_blank" rel="noreferrer">polymarket.com ↗</a>
+    </p>
+  </aside>
+</div>
+
+<script type="module" src="/screener/board.js"></script>
+</body>
+</html>

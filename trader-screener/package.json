@@ -1,0 +1,13 @@
+{
+  "name": "polytrade-screener",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Polymarket trader screener — PolyTrade surface, reconstructed board rules, live wallet metrics.",
+  "scripts": {
+    "start": "node server.mjs",
+    "ingest": "node scripts/ingest.mjs",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "engines": { "node": ">=20" }
+}
