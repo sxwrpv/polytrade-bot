@@ -95,6 +95,15 @@ test('numeric filters use an explicit enable control so exact boundaries remain 
   assert.match(slider, /'off'/)
 })
 
+test('Copy Score band checkboxes cannot inherit the global full-width input rule', async () => {
+  const css = await read('src/styles/screener.css')
+  const rule = css.match(/\.band-check input\s*{[^}]*}/s)
+
+  assert.ok(rule, 'missing band checkbox rule')
+  assert.match(rule[0], /width:\s*14px/)
+  assert.match(rule[0], /height:\s*14px/)
+})
+
 test('the notes rail detaches before a 1280px desktop squeezes the Analyze action', async () => {
   const css = await read('src/styles/screener.css')
 
