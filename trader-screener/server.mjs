@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import * as pm from './lib/polymarket.mjs';
 import { buildProfile } from './lib/metrics.mjs';
 import * as screener from './lib/publicScreener.mjs';
+import { fetchLiveUniverse } from './lib/liveLeaderboard.mjs';
 import {
   canonicalClientIdentity, ConcurrencyGate, createCoalescer, createRateLimiter, TtlLruCache,
 } from './lib/serviceGuards.mjs';
@@ -37,6 +38,26 @@ const profileCache = new TtlLruCache({ max: 16, ttlMs: 5 * 60 * 1000 });
 const profileInflight = createCoalescer();
 const profileGate = new ConcurrencyGate(2);
 const LIVE_PROFILE_DEADLINE_MS = 30_000;
+const liveLeaderboardCache = new TtlLruCache({ max: 3, ttlMs: 60 * 1000 });
+const liveLeaderboardInflight = createCoalescer();
+
+async function liveLeaderboard(period) {
+  const hit = liveLeaderboardCache.get(period);
+  if (hit !== undefined) return hit;
+  return liveLeaderboardInflight.run(period, async () => {
+    const cached = liveLeaderboardCache.get(period);
+    if (cached !== undefined) return cached;
+    const deadline = new AbortController();
+    const timer = setTimeout(() => deadline.abort(new Error('live leaderboard deadline exceeded')), 15_000);
+    try {
+      const rows = await fetchLiveUniverse({ period, snapshot: dataset, signal: deadline.signal });
+      liveLeaderboardCache.set(period, rows);
+      return rows;
+    } finally {
+      clearTimeout(timer);
+    }
+  });
+}
 
 async function traderProfile(wallet) {
   const hit = profileCache.get(wallet);
@@ -151,6 +172,13 @@ const server = createServer(async (req, res) => {
       } catch (error) {
         return apiError(res, error, 429);
       }
+    }
+
+    if (p === '/api/live/leaderboard') {
+      const period = url.searchParams.get('period') || 'd7';
+      if (!['d7', 'd30', 'all'].includes(period)) return json(res, 422, { detail: 'period must be d7, d30, or all' });
+      try { return json(res, 200, await liveLeaderboard(period)); }
+      catch (error) { return apiError(res, error, 502); }
     }
 
     // PolyTrade-shaped read surface: the truthful subset this imported

@@ -29,7 +29,6 @@
   </div>
 
   <div class="screener-nav-links">
-    <a href="#angles">Boards</a>
     <a href="#methodology">Method</a>
     <span id="saved-slot"></span>
     <a class="btn btn-primary" href="https://t.me/cpolytrade_bot" target="_blank" rel="noreferrer">Open bot</a>
@@ -63,9 +62,8 @@
         <span class="coverage" id="count">loading…</span>
       </div>
       <p class="sec-lede">
-        Copy Score is what puts a wallet on this board and how high; the money column beside it only
-        separates wallets that scored the same. It asks whether following them has historically left
-        anything after costs.
+        Live Polymarket leaderboard data for the selected period. PnL, ROI and volume refresh from
+        Polymarket; Copy Score is shown only where a wallet has a dated research score.
       </p>
       <div class="screener-results" id="results">
         <p class="screener-state">Loading the cohort…</p>
@@ -88,9 +86,9 @@
           copied exactly; your filters, budget and timing will change it.</li>
         <li><b>A missing metric is shown as unavailable, never as zero.</b> A wallet with no volume in a
           window has no ROI — it is not a 0% wallet.</li>
-        <li><b>Board figures are a snapshot</b> of a ranked cohort, not the whole of Polymarket, and they
-          are refreshed periodically rather than live. The wallet pages behind them read Polymarket's
-          public API at request time.</li>
+        <li><b>Leaderboard figures are live</b> from Polymarket for the selected 7D, 30D or all-time
+          window. Copy Score is a separate dated research overlay and is unavailable for wallets outside
+          that scored cohort.</li>
         <li><b>Angle boards are measured inside one slice only</b> — resolved trades in that exact market
           and bet type, not overall profit. A wallet can lead a board and still be losing overall.</li>
         <li><b>Past wallet activity does not predict future results.</b></li>

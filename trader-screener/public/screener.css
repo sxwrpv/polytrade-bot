@@ -112,11 +112,11 @@
   padding: 30px 0 26px 22px; border-left: 1px solid var(--border); scrollbar-width: thin;
 }
 
-@media (max-width: 1180px) {
+@media (max-width: 1400px) {
   .screener-shell { grid-template-columns: 248px minmax(0, 1fr); grid-template-areas: "intro intro" "sidebar main"; column-gap: 34px; }
   .screener-rail { display: none; }
 }
-@media (max-width: 860px) {
+@media (max-width: 1080px) {
   .screener-shell { display: flex; flex-direction: column; width: calc(100% - 32px); }
   .screener-intro { order: 1; padding: 26px 0 0; }
   .screener-sidebar {
@@ -197,10 +197,16 @@
   margin-top: 22px; border: 1px solid var(--border); border-radius: var(--r-lg);
   background: var(--paper-surface); overflow: hidden;
 }
-.screener-tablewrap { overflow-x: auto; }
-.screener-table { width: 100%; min-width: 980px; border-collapse: collapse; }
+.screener-tablewrap { max-width: 100%; overflow-x: auto; }
+.screener-table { width: 100%; min-width: 760px; table-layout: fixed; border-collapse: collapse; }
+.screener-table th:nth-child(1) { width: 38px; }
+.screener-table th:nth-child(2) { width: 32%; }
+.screener-table th:nth-child(3) { width: 118px; }
+.screener-table th:nth-child(4) { width: 72px; }
+.screener-table th:nth-child(5), .screener-table th:nth-child(6) { width: 92px; }
+.screener-table th:nth-child(7) { width: 102px; }
 .screener-table th, .screener-table td {
-  padding: 12px 13px; text-align: left; border-bottom: 1px solid var(--border); vertical-align: middle;
+  padding: 11px 10px; text-align: left; border-bottom: 1px solid var(--border); vertical-align: middle;
 }
 .screener-table thead th {
   border-bottom: 1px solid var(--border-strong); color: var(--muted); font-family: var(--mono);
@@ -218,7 +224,10 @@
 .screener-more { padding: 14px 16px; border-top: 1px solid var(--border); text-align: center; }
 
 .who { display: flex; align-items: center; gap: 9px; min-width: 0; }
-.who .who-name { font-size: 13px; font-weight: 500; text-decoration: none; color: var(--text); }
+.who .who-name {
+  display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 13px; font-weight: 500; text-decoration: none; color: var(--text);
+}
 .who .who-name:hover { color: var(--green-deep); text-decoration: underline; }
 .who .who-addr { display: block; font-family: var(--mono); font-size: 10px; color: var(--muted); }
 .av {

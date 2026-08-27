@@ -14,8 +14,8 @@
 /** Same contract as polytrade/frontend/src/screener/publicApi.js. */
 const API_BASE = globalThis.__API_BASE__ || '/screener/api';
 
-/** 'snapshot' — cached Polycopy cohort.  'polytrade' — PolyTrade screener API. */
-export const SOURCE = globalThis.__SCREENER_SOURCE__ || 'snapshot';
+/** 'live' — current Polymarket leaderboard. 'snapshot' and 'polytrade' are explicit fallbacks. */
+export const SOURCE = globalThis.__SCREENER_SOURCE__ || 'live';
 
 async function get(path, params = {}) {
   const query = new URLSearchParams();
@@ -47,6 +47,7 @@ export const api = {
   wallets: (params) => get('/public/screener/wallets', params),
   wallet: (address, params) => get(`/public/screener/wallets/${address}`, params),
   provenance: () => get('/public/screener/provenance'),
+  liveLeaderboard: (period) => get('/live/leaderboard', { period }),
 };
 
 const PERIOD_TO_POLYTRADE = { d7: '7d', d30: '30d' };
@@ -111,6 +112,7 @@ export function toPolytradeQuery({ period = 'd30', metric = 'pnl', search = '', 
 
 /** Load the board's universe from whichever source is configured. */
 export async function loadUniverse({ period = 'd30' } = {}) {
+  if (SOURCE === 'live') return api.liveLeaderboard(period);
   if (SOURCE === 'polytrade') {
     const payload = await api.wallets(toPolytradeQuery({ period, limit: 100 }));
     return {

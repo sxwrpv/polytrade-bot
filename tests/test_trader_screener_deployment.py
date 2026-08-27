@@ -69,12 +69,32 @@ class TraderScreenerProductionContractTests(unittest.TestCase):
         css = (SCREENER / "public" / "glass.css").read_text()
         self.assertIn(".drawer[hidden], .drawer-scrim[hidden] { display: none !important; }", css)
 
-    def test_frozen_category_boards_are_labelled_as_archived(self):
+    def test_primary_board_defaults_to_live_data_and_drops_stale_secondary_boards(self):
+        data_source = (SCREENER / "public" / "lib" / "dataSource.js").read_text()
+        index = (SCREENER / "public" / "index.html").read_text()
+        server = (SCREENER / "server.mjs").read_text()
+        self.assertIn("|| 'live'", data_source)
+        self.assertIn("fetchLiveUniverse", server)
+        self.assertIn("/api/live/leaderboard", server)
+        self.assertIn("Live Polymarket leaderboard", index)
+        self.assertNotIn('href="#angles">Boards</a>', index)
+        self.assertNotIn("Board figures are a snapshot", index)
+
+    def test_wallet_table_fits_without_stale_open_value_or_trend_columns(self):
         board = (SCREENER / "public" / "board.js").read_text()
-        self.assertIn("ds.meta.boardsFrozen", board)
-        self.assertIn("ds.meta.boardsAsOf", board)
-        self.assertIn("archived snapshot frozen as of", board)
-        self.assertIn("they are historical research, not current rankings", board)
+        css = (SCREENER / "public" / "screener.css").read_text()
+        self.assertNotIn("{ label: 'Open value'", board)
+        self.assertNotIn("{ label: 'Trend'", board)
+        self.assertNotIn("{ label: 'Coverage'", board)
+        self.assertIn("min-width: 760px", css)
+        self.assertIn("table-layout: fixed", css)
+        self.assertIn("@media (max-width: 1400px)", css)
+        self.assertIn("@media (max-width: 1080px)", css)
+        self.assertIn("SOURCE === 'live' ? Promise.resolve(null)", board)
+        live_refresh = board[board.index("async function changePeriod"):board.index("let ds = null")]
+        fetch_at = live_refresh.index("const next = await loadUniverse")
+        commit_at = live_refresh.index("state.period = period", fetch_at)
+        self.assertLess(fetch_at, commit_at, "live period and dataset must commit atomically")
 
     @staticmethod
     def _service_block(compose: str, name: str) -> str:

@@ -15,7 +15,7 @@ const $ = (s) => document.querySelector(s);
 
 const DEFAULTS = {
   view: 'all',
-  metric: M.DEFAULT_SORT,
+  metric: SOURCE === 'live' ? 'pnl' : M.DEFAULT_SORT,
   period: M.DEFAULT_PERIOD,
   cat: 'all',
   direction: 'desc',
@@ -50,13 +50,45 @@ function update({ resetPage = true } = {}) {
   renderBoard();
 }
 
+let periodRequest = 0;
+async function changePeriod(period) {
+  if (SOURCE !== 'live') {
+    state.period = period;
+    state.visible = 20;
+    syncUrl();
+    renderSidebar();
+    renderBoard();
+    return;
+  }
+  const request = ++periodRequest;
+  $('#results').replaceChildren(el('p', 'screener-state', 'Refreshing the live leaderboard…'));
+  try {
+    const next = await loadUniverse({ period });
+    if (request !== periodRequest) return;
+    state.period = period;
+    state.visible = 20;
+    ds = next;
+    ceilingCache = null;
+    syncUrl();
+    renderProvenance();
+    renderSidebar();
+    renderAll();
+  } catch (error) {
+    if (request !== periodRequest) return;
+    renderSidebar();
+    renderBoard();
+    const notice = el('p', 'screener-state', `Could not refresh the live leaderboard: ${error.message}. Showing ${M.PERIOD_LABEL[state.period]} data.`);
+    $('#results').prepend(notice);
+  }
+}
+
 let ds = null, smi = null;
 
 async function boot() {
   try {
     [ds, smi] = await Promise.all([
       loadUniverse({ period: state.period }),
-      api.smi().catch(() => null),
+      SOURCE === 'live' ? Promise.resolve(null) : api.smi().catch(() => null),
     ]);
   } catch (e) {
     $('#results').replaceChildren(el('p', 'screener-state', `Could not load the cohort: ${e.message}`));
@@ -80,13 +112,15 @@ function renderProvenance() {
   const age = M.snapshotAge(ds.meta.generatedAt);
   const host = $('#provenance');
   host.replaceChildren();
-  host.append(SOURCE === 'polytrade'
-    ? 'Rows from the PolyTrade screener cache.'
-    : `Cohort snapshot of ${ds.traders.length.toLocaleString('en-US')} wallets, ${age.label}.`);
+  host.append(SOURCE === 'live'
+    ? `Live Polymarket leaderboard: ${ds.traders.length.toLocaleString('en-US')} wallets fetched ${age.label}. Copy Score, where available, is a dated research overlay from ${ds.meta.scoreGeneratedAt?.slice(0, 10) || 'the last screener snapshot'}.`
+    : SOURCE === 'polytrade'
+      ? 'Rows from the PolyTrade screener cache.'
+      : `Cohort snapshot of ${ds.traders.length.toLocaleString('en-US')} wallets, ${age.label}.`);
 
   const banner = $('#staleness');
   const warnings = [];
-  if (SOURCE !== 'polytrade' && age.stale) {
+  if (SOURCE === 'snapshot' && age.stale) {
     warnings.push(`The wallet cohort is ${age.label} and upstream normally regenerates it daily, so its rankings may have moved. Re-run node scripts/ingest.mjs to refresh it.`);
   }
   if (SOURCE !== 'polytrade' && ds.meta.boardsFrozen) {
@@ -190,7 +224,7 @@ function renderSidebar() {
     (v) => { state.metric = v; update(); }));
 
   host.append(segControl('Period', M.PERIODS.map((p) => [p, M.PERIOD_LABEL[p]]), state.period,
-    (v) => { state.period = v; update(); }));
+    (v) => { void changePeriod(v); }));
 
   if (ds.groups?.length) {
     host.append(segControl('Category', [['all', 'All'], ...ds.groups.map((g) => [g, g])], state.cat,
@@ -333,10 +367,7 @@ const COLUMNS = [
     help: "Great traders aren't always great to copy. Copy Score is what was left on their finished trades after the spread you pay for filling behind them and the fees on the way in." },
   { label: 'ROI', cls: 'num', sort: 'roi' },
   { label: 'PnL', cls: 'num', sort: 'pnl' },
-  { label: 'Open value', cls: 'num' },
-  { label: 'Trend', cls: '' },
   { label: 'Volume', cls: 'num', sort: 'vol' },
-  { label: 'Coverage', cls: '' },
   { label: '', cls: 'num' },
 ];
 
@@ -346,6 +377,7 @@ function renderBoard() {
   host.replaceChildren();
 
   const wrap = el('div', 'screener-tablewrap');
+  wrap.dataset.tableScroll = '';
   const table = el('table', 'screener-table');
   const thead = el('thead');
   const hr = el('tr');
@@ -499,24 +531,9 @@ function walletRow(t, i) {
 
   tr.append(el('td', `num ${roi == null ? '' : roi > 0 ? 'pos' : roi < 0 ? 'neg' : ''}`, M.signedPercent(roi)));
   tr.append(R.moneyCell(pnl));
-  tr.append(el('td', 'num', M.money(t.openVal)));
-
-  const trend = el('td');
-  trend.append(R.sparkline(ds.spark?.[t.w], 84, 28));
-  tr.append(trend);
-
   tr.append(el('td', 'num', M.money(M.volumeIn(t, state.period))));
-  const cov = el('td');
-  cov.append(coverageCell(t));
-  tr.append(cov);
   tr.append(actionCell(t));
   return tr;
-}
-
-function coverageCell(t) {
-  const n = el('span', 'coverage', M.coverageLabel(t, state.period));
-  n.title = t.lastTradeDay ? `Last trade ${t.lastTradeDay}` : 'No trade day recorded';
-  return n;
 }
 
 function actionCell(trader) {
