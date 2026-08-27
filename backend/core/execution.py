@@ -21,7 +21,6 @@ from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
 
 from polymarket.errors import (
     InsufficientAllowanceError,
-    InsufficientLiquidityError,
     RateLimitError,
     RequestRejectedError,
     UserInputError,
@@ -162,6 +161,9 @@ def _finalize(res: "OrderResult", resp, side: str) -> None:
         message = getattr(resp, "message", "")
         res.ok = False
         res.reason = f"order_rejected: {code} - {message}"
+        # The production cap incident proved that a post-submit "rejected"
+        # response is not authoritative evidence that no shares arrived.
+        res.submission_uncertain = True
         return
     res.ok = True
     res.order_id = resp.order_id
@@ -192,6 +194,7 @@ def _finalize(res: "OrderResult", resp, side: str) -> None:
     else:
         res.ok = False
         res.reason = "accepted_but_unfilled (zero amounts, no trades/txs)"
+        res.submission_uncertain = True
         res.filled_shares = 0.0
         res.avg_price = 0.0
         log.warning("accepted order %s carried no fills — treating as killed: %s",
@@ -355,19 +358,15 @@ async def place_market_order(
                 token_id=token_id, side="SELL", shares=amount, order_type="FOK",
                 min_price=exchange_floor,
                 builder_code=_BUILDER_CODE)
-    except InsufficientLiquidityError as e:
-        # The SDK raises this only after the exchange definitively kills an FOK
-        # that could not fill completely. No order remains live and no fill
-        # occurred, so the reservation is safe to release.
-        res.reason = f"insufficient_liquidity: {e}"
-        return res
     except Exception as e:
-        res.reason = f"api_error: {e}"
-        # A definitive exchange rejection (4xx / rate limit / SDK validation)
-        # proves no order is live — clean failure, reservation releasable. Only
-        # genuinely ambiguous failures (5xx, transport) require reconciliation.
-        if not _definitive_rejection(e):
-            res.submission_uncertain = True
+        # We crossed the SDK's submission boundary. Production evidence showed
+        # exceptions labelled as FOK/4xx failures even though shares arrived in
+        # the wallet. Treat every exception from this call as ambiguous: the
+        # engine must retain its durable claim and reconcile before any retry.
+        # Preflight failures above still return cleanly without setting this.
+        label = "insufficient_liquidity" if type(e).__name__ == "InsufficientLiquidityError" else "api_error"
+        res.reason = f"{label}: {e}"
+        res.submission_uncertain = True
         return res
 
     _finalize(res, resp, side)

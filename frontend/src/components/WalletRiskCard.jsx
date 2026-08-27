@@ -27,15 +27,15 @@ const DEFAULTS = {
 // [key, label, min, max, step, unit, hint]
 const SLIDERS = [
   ['copy_ratio_pct', 'RATIO %', 0, 20, 0.1, '%', 'copy = leader position × this %'],
-  ['max_position_usd', 'MAX / TRADE', 1, 500, 1, '$', 'hard cap per copied position'],
+  ['max_position_usd', 'MAX / POSITION', 1, 500, 1, '$', 'hard cap for the whole copied market position'],
   ['min_leader_usd', 'MIN LEADER', 0, 10000, 50, '$', "skip if leader's position is smaller"],
   ['ignore_below_usd', 'MIN SIZE / COPY', 0.5, 50, 0.5, '$', 'skip any copy or top-up smaller than this'],
   ['max_open_positions', 'MAX OPEN', 0, 50, 1, '', '0 = unlimited'],
-  ['max_total_exposure_usd', 'MAX EXPOSURE', 0, 5000, 50, '$', 'cap total open on this wallet (0 = none)'],
+  ['max_total_exposure_usd', 'MAX EXPOSURE', 0, 5000, 5, '$', 'cap total open on this wallet (0 = none)'],
   ['min_price', 'MIN PRICE', 0, 1, 0.01, '', 'skip cheaper longshots'],
   ['max_price', 'MAX PRICE', 0, 1, 0.01, '', 'skip near-resolved markets'],
   ['max_slippage_pct', 'MAX SLIPPAGE %', 0, 10, 0.5, '%', 'vs leader fill price'],
-  ['daily_loss_limit_usd', 'DAILY LOSS LIMIT', 0, 1000, 10, '$', '0 = none'],
+  ['daily_loss_limit_usd', 'DAILY LOSS LIMIT', 0, 1000, 1, '$', '0 = none'],
 ]
 // values where 0 means "no limit" and should persist as NULL, not 0
 const ZERO_IS_NULL = new Set(['max_open_positions', 'max_total_exposure_usd', 'daily_loss_limit_usd'])
@@ -139,6 +139,16 @@ export default function WalletRiskCard({ w, onChange }) {
             />
           ))}
         </div>
+
+        {(!Number(s.max_total_exposure_usd) || !Number(s.daily_loss_limit_usd)) && (
+          <div className="neg small" style={{ marginTop: 8 }}>
+            Risk warning: {(!Number(s.max_total_exposure_usd) && !Number(s.daily_loss_limit_usd))
+              ? 'no total exposure or daily loss limit is active.'
+              : !Number(s.max_total_exposure_usd)
+                ? 'no total exposure limit is active.'
+                : 'no daily loss limit is active.'}
+          </div>
+        )}
 
         <div className="pc-row" style={{ marginTop: 8 }}>
           <button className="btn btn-danger" onClick={remove}>UNFOLLOW</button>

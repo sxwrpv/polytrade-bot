@@ -295,12 +295,10 @@ class CopyEngine:
     # --- uncertain-claim / stuck-closing reconciliation ---------------------
     async def _reconcile_uncertain_claims(self) -> None:
         """Settle BUY claims parked in 'uncertain' (submission outcome unknown).
-        The wallet is the ground truth: once the indexer has had time to catch
-        up, a holding no tracking row explains means the BUY filled — adopt it;
-        no holding means it never filled — release the claim. Without this,
-        every uncertain claim froze its token forever (no new copies, its
-        reserved_usd counted against exposure) and needed manual DB surgery —
-        six such claims were stuck live on 2026-07-11."""
+        A wallet holding may prove a bounded fill and be adopted. Absence is not
+        proof of non-fill, and an aggregate larger than the reserved claim is
+        quarantined. This intentionally prefers a stuck token requiring manual
+        review over another BUY that can breach the configured cap."""
         cutoff = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(
             seconds=UNCERTAIN_CLAIM_MIN_AGE_SECONDS)).isoformat()
         claims = await self.db.fetchall(
@@ -311,13 +309,21 @@ class CopyEngine:
             by_user[c["user_id"]].append(c)
         for user_id, user_claims in by_user.items():
             try:
-                positions = await self.pm.get_positions(user_id, size_threshold=0)
+                positions, complete = await self.pm.get_all_positions(
+                    user_id, size_threshold=0)
             except Exception:
                 log.exception("uncertain reconciliation: position read failed for %s",
                               user_id[:10])
                 continue
             held = {p.asset: p for p in positions if p.size > 0.01}
             for claim in user_claims:
+                # Absence from a truncated wallet page proves nothing. Releasing
+                # this claim would permit another BUY while the first may already
+                # be held beyond the page boundary.
+                if claim["token_id"] not in held and not complete:
+                    log.warning("uncertain claim retained: wallet scan incomplete for %s %s",
+                                user_id[:10], claim["token_id"])
+                    continue
                 try:
                     await self._settle_uncertain_claim(
                         user_id, claim, held.get(claim["token_id"]))
@@ -338,22 +344,28 @@ class CopyEngine:
                             user_id[:10], token)
                 await self._release_buy_claim(user_id, token, claim["claim_id"])
             elif p is None:
-                log.info("uncertain OPEN claim released (no fill in wallet): %s %s",
-                         user_id[:10], token)
-                await self._release_buy_claim(user_id, token, claim["claim_id"])
+                # Data-api absence is not authoritative proof of non-fill.
+                # Retain the durable fence for operator reconciliation.
+                log.warning("uncertain OPEN claim retained (no authoritative fill status): %s %s",
+                            user_id[:10], token)
             else:
                 await self._adopt_uncertain_fill(user_id, claim, p)
             return
-        # resize-increase: realign the row to the wallet's aggregate when extra
-        # shares appeared; otherwise the top-up never filled — release.
+        # resize-increase: realign the row only when a bounded extra holding is
+        # visible. Any inconclusive or oversized result retains the fence.
         if row is None or p is None:
-            log.warning("uncertain RESIZE claim released (row/holding gone): %s %s",
+            log.warning("uncertain RESIZE claim retained (row/holding inconclusive): %s %s",
                         user_id[:10], token)
-            await self._release_buy_claim(user_id, token, claim["claim_id"])
             return
         extra = float(p.size) - float(row["shares"])
         if row["status"] == "open" and extra > 0.01:
             spent = round(extra * float(p.avg_price or 0), 2)
+            reserved = float(claim.get("reserved_usd") or 0)
+            tolerance = max(0.25, reserved * 0.02)
+            if spent > reserved + tolerance:
+                log.critical("uncertain RESIZE quarantined: observed $%.2f exceeds $%.2f claim for %s %s",
+                             spent, reserved, user_id[:10], token)
+                return
             async with self.db.transaction(write=True) as tx:
                 deleted = await tx.execute(
                     "DELETE FROM copy_open_claims WHERE user_id=? AND token_id=? "
@@ -381,7 +393,8 @@ class CopyEngine:
                 "trader_address": row.get("trader_address"),
             })
         else:
-            await self._release_buy_claim(user_id, token, claim["claim_id"])
+            log.warning("uncertain RESIZE claim retained (no authoritative non-fill): %s %s",
+                        user_id[:10], token)
 
     async def _adopt_uncertain_fill(self, user_id: str, claim: dict, p) -> None:
         """The BUY behind an uncertain claim demonstrably filled (the wallet
@@ -389,6 +402,15 @@ class CopyEngine:
         copy from the wallet snapshot and clear the claim atomically."""
         pid = uuid.uuid4().hex
         notional = round(float(p.size) * float(p.avg_price or 0), 2)
+        reserved = float(claim.get("reserved_usd") or 0)
+        tolerance = max(0.25, reserved * 0.02)
+        if notional > reserved + tolerance:
+            # Never attribute an aggregate/manual/duplicate holding larger than
+            # the submitted budget to one copy claim. Keep it quarantined so it
+            # cannot be retried or later auto-sold as engine-owned inventory.
+            log.critical("uncertain BUY quarantined: observed $%.2f exceeds $%.2f claim for %s %s",
+                         notional, reserved, user_id[:10], claim["token_id"])
+            return
         async with self.db.transaction(write=True) as tx:
             user_sql = "SELECT id FROM users WHERE id=?" + (
                 " FOR UPDATE" if self.db.is_pg else "")
@@ -761,6 +783,12 @@ class CopyEngine:
                 await self.db.try_transition(existing["id"], "closing", "open")
 
     async def _reconcile_tick(self) -> None:
+        try:
+            # Also catches a process that restarted before a submitting claim
+            # crossed the startup age gate; startup-only recovery can miss it.
+            await self._recover_stale_claims()
+        except Exception:
+            log.exception("stale-claim recovery failed (continuing)")
         try:
             await self._reconcile_uncertain_claims()
         except Exception:

@@ -64,10 +64,13 @@ class FailingClient:
 
 
 class RejectionClassificationTests(unittest.IsolatedAsyncioTestCase):
-    """A definitive exchange rejection must NOT freeze a reconciliation claim."""
+    """Once the SDK submission call begins, an exception cannot prove no fill.
 
-    async def test_clob_4xx_rejection_is_clean_failure(self):
-        # the two rejections seen frozen live on 2026-07-11
+    Production evidence showed exceptions labelled as FOK failures while shares
+    still arrived. Retrying those exceptions breached MAX/TRADE repeatedly.
+    """
+
+    async def test_clob_exceptions_after_submit_are_uncertain(self):
         for message in ("not enough balance / allowance",
                         "order couldn't be fully filled. FOK orders are fully "
                         "filled or killed"):
@@ -75,7 +78,7 @@ class RejectionClassificationTests(unittest.IsolatedAsyncioTestCase):
             res = await place_market_order(
                 client, FakeBookPM(), TOKEN, "BUY", 10.0, reference_price=0.5)
             self.assertFalse(res.ok)
-            self.assertFalse(res.submission_uncertain, message)
+            self.assertTrue(res.submission_uncertain, message)
 
     async def test_5xx_and_transport_failures_stay_uncertain(self):
         for error in (RequestRejectedError("upstream exploded", status=502),
@@ -166,24 +169,29 @@ class EngineDbTestCase(unittest.IsolatedAsyncioTestCase):
              shares, 40.0, 0.5, shares * 0.5, status, now_iso(), closing_at))
         return "position"
 
-    def engine(self, wallet_positions, **kwargs) -> CopyEngine:
+    def engine(self, wallet_positions, *, positions_complete=True, **kwargs) -> CopyEngine:
         async def get_positions(wallet, *, size_threshold=1.0, limit=500,
                                 offset=0, sort_by="CURRENT"):
             return list(wallet_positions)
 
-        pm = SimpleNamespace(get_positions=get_positions, **kwargs)
+        async def get_all_positions(wallet, *, size_threshold=1.0,
+                                    page_size=500, max_pages=6):
+            return list(wallet_positions), positions_complete
+
+        pm = SimpleNamespace(get_positions=get_positions,
+                             get_all_positions=get_all_positions, **kwargs)
         return CopyEngine(self.db, pm)
 
 
 class UncertainClaimReconciliationTests(EngineDbTestCase):
-    async def test_unfilled_uncertain_open_claim_is_released(self):
+    async def test_missing_holding_does_not_automatically_release_uncertain_claim(self):
         await self.insert_claim()
         engine = self.engine(wallet_positions=[])
 
         await engine._reconcile_uncertain_claims()
 
-        self.assertEqual(0, await self.db.fetchval(
-            "SELECT COUNT(*) FROM copy_open_claims"))
+        self.assertEqual(1, await self.db.fetchval(
+            "SELECT COUNT(*) FROM copy_open_claims WHERE state='uncertain'"))
         self.assertEqual(0, await self.db.fetchval(
             "SELECT COUNT(*) FROM copy_positions"))
 
@@ -208,9 +216,30 @@ class UncertainClaimReconciliationTests(EngineDbTestCase):
         self.assertEqual(1, await self.db.fetchval(
             "SELECT COUNT(*) FROM trade_events WHERE event_type='open'"))
 
+    async def test_holding_larger_than_reserved_claim_is_quarantined(self):
+        await self.insert_claim()
+        engine = self.engine(
+            wallet_positions=[wallet_position(size=40.0, avg=0.5)])  # $20 vs $8 claim
+
+        await engine._reconcile_uncertain_claims()
+
+        self.assertEqual(1, await self.db.fetchval(
+            "SELECT COUNT(*) FROM copy_open_claims WHERE state='uncertain'"))
+        self.assertEqual(0, await self.db.fetchval(
+            "SELECT COUNT(*) FROM copy_positions"))
+
     async def test_fresh_uncertain_claim_is_left_for_the_indexer(self):
         await self.insert_claim(age_seconds=10.0)
         engine = self.engine(wallet_positions=[])
+
+        await engine._reconcile_uncertain_claims()
+
+        self.assertEqual(1, await self.db.fetchval(
+            "SELECT COUNT(*) FROM copy_open_claims WHERE state='uncertain'"))
+
+    async def test_incomplete_wallet_scan_cannot_release_missing_claim(self):
+        await self.insert_claim()
+        engine = self.engine(wallet_positions=[], positions_complete=False)
 
         await engine._reconcile_uncertain_claims()
 

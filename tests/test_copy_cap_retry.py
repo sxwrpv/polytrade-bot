@@ -132,23 +132,14 @@ class ClampTests(unittest.IsolatedAsyncioTestCase):
 
 
 class AssumptionTests(unittest.TestCase):
-    def test_insufficient_liquidity_is_still_treated_as_definitive(self):
-        """The trigger was an order reported failed that had actually filled.
-
-        This is NOT reclassified as uncertain: doing that froze six tokens
-        behind unreconciled claims on 2026-07-11. The cap is defended by
-        remembered basis instead. If that trade-off is ever revisited, this
-        test is the place it gets argued.
-        """
-        from backend.core.execution import _definitive_rejection
-        from polymarket.errors import InsufficientLiquidityError
-        # The handler returns before _definitive_rejection is consulted, so the
-        # classification lives in execution.place_market_order's except block.
-        # What matters here is that the engine no longer depends on it for
-        # cap safety.
-        self.assertTrue(hasattr(ce, "SUBMITTED_BASIS_TTL_SECONDS"))
-        self.assertGreater(ce.SUBMITTED_BASIS_TTL_SECONDS, 0)
-        del _definitive_rejection, InsufficientLiquidityError
+    def test_cap_safety_does_not_depend_only_on_process_memory(self):
+        """Post-submission exceptions must retain the durable claim. The
+        process-local submitted basis is only a second layer, not the fence."""
+        import inspect
+        from backend.core import execution
+        src = inspect.getsource(execution.place_market_order)
+        self.assertNotIn("except InsufficientLiquidityError", src)
+        self.assertIn("res.submission_uncertain = True", src)
 
 
 if __name__ == "__main__":
