@@ -23,10 +23,9 @@ web3>=6.0.0
 # (POLYMARKET_BUILDER_API_KEY/_SECRET/_PASSPHRASE — see .env.example). Without
 # a Builder key it falls back to plain EOA mode. See BUILD_PLAN.md §wallet model.
 #
-# polymarket-client now has stable releases; do not enable pip's global --pre
-# switch because that also selects unrelated beta versions of FastAPI, Pydantic,
-# Web3, and cryptography. The version floor keeps the required wallet API.
-polymarket-client>=0.1.0b11
+# Safety-critical exchange SDK: pin the exact production-reviewed release.
+# An open lower bound silently upgraded 0.6.0 to 0.7.0 during an engine hotfix.
+polymarket-client==0.6.0
 
 # Postgres/Supabase backend (used when DATABASE_URL is set; SQLite otherwise).
 asyncpg>=0.29.0

@@ -40,6 +40,11 @@ class RiskSettingsContractTests(unittest.TestCase):
         self.assertIn("'daily_loss_limit_usd', 'DAILY LOSS LIMIT', 0, 1000, 1", source)
         self.assertIn("Risk warning:", source)
 
+    def test_exchange_sdk_is_exactly_pinned(self):
+        requirements = (Path(__file__).parents[1] / "requirements.txt").read_text()
+        self.assertIn("polymarket-client==0.6.0", requirements)
+        self.assertNotIn("polymarket-client>=", requirements)
+
 
 if __name__ == "__main__":
     unittest.main()
