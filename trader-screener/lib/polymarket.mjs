@@ -30,18 +30,34 @@ const PAGE = 500;
 export const ACTIVITY_CEILING = 5500;
 const HEADERS = { accept: 'application/json', 'user-agent': 'polytrade-screener/1.0' };
 
+/* Per-request deadline, composed rather than wired by hand.
+ *
+ * The previous version attached its own 'abort' listener to the PARENT signal
+ * for every nested request. One board request fans out well past ten
+ * concurrent upstream calls -- ranks() alone issues eight (four windows x two
+ * rank types), plus activity, positions, portfolioValue and two balanceOf
+ * calls -- so the parent crossed Node's ten-listener threshold and emitted
+ * MaxListenersExceededWarning for days in production. Cleanup was correct;
+ * the peak was the problem, and raising the cap would only have hidden it.
+ *
+ * AbortSignal.any() composes without registering a public listener on the
+ * parent, so the fan-out is no longer bounded by a warning threshold.
+ *
+ * The timeout stays a cancellable AbortController rather than
+ * AbortSignal.timeout(): a timer that cannot be cleared early would stay
+ * pending for its full duration on every completed request, which at this
+ * request rate is a slow accumulation for no benefit. cleanup() clears it.
+ */
 export function deadlineSignal(timeout, parent) {
-  const controller = new AbortController();
-  const abortFromParent = () => controller.abort(parent.reason);
-  if (parent?.aborted) abortFromParent();
-  else parent?.addEventListener('abort', abortFromParent, { once: true });
-  const timer = setTimeout(() => controller.abort(new Error('upstream timeout')), timeout);
+  const timer = new AbortController();
+  const handle = setTimeout(
+    () => timer.abort(new Error('upstream timeout')), timeout);
+  const signal = parent
+    ? AbortSignal.any([parent, timer.signal])
+    : timer.signal;
   return {
-    signal: controller.signal,
-    cleanup() {
-      clearTimeout(timer);
-      parent?.removeEventListener('abort', abortFromParent);
-    },
+    signal,
+    cleanup() { clearTimeout(handle); },
   };
 }
 

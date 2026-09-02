@@ -56,6 +56,43 @@ polytradebot.live, www.polytradebot.live {
 	}
 	header @revalidate Cache-Control "no-cache"
 
+	# --- Scanner traffic -------------------------------------------------
+	# 3,798 of 14,650 requests over 30 Aug - 2 Sep were 404s from automated
+	# scanners: /.env (62), /wp-admin/install.php (54), /.env.bak, /.git/config,
+	# /config.php, /config.js and friends. All were correctly refused by the
+	# app, but each still cost a proxied round trip to uvicorn and a log line.
+	# Refuse them at the edge instead.
+	#
+	# One `path` directive with many arguments: the arguments are OR'd, and
+	# repeating `path` inside a named matcher is not valid Caddy.
+	#
+	# 404, not 403: a 403 confirms the path is special. 404 says nothing.
+	@hidden path /.env /.env.* /.git /.git/* /.svn /.svn/* /.hg /.hg/* /.htaccess /.htpasswd /.aws /.aws/* /.ssh /.ssh/* /.vscode /.vscode/* /.idea /.idea/* /wp-admin /wp-admin/* /wp-login.php /wp-content/* /wp-includes/* /xmlrpc.php /config.php /config.json /config.js /configuration.php /phpinfo.php /phpmyadmin /phpmyadmin/* /vendor/* /*.sql /*.bak /*.old /*.swp /*.pem /*.key
+
+	# A `handle` block, not a bare `respond`: handle blocks are mutually
+	# exclusive and evaluated in written order, so this is deterministic rather
+	# than dependent on Caddy's directive-ordering rules.
+	handle @hidden {
+		respond 404
+	}
+
+	# --- Access logging --------------------------------------------------
+	# There was no Caddy access log at all: six days produced 135 lines, all
+	# startup and certificate events. Everything known about request volume had
+	# to be reconstructed from uvicorn's log, which recorded the proxy's address
+	# rather than the caller until --proxy-headers was enabled.
+	#
+	# Rotation is stated rather than defaulted: an unrotated server.log reached
+	# 1.5 GB on this project in August.
+	log {
+		output file /var/log/caddy/access.log {
+			roll_size 32MiB
+			roll_keep 5
+			roll_keep_for 336h
+		}
+		format json
+	}
+
 	# The canonical /screener surface is the dedicated Trader Screener service.
 	# handle_path strips /screener before proxying, so its internal routes remain
 	# /, /api/* and /trader/* without colliding with the main FastAPI app.

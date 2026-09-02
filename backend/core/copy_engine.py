@@ -44,6 +44,7 @@ from backend.config import (
     validate_slippage_pct,
 )
 from backend.core import detection, execution, wallet
+from backend.core.health import heartbeats
 from backend.core.polymarket import Position
 from backend.db.database import now_iso
 
@@ -583,9 +584,14 @@ class CopyEngine:
         self._collateral_cache.clear()
 
     async def _loop(self, fn, interval: float, stop_event: asyncio.Event) -> None:
+        name = getattr(fn, "__name__", str(fn)).strip("_")
+        heartbeats.register(name, interval)
         while not stop_event.is_set():
             try:
                 await fn()
+                # A pass that completed is the only evidence the loop is alive;
+                # /api/health could not tell a running engine from a dead one.
+                heartbeats.mark(name)
             except Exception:
                 log.exception("loop %s failed", getattr(fn, "__name__", fn))
             try:

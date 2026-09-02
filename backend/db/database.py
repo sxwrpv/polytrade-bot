@@ -21,13 +21,39 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import logging
 from contextlib import asynccontextmanager
 from typing import Any, Iterable, Sequence
 
 import aiosqlite
 
-from backend.config import DATABASE_URL, DB_PATH
+from backend.config import (
+    DATABASE_URL, DB_PATH, DB_POOL_MAX_INACTIVE_SECONDS, DB_POOL_MAX_SIZE,
+    DB_POOL_MIN_SIZE,
+)
 from backend.db.models import MIGRATIONS, PG_SCHEMA_SQL, SCHEMA_SQL
+
+log = logging.getLogger("database")
+
+# A pooled Postgres connection can be closed underneath us — by Supabase's
+# pooler recycling it, by an idle timeout, or by a network blip. asyncpg
+# surfaces that as ConnectionDoesNotExistError on the NEXT use, and the pool
+# hands the dead connection out again.
+#
+# Seen once in production (2026-09-02 06:35:36, "loop _detect_tick failed"),
+# recovered on the next cycle. One retry turns that lost cycle into a
+# non-event.
+#
+# Reads only. A write or a transaction may have COMMITTED before the
+# connection died, and re-running it could double an order claim or a trade
+# event, so those still propagate and let the caller's own reconciliation
+# decide.
+def _is_stale_connection(exc: BaseException) -> bool:
+    name = type(exc).__name__
+    if name in ("ConnectionDoesNotExistError", "InterfaceError",
+                "ConnectionResetError", "ConnectionFailureError"):
+        return True
+    return isinstance(exc, (ConnectionResetError, BrokenPipeError))
 
 
 def now_iso() -> str:
@@ -107,6 +133,55 @@ class Database:
         self._conn: aiosqlite.Connection | None = None   # sqlite
         self._pool = None                                # asyncpg.Pool
         self._sqlite_lock = asyncio.Lock()
+        # Availability, for /api/ready. Counters only — no query text, no
+        # parameters, nothing that could carry an address or a secret.
+        self.last_success_at: str | None = None
+        self.last_failure_at: str | None = None
+        self.last_failure_kind: str | None = None
+        self.stale_connection_retries = 0
+        self.consecutive_failures = 0
+
+    def _note_ok(self) -> None:
+        self.last_success_at = now_iso()
+        self.consecutive_failures = 0
+
+    def _note_failure(self, exc: BaseException) -> None:
+        self.last_failure_at = now_iso()
+        self.last_failure_kind = type(exc).__name__
+        self.consecutive_failures += 1
+
+    async def _read(self, run):
+        """Run an idempotent read, retrying once past a dead pooled connection.
+
+        `run` is re-invoked from scratch, so it must not have side effects.
+        """
+        try:
+            out = await run()
+        except Exception as exc:
+            if not (self.is_pg and _is_stale_connection(exc)):
+                self._note_failure(exc)
+                raise
+            self.stale_connection_retries += 1
+            log.warning("stale pooled connection (%s) — retrying the read once",
+                        type(exc).__name__)
+            try:
+                out = await run()
+            except Exception as retry_exc:
+                self._note_failure(retry_exc)
+                raise
+        self._note_ok()
+        return out
+
+    def availability(self) -> dict:
+        """Non-identifying snapshot for the readiness endpoint."""
+        return {
+            "backend": "postgres" if self.is_pg else "sqlite",
+            "last_success_at": self.last_success_at,
+            "last_failure_at": self.last_failure_at,
+            "last_failure_kind": self.last_failure_kind,
+            "consecutive_failures": self.consecutive_failures,
+            "stale_connection_retries": self.stale_connection_retries,
+        }
 
     async def connect(self) -> None:
         if self.is_pg:
@@ -114,7 +189,15 @@ class Database:
             # statement_cache_size=0 keeps us compatible with Supabase's
             # transaction pooler (pgbouncer) if the DSN points at :6543.
             self._pool = await asyncpg.create_pool(
-                self.dsn, min_size=1, max_size=10, statement_cache_size=0)
+                self.dsn,
+                min_size=DB_POOL_MIN_SIZE,
+                max_size=DB_POOL_MAX_SIZE,
+                statement_cache_size=0,
+                # Retire idle connections before the pooler or the network
+                # does it for us, which is what produced the one observed
+                # ConnectionDoesNotExistError.
+                max_inactive_connection_lifetime=DB_POOL_MAX_INACTIVE_SECONDS,
+            )
             return
         self._conn = await aiosqlite.connect(self.path)
         self._conn.row_factory = aiosqlite.Row
@@ -390,27 +473,33 @@ class Database:
             await self._conn.commit()
 
     async def fetchone(self, sql: str, params: Sequence[Any] = ()) -> dict | None:
-        if self.is_pg:
-            row = await self._pool.fetchrow(_to_pg(sql), *params)
-            return dict(row) if row is not None else None
-        async with self._sqlite_lock:
-            async with self._conn.execute(sql, params) as cur:
-                row = await cur.fetchone()
+        async def run():
+            if self.is_pg:
+                row = await self._pool.fetchrow(_to_pg(sql), *params)
                 return dict(row) if row is not None else None
+            async with self._sqlite_lock:
+                async with self._conn.execute(sql, params) as cur:
+                    row = await cur.fetchone()
+                    return dict(row) if row is not None else None
+        return await self._read(run)
 
     async def fetchall(self, sql: str, params: Sequence[Any] = ()) -> list[dict]:
-        if self.is_pg:
-            rows = await self._pool.fetch(_to_pg(sql), *params)
-            return [dict(r) for r in rows]
-        async with self._sqlite_lock:
-            async with self._conn.execute(sql, params) as cur:
-                rows = await cur.fetchall()
+        async def run():
+            if self.is_pg:
+                rows = await self._pool.fetch(_to_pg(sql), *params)
                 return [dict(r) for r in rows]
+            async with self._sqlite_lock:
+                async with self._conn.execute(sql, params) as cur:
+                    rows = await cur.fetchall()
+                    return [dict(r) for r in rows]
+        return await self._read(run)
 
     async def fetchval(self, sql: str, params: Sequence[Any] = ()) -> Any:
-        if self.is_pg:
-            return await self._pool.fetchval(_to_pg(sql), *params)
-        async with self._sqlite_lock:
-            async with self._conn.execute(sql, params) as cur:
-                row = await cur.fetchone()
-                return row[0] if row is not None else None
+        async def run():
+            if self.is_pg:
+                return await self._pool.fetchval(_to_pg(sql), *params)
+            async with self._sqlite_lock:
+                async with self._conn.execute(sql, params) as cur:
+                    row = await cur.fetchone()
+                    return row[0] if row is not None else None
+        return await self._read(run)
