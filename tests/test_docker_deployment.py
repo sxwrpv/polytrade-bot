@@ -101,3 +101,60 @@ class ProxyHeaderContractTests(unittest.TestCase):
 
     def test_forwarded_allow_ips_is_configurable(self):
         self.assertIn("FORWARDED_ALLOW_IPS", self.dockerfile)
+
+
+class DeployVerificationTests(unittest.TestCase):
+    """The screener commit reached GitHub on 27 Aug at 11:25 UTC while the
+    running container had started at 10:02. Nothing could report that, so the
+    deploy path has to prove the revision it landed."""
+
+    def setUp(self):
+        self.script = (ROOT / "scripts" / "deploy.sh").read_text()
+        self.dockerfile = (ROOT / "Dockerfile").read_text()
+        self.screener_dockerfile = (ROOT / "trader-screener" / "Dockerfile").read_text()
+
+    def test_both_images_are_stamped_with_the_revision(self):
+        for name, text in (("app", self.dockerfile),
+                           ("screener", self.screener_dockerfile)):
+            self.assertIn("ARG GIT_REVISION", text, name)
+            self.assertIn("org.opencontainers.image.revision", text, name)
+
+    def test_deploy_builds_from_an_explicit_commit(self):
+        self.assertIn("git rev-parse --verify", self.script)
+        self.assertIn("--build-arg", self.script)
+        self.assertIn("GIT_REVISION=$REVISION", self.script)
+
+    def test_the_caddyfile_is_validated_before_anything_changes(self):
+        """A bad matcher is a total outage, and `caddy reload` reports success
+        on a stale inode — so this gate must precede the recreate."""
+        validate_at = self.script.index("caddy validate")
+        recreate_at = self.script.index("up -d --force-recreate")
+        self.assertLess(validate_at, recreate_at)
+
+    def test_deploy_refuses_to_silently_disable_the_engine(self):
+        self.assertIn("COPY_ENGINE_AUTOSTART=1", self.script)
+
+    def test_verification_checks_readiness_not_just_liveness(self):
+        self.assertIn("/api/ready", self.script)
+        self.assertIn("/api/version", self.script)
+        self.assertIn("/screener/api/health", self.script)
+
+    def test_verification_requires_live_data_mode(self):
+        self.assertIn("dataMode", self.script)
+        self.assertIn("expected live", self.script)
+
+    def test_a_failed_verification_rolls_back(self):
+        self.assertIn("rolling back", self.script)
+        self.assertIn("PREVIOUS_IMAGE", self.script)
+
+    def test_caddy_access_log_is_rotated(self):
+        caddyfile = (ROOT / "Caddyfile").read_text()
+        self.assertIn("roll_size", caddyfile)
+        self.assertIn("roll_keep", caddyfile)
+
+    def test_scanner_paths_are_refused_at_the_edge(self):
+        caddyfile = (ROOT / "Caddyfile").read_text()
+        self.assertIn("@hidden", caddyfile)
+        for probe in ("/.env", "/.git", "/wp-admin", "/config.php"):
+            self.assertIn(probe, caddyfile, probe)
+        self.assertIn("respond 404", caddyfile)

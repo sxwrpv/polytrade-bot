@@ -85,6 +85,11 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
+      # Access logging is on now, so the log needs somewhere durable to live
+      # and Caddy's own roll_size/roll_keep bound it (32MiB x 5, 14 days).
+      # The 2026-08 incident where an unrotated server.log reached 1.5 GB is
+      # the reason this is stated rather than left to a default.
+      - caddy_logs:/var/log/caddy
     security_opt:
       - no-new-privileges:true
     networks:
@@ -95,6 +100,7 @@ services:
 volumes:
   caddy_data:
   caddy_config:
+  caddy_logs:
 
 networks:
   edge:

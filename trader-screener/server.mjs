@@ -22,6 +22,15 @@ const MIME = {
 };
 
 // --- cached snapshot -------------------------------------------------------
+/* Stamped at build time (Dockerfile ARG GIT_REVISION). "unknown" means this
+ * image was not built through scripts/deploy.sh, which is itself a finding. */
+const BUILD_REVISION = process.env.GIT_REVISION || 'unknown';
+const BUILD_TIME = process.env.BUILD_TIME || '';
+/* "live" means board rows are fetched from Polymarket on request; "snapshot"
+ * means only the committed dataset is being served. A deploy that silently
+ * fell back to snapshot looks identical from the outside otherwise. */
+const DATA_MODE = process.env.SCREENER_DATA_MODE || 'live';
+
 let dataset = null, smi = null;
 async function loadSnapshot() {
   try {
@@ -156,8 +165,15 @@ const server = createServer(async (req, res) => {
     : requestPath.startsWith('/screener/') ? requestPath.slice('/screener'.length) : requestPath;
   try {
     if (p === '/api/health') {
+      /* Build revision and data mode are here so a post-deploy check can
+       * prove WHICH build answered, not merely that something did. The
+       * Screener commit once reached GitHub without reaching production and
+       * nothing in either service could say so. */
       return json(res, 200, {
         status: 'ok',
+        revision: BUILD_REVISION,
+        builtAt: BUILD_TIME || null,
+        dataMode: DATA_MODE,
         generatedAt: dataset.meta.generatedAt,
         traders: dataset.traders.length,
       });
