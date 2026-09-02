@@ -237,6 +237,12 @@ class PrivacyTests(PublicScreenerTestBase):
             # curve without a second request. It is derived from the already
             # cached daily_pnl_90d blob, so it costs no upstream call.
             "daily_pnl",
+            # Added 2026-09-02. Refresh health for THIS public wallet, so a
+            # board can label figures stale instead of presenting the last
+            # good numbers as current while the address is in upstream
+            # cooldown. Both are properties of the cached wallet row; neither
+            # touches a PolyTrade user, session or follow relationship.
+            "data_completeness", "refresh_failing",
         }, set(wallet))
 
 
