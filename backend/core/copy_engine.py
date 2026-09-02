@@ -29,6 +29,7 @@ from types import SimpleNamespace
 
 import aiosqlite
 import httpx
+from polymarket import errors as pm_errors
 
 from backend.config import (
     COPY_ENGINE_POLL_SECONDS,
@@ -85,6 +86,31 @@ SUBMITTED_BASIS_TTL_SECONDS = 120.0
 # book said hours later (incident 2026-08-23).
 MAX_LEADER_TRADE_AGE_SECONDS = float(
     os.environ.get("MAX_LEADER_TRADE_AGE_SECONDS", "300"))
+
+# Transport failures on a CACHED SDK client. The client keeps one long-lived
+# HTTP/2 connection, and the edge closes it with a clean GOAWAY after 10,000
+# streams (observed 7x in 3.4 days, always `last_stream_id:19999`). The SDK
+# surfaces that as an exception on whatever read happened to be in flight,
+# and the cached client stays poisoned until the process restarts — so a
+# single connection recycle silently cost us every copy decision that tick.
+#
+# These are retried ONLY for idempotent reads (balance/positions/activity),
+# and only after the client is rebuilt. Order submission is never retried
+# here: execution.py owns that, and an ambiguous submission must reconcile
+# rather than re-fire.
+CLIENT_TRANSPORT_ERRORS = (
+    httpx.RemoteProtocolError,
+    httpx.ConnectError,
+    httpx.ConnectTimeout,
+    httpx.ReadTimeout,
+    httpx.WriteTimeout,
+    httpx.PoolTimeout,
+    httpx.ReadError,
+    httpx.WriteError,
+    pm_errors.TransportError,
+    pm_errors.ConnectionLostError,
+    pm_errors.TimeoutError,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -664,7 +690,7 @@ class CopyEngine:
                 return
 
             client = await self._get_client(user)   # expensive — after the cheap checks
-            available = await self._collateral_fn(client)
+            available, client = await self._read_collateral(user, client)
             all_open = await self.db.fetchall(
                 "SELECT notional_usd, trader_address FROM copy_positions "
                 "WHERE user_id = ? AND status = 'open'", (user_id,))
@@ -821,7 +847,7 @@ class CopyEngine:
         if not user:
             return
         client = await self._get_client(user)
-        available = await self._collateral_fn(client)
+        available, client = await self._read_collateral(user, client)
         # Capital at risk, not just settled positions: a row mid-close still
         # holds real shares, and a reconciliation_required row may represent an
         # order that DID fill. The fast-detection path already counted all
@@ -1623,6 +1649,40 @@ class CopyEngine:
         if cid not in self._clients:
             self._clients[cid] = await self._client_factory(user)
         return self._clients[cid]
+
+    async def _reset_client(self, user: dict):
+        """Drop and rebuild a user's cached CLOB client.
+
+        Called after a transport failure: the cached client holds a connection
+        the server has already terminated, so every later read on it fails the
+        same way until the process restarts.
+        """
+        cid = user["id"]
+        stale = self._clients.pop(cid, None)
+        if stale is not None:
+            close = getattr(stale, "close", None)
+            if close is not None:
+                try:
+                    await close()
+                except Exception:
+                    pass          # the connection is gone anyway
+        return await self._get_client(user)
+
+    async def _read_collateral(self, user: dict, client) -> tuple[float, object]:
+        """Available collateral, surviving one connection recycle.
+
+        Returns (value, client) — the client may have been rebuilt, and the
+        caller must use the returned one. Reading a balance is idempotent, so
+        a transport failure is safe to retry; anything else propagates.
+        """
+        try:
+            return await self._collateral_fn(client), client
+        except CLIENT_TRANSPORT_ERRORS as exc:
+            log.warning("collateral read hit a transport failure (%s: %s) — "
+                        "rebuilding client for %s and retrying once",
+                        type(exc).__name__, exc, str(user["id"])[:10])
+        client = await self._reset_client(user)
+        return await self._collateral_fn(client), client
 
     async def _default_client_factory(self, user: dict):
         pk = wallet.decrypt_private_key(user["private_key_enc"], ENCRYPTION_SECRET)
