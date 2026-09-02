@@ -28,4 +28,12 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
     CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/health', timeout=3)"]
 
-CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1"]
+# --proxy-headers makes request.client.host the real caller rather than the
+# Caddy container, which is what every per-client rate limit is keyed on and
+# what the access log records. The app port is only `expose`d on the internal
+# Docker network -- Caddy is the sole possible peer -- so trusting the hop is
+# safe here; FORWARDED_ALLOW_IPS can narrow it further.
+# uvicorn reads FORWARDED_ALLOW_IPS from the environment, so this stays
+# overridable without giving up the exec form (no shell, signals reach uvicorn).
+ENV FORWARDED_ALLOW_IPS="*"
+CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1", "--proxy-headers"]

@@ -16,7 +16,9 @@ boundary:
     dependency in this module);
   * it projects an explicit field allowlist, so a column added to trader_cache
     later cannot start leaking through this route by accident;
-  * it is rate limited per client address.
+  * it is rate limited per client address, resolved through the
+    trusted proxy hop (backend.core.client_identity) rather than from
+    the peer socket, which behind Caddy is a single shared address.
 
 trader_cache holds public wallet data only. No PolyTrade user, session,
 balance, follow relationship or Telegram identity is readable here, and none is
@@ -33,6 +35,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from backend.api.deps import get_db
+from backend.core.client_identity import client_identity
 
 router = APIRouter()
 
@@ -63,7 +66,10 @@ def rate_limit_keys() -> list[str]:
 
 
 def _enforce_rate_limit(request: Request) -> None:
-    client = request.client.host if request.client else "unknown"
+    # Same definition of "client" as every other per-client limit. Keying on
+    # request.client.host made this one bucket for the entire internet, since
+    # Caddy is the only peer the app ever sees.
+    client = client_identity(request)
     now = time.monotonic()
     bucket = _requests.get(client)
     if bucket is None:

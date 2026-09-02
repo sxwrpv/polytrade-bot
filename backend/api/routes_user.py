@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from backend.config import CREATE_WALLET_RATE_LIMIT, ENCRYPTION_SECRET, TELEGRAM_BOT_TOKEN
+from backend.core.client_identity import client_identity
 from backend.core import auth, equity as equity_mod, pnl as pnl_mod, wallet
 from backend.api.deps import get_current_user, get_db, get_pm, get_user_client
 from backend.db.database import now_iso
@@ -37,17 +38,14 @@ def _create_rate_limited(ip: str) -> bool:
 
 
 def _client_ip(request: Request) -> str:
-    """Real client IP for rate limiting. Behind the tunnel (Tailscale Funnel /
-    localhost.run) every request reaches uvicorn from loopback, so keying on
-    request.client.host put ALL users in one shared bucket; the tunnel's
-    X-Forwarded-For carries the real address. Only trusted from loopback —
-    a direct remote caller can't spoof its way into someone else's bucket."""
-    host = request.client.host if request.client else "unknown"
-    if host in ("127.0.0.1", "::1"):
-        forwarded = request.headers.get("x-forwarded-for", "")
-        if forwarded:
-            return forwarded.split(",")[0].strip()
-    return host
+    """Real client IP for rate limiting — see backend.core.client_identity.
+
+    This used to trust X-Forwarded-For only from loopback, which was right for
+    the retired tunnel and wrong for the Docker/Caddy topology that replaced
+    it: Caddy has a 172.x address, so the branch never fired and every caller
+    shared one bucket.
+    """
+    return client_identity(request)
 
 # Bridge response keys verified live against bridge.polymarket.com/deposit
 # (2026-07-01) — one address per chain family; whatever arrives is converted
