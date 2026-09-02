@@ -129,3 +129,13 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
 # calls Polymarket's shared relayer (deploy + approvals), which rate-limits by
 # builder key — one abusive IP must not exhaust it for everyone.
 CREATE_WALLET_RATE_LIMIT = os.environ.get("CREATE_WALLET_RATE_LIMIT", "3/3600")
+
+# --- Database pool ---
+# Retire an idle pooled connection before Supabase's pooler or the network
+# does it for us. One ConnectionDoesNotExistError was observed in production
+# (2026-09-02); the worker recovered on its next cycle, and Database._read now
+# retries a single safe read past it.
+DB_POOL_MIN_SIZE = int(os.environ.get("DB_POOL_MIN_SIZE", "1"))
+DB_POOL_MAX_SIZE = int(os.environ.get("DB_POOL_MAX_SIZE", "10"))
+DB_POOL_MAX_INACTIVE_SECONDS = float(
+    os.environ.get("DB_POOL_MAX_INACTIVE_SECONDS", "180"))

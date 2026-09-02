@@ -19,6 +19,17 @@ RUN python -m pip install --no-cache-dir -r requirements.txt \
     && groupadd --gid 1000 polytrade \
     && useradd --uid 1000 --gid 1000 --create-home polytrade
 
+# Stamped by the deploy script so /api/version can prove what is running.
+# The Screener commit once reached GitHub without reaching production and
+# nothing in the system could say so.
+ARG GIT_REVISION=unknown
+ARG BUILD_TIME=""
+ENV GIT_REVISION=${GIT_REVISION} \
+    BUILD_TIME=${BUILD_TIME}
+LABEL org.opencontainers.image.revision=${GIT_REVISION} \
+      org.opencontainers.image.created=${BUILD_TIME} \
+      org.opencontainers.image.source="https://github.com/sxwrpv/polytrade-bot"
+
 COPY --chown=polytrade:polytrade backend/ backend/
 COPY --chown=polytrade:polytrade docs/ docs/
 COPY --from=frontend-build --chown=polytrade:polytrade /build/frontend/dist/ frontend/dist/

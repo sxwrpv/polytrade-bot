@@ -25,6 +25,7 @@ import httpx
 from backend.config import (
     BRIDGE_API, CLOB_API, DATA_API, HTTP_TIMEOUT, HTTP_USER_AGENT,
 )
+from backend.core.health import upstream
 
 log = logging.getLogger("polymarket")
 
@@ -293,17 +294,24 @@ class PolymarketClient:
             try:
                 r = await self._client.get(url, params=params)
             except RETRYABLE_TRANSPORT as exc:
+                upstream.record(transport_error=True)
                 if final:
                     raise
                 delay = _backoff_delay(attempt)
+                upstream.record(retry=True)
                 log.warning("transport failure on %s (%s: %s) — retry %d/%d in %.2fs",
                             url, type(exc).__name__, exc, attempt + 1, last_attempt, delay)
                 await asyncio.sleep(delay)
                 continue
+            if r.status_code == 429:
+                upstream.record(rate_limited=True)
+            elif r.status_code >= 500:
+                upstream.record(server_error=True)
             if r.status_code == 429 and not final:
                 delay = _retry_after_seconds(r)
                 if delay is None:
                     delay = _backoff_delay(attempt)
+                upstream.record(retry=True)
                 log.warning("429 from %s — retry %d/%d in %.2fs",
                             url, attempt + 1, last_attempt, delay)
                 await asyncio.sleep(delay)
@@ -315,6 +323,7 @@ class PolymarketClient:
                 await asyncio.sleep(delay)
                 continue
             r.raise_for_status()
+            upstream.record(ok=True)
             return r.json()
 
     # --- orderbook ---------------------------------------------------------
