@@ -793,6 +793,83 @@ async def refresh_trader_stats(address: str, db, pm) -> dict:
     return (await refresh_trader_analysis(address, db, pm)).stats
 
 
+# ---------------------------------------------------------------------------
+# Refresh health / backoff
+# ---------------------------------------------------------------------------
+# A wallet whose upstream data consistently fails used to be retried on every
+# single pass, forever: the batch was ordered by "stats_refreshed_at IS NULL
+# DESC", and a wallet that never succeeds never sets that column, so it sorted
+# first every time. In the 30 Aug - 2 Sep window two addresses produced 381 of
+# 388 refresh failures that way — pure log noise and pure wasted upstream
+# capacity, permanently displacing wallets that would have refreshed fine.
+#
+# Cached stats are never deleted. A wallet in cooldown keeps serving its last
+# successful numbers; data_completeness records why they are stale.
+REFRESH_BACKOFF_BASE_SECONDS = 15 * 60          # first failure: 15 minutes
+REFRESH_BACKOFF_MAX_SECONDS = 24 * 60 * 60      # ceiling: a day
+# A status the wallet's own data provokes (as opposed to a transport blip) is
+# not going to resolve on the next pass, so it starts further along the curve.
+ADDRESS_SPECIFIC_STATUSES = (500, 404, 422)
+ADDRESS_SPECIFIC_MIN_SECONDS = 6 * 60 * 60      # quarantine for several hours
+
+
+def _http_status_of(exc: BaseException) -> int | None:
+    """The HTTP status behind a failure, if it carries one."""
+    seen = set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        response = getattr(exc, "response", None)
+        status = getattr(response, "status_code", None)
+        if isinstance(status, int):
+            return status
+        exc = exc.__cause__ or exc.__context__
+    return None
+
+
+def refresh_backoff_seconds(failure_count: int, status: int | None = None) -> float:
+    """Cooldown after `failure_count` consecutive failures.
+
+    Exponential, capped, and floored higher when the status says the problem
+    belongs to this address rather than to the moment.
+    """
+    delay = min(REFRESH_BACKOFF_MAX_SECONDS,
+                REFRESH_BACKOFF_BASE_SECONDS * (2 ** max(0, failure_count - 1)))
+    if status in ADDRESS_SPECIFIC_STATUSES:
+        delay = max(delay, ADDRESS_SPECIFIC_MIN_SECONDS)
+    return float(min(delay, REFRESH_BACKOFF_MAX_SECONDS))
+
+
+def _iso_in(seconds: float) -> str:
+    return (dt.datetime.now(dt.timezone.utc)
+            + dt.timedelta(seconds=seconds)).isoformat()
+
+
+async def _record_refresh_failure(db, address: str, exc: BaseException) -> float:
+    """Advance the backoff for one address. Returns the cooldown applied."""
+    row = await db.fetchone(
+        "SELECT refresh_failure_count FROM trader_cache WHERE address=?", (address,))
+    count = int((row or {}).get("refresh_failure_count") or 0) + 1
+    status = _http_status_of(exc)
+    delay = refresh_backoff_seconds(count, status)
+    detail = f"{type(exc).__name__}: {exc}"
+    await db.execute(
+        "UPDATE trader_cache SET last_refresh_attempt_at=?, refresh_failure_count=?, "
+        "next_retry_at=?, last_refresh_error=?, data_completeness=? WHERE address=?",
+        (now_iso(), count, _iso_in(delay), detail[:500],
+         "stale_refresh_failed", address))
+    return delay
+
+
+async def _record_refresh_success(db, address: str) -> None:
+    """Clear the failure state so a recovered wallet returns to the rotation."""
+    now = now_iso()
+    await db.execute(
+        "UPDATE trader_cache SET last_refresh_attempt_at=?, last_refresh_success_at=?, "
+        "refresh_failure_count=0, next_retry_at=NULL, last_refresh_error=NULL, "
+        "data_completeness=? WHERE address=?",
+        (now, now, "complete", address))
+
+
 async def refresh_all(db, pm, *, limit: int = 200, concurrency: int = 8) -> int:
     """Recompute windowed stats for a batch of cached traders, prioritizing
     (1) wallets that have never been enriched, then (2) the stalest — so the
@@ -801,21 +878,41 @@ async def refresh_all(db, pm, *, limit: int = 200, concurrency: int = 8) -> int:
     outside the top 100 permanently statless). Batches run concurrently
     (bounded); 3-8 API calls per wallet (paginated trades + redeems +
     positions). Meant for the background loop in main.py, not per-request."""
+    now = now_iso()
     rows = await db.fetchall(
         "SELECT address FROM trader_cache "
+        "WHERE next_retry_at IS NULL OR next_retry_at <= ? "
         "ORDER BY (stats_refreshed_at IS NULL) DESC, stats_refreshed_at ASC "
-        "LIMIT ?", (limit,))
+        "LIMIT ?", (now, limit))
     sem = asyncio.Semaphore(concurrency)
     done = 0
+    failed = 0
 
     async def one(address: str) -> None:
-        nonlocal done
+        nonlocal done, failed
         async with sem:
             try:
                 await refresh_trader_stats(address, db, pm)
-                done += 1
+            except Exception as exc:
+                failed += 1
+                try:
+                    delay = await _record_refresh_failure(db, address, exc)
+                except Exception:
+                    log.exception("could not record refresh failure for %s", address)
+                    delay = 0.0
+                # One line, not a traceback: these are upstream statuses on a
+                # known address, and the stack was 20 identical frames of httpx.
+                log.warning("windowed stats refresh failed for %s (%s) — "
+                            "next retry in %.0f min", address,
+                            type(exc).__name__, delay / 60.0)
+                return
+            done += 1
+            try:
+                await _record_refresh_success(db, address)
             except Exception:
-                log.exception("windowed stats refresh failed for %s", address)
+                log.exception("could not clear refresh failure state for %s", address)
 
     await asyncio.gather(*(one(r["address"]) for r in rows))
+    if failed:
+        log.info("wallet screener: %d refreshed, %d deferred to backoff", done, failed)
     return done

@@ -126,6 +126,13 @@ def _project(row: dict, period: str) -> dict:
         # about coverage of any other source.
         "history_partial": history_days is None or history_days < days,
         "stats_refreshed_at": refreshed,
+        # Refresh health, so a board can label a wallet stale instead of
+        # presenting last week's numbers as current. "complete" = the last
+        # refresh succeeded; "stale_refresh_failed" = upstream is failing for
+        # this address and it is in cooldown, so the figures above are the
+        # last good ones. Public wallet metadata only.
+        "data_completeness": row.get("data_completeness"),
+        "refresh_failing": bool(row.get("refresh_failure_count") or 0),
         # The 90-day realized-PnL series, so the analysis panel can draw a curve
         # without a second request and without this route ever reaching
         # upstream. Trimmed to the selected window: publishing 90 days under a
