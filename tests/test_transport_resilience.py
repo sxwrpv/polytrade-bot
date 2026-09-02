@@ -236,3 +236,97 @@ class CollateralClientRecoveryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CollateralCacheTests(unittest.TestCase):
+    """The fast path read a balance per candidate; 70% of those decisions were
+    then thrown away by the dust floor. Reuse the reading briefly, but never
+    in the direction that could over-size a copy."""
+
+    def _engine(self, values):
+        from backend.core.copy_engine import CopyEngine as CE
+        seq = list(values)
+        reads = []
+
+        async def factory(user):
+            return _FakeClient("c")
+
+        async def collateral(client):
+            reads.append(1)
+            return seq.pop(0) if seq else 0.0
+
+        eng = CE(db=SimpleNamespace(), pm=SimpleNamespace(),
+                 client_factory=factory, collateral_fn=collateral)
+        return eng, reads
+
+    def test_repeated_decisions_reuse_one_reading(self):
+        eng, reads = self._engine([100.0])
+        user = {"id": "0xuser"}
+
+        async def go():
+            client = await eng._get_client(user)
+            out = []
+            for _ in range(50):
+                value, client = await eng._read_collateral(user, client)
+                out.append(value)
+            return out
+
+        values = run(go())
+        self.assertEqual(values, [100.0] * 50)
+        self.assertEqual(len(reads), 1, "balance was re-read despite a live cache")
+
+    def test_submitting_a_buy_invalidates_the_cache(self):
+        """Sizing the next copy against a pre-spend balance is how a cap gets
+        breached — the 2026-08-23 shape. Money on the wire clears the entry."""
+        eng, reads = self._engine([100.0, 40.0])
+        user = {"id": "0xuser"}
+
+        async def go():
+            client = await eng._get_client(user)
+            first, client = await eng._read_collateral(user, client)
+            eng._note_submitted("0xuser", "token-1", 60.0)
+            second, client = await eng._read_collateral(user, client)
+            return first, second
+
+        first, second = run(go())
+        self.assertEqual((first, second), (100.0, 40.0))
+        self.assertEqual(len(reads), 2)
+
+    def test_expiry_forces_a_fresh_read(self):
+        eng, reads = self._engine([100.0, 55.0])
+        user = {"id": "0xuser"}
+
+        async def go():
+            client = await eng._get_client(user)
+            first, client = await eng._read_collateral(user, client)
+            eng._collateral_cache["0xuser"][1] = 0.0     # expire it
+            second, client = await eng._read_collateral(user, client)
+            return first, second
+
+        self.assertEqual(run(go()), (100.0, 55.0))
+        self.assertEqual(len(reads), 2)
+
+    def test_cache_is_per_user(self):
+        eng, reads = self._engine([10.0, 20.0])
+
+        async def go():
+            a = {"id": "0xa"}
+            b = {"id": "0xb"}
+            va, _ = await eng._read_collateral(a, await eng._get_client(a))
+            vb, _ = await eng._read_collateral(b, await eng._get_client(b))
+            return va, vb
+
+        self.assertEqual(run(go()), (10.0, 20.0))
+        self.assertEqual(len(reads), 2)
+
+    def test_allow_cached_false_always_reads(self):
+        eng, reads = self._engine([100.0, 100.0])
+        user = {"id": "0xuser"}
+
+        async def go():
+            client = await eng._get_client(user)
+            await eng._read_collateral(user, client)
+            await eng._read_collateral(user, client, allow_cached=False)
+
+        run(go())
+        self.assertEqual(len(reads), 2)

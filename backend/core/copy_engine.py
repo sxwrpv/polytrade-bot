@@ -98,6 +98,25 @@ MAX_LEADER_TRADE_AGE_SECONDS = float(
 # and only after the client is rebuilt. Order submission is never retried
 # here: execution.py owns that, and an ambiguous submission must reconcile
 # rather than re-fire.
+# How long an available-collateral reading may be reused across copy
+# decisions for one user.
+#
+# _handle_leader_trade reads the balance for EVERY detected leader trade, via
+# an authenticated CLOB round-trip, and does it before the dust-floor check.
+# In the 30 Aug - 2 Sep window that was ~14,300 reads of which 10,126 were
+# immediately discarded by that check, and it is the traffic that walks a
+# connection into its 10,000-stream recycle.
+#
+# Reusing a reading is safe in the direction that matters. The balance only
+# falls when WE spend, and every submission invalidates the entry
+# (_note_submitted), so a cached value can only be stale-low -- which
+# under-sizes, never over-sizes. An external withdrawal inside the window is
+# the one gap, and it is still caught downstream: _prepare_buy re-derives
+# every cap in its write transaction, _clamp_to_verified_position re-reads the
+# wallet, and the exchange rejects on not_enough_balance.
+COLLATERAL_CACHE_SECONDS = float(
+    os.environ.get("COLLATERAL_CACHE_SECONDS", "5"))
+
 CLIENT_TRANSPORT_ERRORS = (
     httpx.RemoteProtocolError,
     httpx.ConnectError,
@@ -293,6 +312,9 @@ class CopyEngine:
         # ("first sight: start now, don't retro-copy the leader's history").
         # In memory on purpose: after a restart the safe answer is the same one.
         self._no_backfill: dict[tuple[str, str], set] = {}
+        # user_id -> [available_usd, monotonic_deadline]. See
+        # COLLATERAL_CACHE_SECONDS. In memory on purpose: a restart re-reads.
+        self._collateral_cache: dict[str, list] = {}
 
     # --- lifecycle ---------------------------------------------------------
     async def run(self, stop_event: asyncio.Event) -> None:
@@ -558,6 +580,7 @@ class CopyEngine:
             except Exception:
                 pass
         self._clients.clear()
+        self._collateral_cache.clear()
 
     async def _loop(self, fn, interval: float, stop_event: asyncio.Event) -> None:
         while not stop_event.is_set():
@@ -1030,6 +1053,8 @@ class CopyEngine:
         if deadline <= now:
             prior = 0.0
         self._submitted[key] = [prior + float(notional), now + SUBMITTED_BASIS_TTL_SECONDS]
+        # money is on the wire — the cached balance is now stale-high
+        self._invalidate_collateral(user_id)
 
     def _submitted_basis(self, user_id: str, token_id: str) -> float:
         """Notional submitted for this token inside the TTL, or 0."""
@@ -1120,6 +1145,7 @@ class CopyEngine:
             log.warning("order skipped (%s %s): %s", action.kind, action.token_id, result.reason)
             return 0.0
         self._record_fill_outcome(user_id, action, filled=True)
+        self._invalidate_collateral(user_id)   # proceeds change the balance
         if action.kind == "close":
             await self._record_close(user_id, action, result)
         elif action.kind == "resize":
@@ -1668,21 +1694,47 @@ class CopyEngine:
                     pass          # the connection is gone anyway
         return await self._get_client(user)
 
-    async def _read_collateral(self, user: dict, client) -> tuple[float, object]:
-        """Available collateral, surviving one connection recycle.
+    def _cached_collateral(self, user_id: str) -> float | None:
+        entry = self._collateral_cache.get(user_id)
+        if not entry:
+            return None
+        value, deadline = entry
+        if deadline <= time.monotonic():
+            self._collateral_cache.pop(user_id, None)
+            return None
+        return float(value)
+
+    def _invalidate_collateral(self, user_id: str) -> None:
+        """Called the moment we put money on the wire, so the next decision
+        sizes against a fresh balance rather than the pre-spend one."""
+        self._collateral_cache.pop(user_id, None)
+
+    async def _read_collateral(self, user: dict, client, *,
+                               allow_cached: bool = True) -> tuple[float, object]:
+        """Available collateral, cached briefly and surviving one connection
+        recycle.
 
         Returns (value, client) — the client may have been rebuilt, and the
         caller must use the returned one. Reading a balance is idempotent, so
         a transport failure is safe to retry; anything else propagates.
         """
+        user_id = user["id"]
+        if allow_cached and COLLATERAL_CACHE_SECONDS > 0:
+            cached = self._cached_collateral(user_id)
+            if cached is not None:
+                return cached, client
         try:
-            return await self._collateral_fn(client), client
+            value = await self._collateral_fn(client)
         except CLIENT_TRANSPORT_ERRORS as exc:
             log.warning("collateral read hit a transport failure (%s: %s) — "
                         "rebuilding client for %s and retrying once",
-                        type(exc).__name__, exc, str(user["id"])[:10])
-        client = await self._reset_client(user)
-        return await self._collateral_fn(client), client
+                        type(exc).__name__, exc, str(user_id)[:10])
+            client = await self._reset_client(user)
+            value = await self._collateral_fn(client)
+        if COLLATERAL_CACHE_SECONDS > 0:
+            self._collateral_cache[user_id] = [
+                float(value), time.monotonic() + COLLATERAL_CACHE_SECONDS]
+        return value, client
 
     async def _default_client_factory(self, user: dict):
         pk = wallet.decrypt_private_key(user["private_key_enc"], ENCRYPTION_SECRET)

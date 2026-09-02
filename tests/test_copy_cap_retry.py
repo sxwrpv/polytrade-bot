@@ -22,9 +22,16 @@ from backend.core import copy_engine as ce
 
 class _Engine(ce.CopyEngine):
     """Bare engine: only the basis bookkeeping is under test, so nothing else
-    is constructed."""
+    is constructed.
+
+    _collateral_cache is here because recording a submission also invalidates
+    the cached balance — the invariant is deliberately bound to the record
+    rather than to a call site, so that a future submission path cannot forget
+    it. That makes it part of this stub's minimum.
+    """
     def __init__(self):
         self._submitted = {}
+        self._collateral_cache = {}
 
 
 def _action(token="tok", amount=15.0):
