@@ -91,6 +91,26 @@ verify() {
     ok "screener serving live data"
   fi
 
+  # 5. the cohort snapshot is not already stale. The board shows its own
+  # staleness banner past two days, so a deploy landing outside that window
+  # has shipped a visible warning to every visitor.
+  local generated age_days gen_epoch
+  generated="$(printf '%s' "$scr_json" | sed -n 's/.*"generatedAt":"\([^"]*\)".*/\1/p')"
+  if [[ -z "$generated" ]]; then
+    fail "screener reports no snapshot date"; failed=1
+  else
+    gen_epoch="$(date -u -d "$generated" +%s 2>/dev/null || echo 0)"
+    age_days=$(( ( $(date -u +%s) - gen_epoch ) / 86400 ))
+    if (( gen_epoch == 0 )); then
+      fail "could not parse snapshot date '$generated'"; failed=1
+    elif (( age_days > 2 )); then
+      fail "cohort snapshot is ${age_days}d old — the board will show its staleness banner"
+      failed=1
+    else
+      ok "cohort snapshot ${age_days}d old"
+    fi
+  fi
+
   return "$failed"
 }
 
@@ -144,6 +164,18 @@ ok "built"
 log "Running tests inside the image"
 "${COMPOSE[@]}" run --rm --no-deps app python -m pytest -q \
   && ok "tests passed" || die "tests failed — nothing deployed"
+
+# The snapshot lives in ./screener-data and a cron refreshes it in place, but
+# a deploy is the one moment we know a human is watching -- and shipping a
+# build whose board immediately announces stale data is how it went unnoticed
+# for ten days. Non-fatal: upstream being down is not a reason to abort a
+# deploy, and the board reports the age honestly either way.
+log "Refreshing screener snapshot"
+if "${COMPOSE[@]}" run --rm --no-deps trader-screener node scripts/ingest.mjs >/dev/null 2>&1; then
+  ok "snapshot refreshed"
+else
+  fail "snapshot refresh failed — deploying anyway with the existing snapshot"
+fi
 
 # --- point of no return ---------------------------------------------------
 log "Recreating containers"

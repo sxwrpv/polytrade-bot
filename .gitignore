@@ -27,3 +27,8 @@ frontend/dist/
 
 # editor
 .vscode/
+
+# Runtime screener snapshot. Refreshed in place by scripts/refresh-screener-data.sh
+# (the image ships a seed copy under seed-data/), so it is host state, not source.
+screener-data/*
+!screener-data/.gitkeep

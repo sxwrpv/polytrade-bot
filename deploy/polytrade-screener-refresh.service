@@ -1,0 +1,12 @@
+[Unit]
+Description=Refresh the PolyTrade screener cohort snapshot
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/polytrade
+ExecStart=/opt/polytrade/scripts/refresh-screener-data.sh
+# Upstream flakiness should not need a human; a missed day is visible in the
+# board's own staleness banner either way.
+TimeoutStartSec=600
