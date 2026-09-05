@@ -31,14 +31,68 @@ const BUILD_TIME = process.env.BUILD_TIME || '';
  * fell back to snapshot looks identical from the outside otherwise. */
 const DATA_MODE = process.env.SCREENER_DATA_MODE || 'live';
 
+/* The cohort snapshot used to be baked into the image and read exactly once,
+ * at boot. Upstream regenerates it DAILY, so the board's own staleness banner
+ * reappeared about two days after every deploy and could only be cleared by
+ * rebuilding the image -- which is what it had been telling users to do,
+ * unheeded, for the ten days to 2026-09-05.
+ *
+ * It now lives in a mounted directory (SCREENER_DATA_DIR, seeded from the
+ * image on first start) and is re-read when its mtime changes, so a cron that
+ * runs scripts/ingest.mjs refreshes the board without a rebuild or a restart.
+ *
+ * A failed RELOAD keeps the dataset already in memory: yesterday's cohort is
+ * strictly better than a 500, and the banner will say it is stale. Only a
+ * failure at BOOT is fatal, because then there is nothing to serve. */
+const DATA_DIR = process.env.SCREENER_DATA_DIR || join(ROOT, 'data');
+const RELOAD_SECONDS = Number(process.env.SNAPSHOT_RELOAD_SECONDS || 300);
+
 let dataset = null, smi = null;
+let snapshotMtime = 0;
+
+async function readSnapshotFiles() {
+  const [ds, sm] = await Promise.all([
+    readFile(join(DATA_DIR, 'dataset.json'), 'utf8'),
+    readFile(join(DATA_DIR, 'smi.json'), 'utf8'),
+  ]);
+  return { dataset: JSON.parse(ds), smi: JSON.parse(sm) };
+}
+
 async function loadSnapshot() {
   try {
-    dataset = JSON.parse(await readFile(join(ROOT, 'data/dataset.json'), 'utf8'));
-    smi = JSON.parse(await readFile(join(ROOT, "data/smi.json"), "utf8"));
+    const next = await readSnapshotFiles();
+    dataset = next.dataset;
+    smi = next.smi;
+    snapshotMtime = (await stat(join(DATA_DIR, 'dataset.json'))).mtimeMs;
   } catch (e) {
-    console.error('\n  No snapshot found. Run:  node scripts/ingest.mjs\n');
+    console.error(`\n  No snapshot found in ${DATA_DIR}. Run:  node scripts/ingest.mjs\n`);
     process.exit(1);
+  }
+}
+
+/** Re-read only when the file actually changed. Returns true if it swapped. */
+export async function reloadSnapshotIfChanged() {
+  let mtime;
+  try {
+    mtime = (await stat(join(DATA_DIR, 'dataset.json'))).mtimeMs;
+  } catch {
+    return false;                     // mid-write or briefly absent
+  }
+  if (mtime === snapshotMtime) return false;
+  try {
+    const next = await readSnapshotFiles();
+    const was = dataset?.meta?.generatedAt;
+    dataset = next.dataset;
+    smi = next.smi;
+    snapshotMtime = mtime;
+    console.log(`  snapshot reloaded  ${was} -> ${dataset.meta.generatedAt}` +
+                `  ·  ${dataset.traders.length.toLocaleString()} traders`);
+    return true;
+  } catch (e) {
+    // Half-written file, bad JSON, whatever: keep serving what we have and
+    // try again next tick. mtime is deliberately NOT advanced.
+    console.error(`  snapshot reload failed, keeping the loaded one: ${e.message}`);
+    return false;
   }
 }
 
@@ -247,9 +301,15 @@ const server = createServer(async (req, res) => {
 });
 
 await loadSnapshot();
+if (RELOAD_SECONDS > 0) {
+  // unref: a pending reload must never hold the process open on shutdown.
+  setInterval(() => { reloadSnapshotIfChanged().catch(() => {}); },
+              RELOAD_SECONDS * 1000).unref();
+}
 server.listen(PORT, () => {
   console.log(`\n  Polycopy screener clone`);
   console.log(`  http://localhost:${PORT}`);
   console.log(`  snapshot ${dataset.meta.generatedAt}  ·  ${dataset.traders.length.toLocaleString()} traders`);
+  console.log(`  data dir ${DATA_DIR}  ·  reload every ${RELOAD_SECONDS}s`);
   console.log(`  trader pages pull live from data-api.polymarket.com\n`);
 });

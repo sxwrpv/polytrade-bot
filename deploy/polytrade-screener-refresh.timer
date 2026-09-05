@@ -1,0 +1,12 @@
+[Unit]
+Description=Daily refresh of the PolyTrade screener cohort snapshot
+
+[Timer]
+# Upstream regenerates each morning; this runs after it and jitters so we are
+# not hammering the same second every day.
+OnCalendar=*-*-* 09:30:00 UTC
+RandomizedDelaySec=900
+Persistent=true
+
+[Install]
+WantedBy=timers.target
