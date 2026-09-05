@@ -7,8 +7,9 @@ import secrets
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 
-from backend.config import TELEGRAM_BOT_TOKEN
+from backend.config import DEV_PREVIEW, TELEGRAM_BOT_TOKEN
 from backend.core import auth
+from backend.core.dev_preview import ensure_dev_preview_user
 from backend.api.deps import get_current_user, get_db
 from backend.db.database import now_iso
 
@@ -110,6 +111,22 @@ async def link_telegram(body: LinkTelegram, user=Depends(get_current_user),
         raise HTTPException(409, "Telegram account is already linked to another wallet") from exc
     return {"address": user["id"], "linked": True,
             "telegram_user_id": telegram_user_id}
+
+
+@router.post("/dev-login")
+async def dev_login(response: Response, db=Depends(get_db)):
+    """Local-only session for Vite / Mobile Preview. Disabled unless DEV_PREVIEW=1."""
+    if not DEV_PREVIEW:
+        raise HTTPException(404, "not found")
+    user_id = await ensure_dev_preview_user(db)
+    if not user_id:
+        raise HTTPException(503, "dev preview user could not be created")
+    user = await db.fetchone("SELECT * FROM users WHERE id=?", (user_id,))
+    if not user:
+        raise HTTPException(503, "dev preview user missing")
+    raw = await auth.issue_session(db, user["id"])
+    auth.set_session_cookie(response, raw)
+    return {"address": user["id"], "linked": user.get("telegram_user_id") is not None}
 
 
 @router.post("/logout")

@@ -79,22 +79,26 @@ async def issue_session(db, user_id: str) -> str:
 
 
 def set_session_cookie(response, raw_token: str) -> None:
+    from backend.config import SESSION_COOKIE_SECURE
+
     response.set_cookie(
         SESSION_COOKIE,
         raw_token,
         max_age=SESSION_TTL_SECONDS,
         httponly=True,
-        secure=True,
+        secure=SESSION_COOKIE_SECURE,
         samesite="strict",
         path="/",
     )
 
 
 def clear_session_cookie(response) -> None:
+    from backend.config import SESSION_COOKIE_SECURE
+
     response.delete_cookie(
         SESSION_COOKIE,
         httponly=True,
-        secure=True,
+        secure=SESSION_COOKIE_SECURE,
         samesite="strict",
         path="/",
     )

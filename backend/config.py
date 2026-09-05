@@ -129,3 +129,13 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
 # calls Polymarket's shared relayer (deploy + approvals), which rate-limits by
 # builder key — one abusive IP must not exhaust it for everyone.
 CREATE_WALLET_RATE_LIMIT = os.environ.get("CREATE_WALLET_RATE_LIMIT", "3/3600")
+
+# --- Local UI preview (Vite + Mobile Preview extension) ---
+# Enables POST /api/auth/dev-login and seeds a local-only wallet when the DB
+# is empty. Never set in production.
+DEV_PREVIEW = os.environ.get("DEV_PREVIEW", "0") == "1"
+# Session cookies default to Secure (HTTPS-only). Local http://127.0.0.1 dev
+# servers need this off or the browser silently drops the cookie.
+SESSION_COOKIE_SECURE = (
+    os.environ.get("SESSION_COOKIE_SECURE", "0" if DEV_PREVIEW else "1") == "1"
+)
