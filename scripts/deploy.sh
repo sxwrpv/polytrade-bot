@@ -161,9 +161,21 @@ log "Building $SHORT"
   --build-arg "BUILD_TIME=$BUILD_TIME"
 ok "built"
 
-log "Running tests inside the image"
-"${COMPOSE[@]}" run --rm --no-deps app python -m pytest -q \
-  && ok "tests passed" || die "tests failed — nothing deployed"
+# NO test gate here, deliberately, and this is a known gap rather than an
+# oversight. The runtime image ships neither pytest nor tests/ (see
+# Dockerfile: only backend/, docs/ and the built frontend are copied), so the
+# gate this script originally carried could never have passed -- it failed on
+# its first real run, on 2026-09-05, with "No module named pytest".
+#
+# Removing it is honest about what this script does verify: the pre-flight
+# gates above, and the revision/readiness/data-mode/cohort-age checks below,
+# with an automatic rollback. Run the suite before you deploy; it is not run
+# for you here.
+#
+# To restore a real gate, the suite has to become environment-independent
+# first: 16 tests across four modules currently need ENCRYPTION_SECRET or a
+# built docs site, which are runtime facts, so a build-stage run would fail on
+# a clean checkout for reasons unrelated to the change being shipped.
 
 # The snapshot lives in ./screener-data and a cron refreshes it in place, but
 # a deploy is the one moment we know a human is watching -- and shipping a
