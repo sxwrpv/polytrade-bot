@@ -64,6 +64,21 @@ MAX_FILL_ATTEMPTS = 3
 # (stuck closings) before the wallet is treated as ground truth.
 UNCERTAIN_CLAIM_MIN_AGE_SECONDS = 180.0
 CLOSING_STUCK_MIN_AGE_SECONDS = 600.0
+# How long an uncertain BUY claim may stay unresolved before a COMPLETE wallet
+# scan showing no holding is finally accepted as proof that nothing filled.
+#
+# Why this exists: every failure at or after the submission boundary is
+# classified uncertain (execution.place_market_order, deliberately -- a 4xx
+# label proved untrustworthy on 2026-08-23 when shares arrived anyway). But
+# _settle_uncertain_claim only ever ADOPTED or RETAINED, so a claim the wallet
+# could not explain was fenced forever: no new BUY of that token for that user,
+# no SELL, no admin route to clear it, only direct SQL. A rate-limit rejection
+# -- routine against these hosts -- was enough to permanently freeze a token.
+#
+# 24h is far past any indexer lag (seconds), so a token still absent from a
+# complete scan after a day did not fill. Released loudly, never silently.
+UNCERTAIN_CLAIM_RELEASE_SECONDS = float(
+    os.environ.get("UNCERTAIN_CLAIM_RELEASE_SECONDS", str(24 * 3600)))
 # How long a submitted BUY keeps counting against this token's cap even when
 # the exchange reported failure and the indexer has not shown the shares yet.
 #
@@ -380,6 +395,22 @@ class CopyEngine:
                     log.exception("uncertain claim settlement failed: %s %s",
                                   user_id[:10], claim["token_id"])
 
+    @staticmethod
+    def _claim_age_seconds(claim: dict) -> float | None:
+        """Seconds since the claim was first reserved, or None if unparseable."""
+        for key in ("claimed_at", "updated_at"):
+            raw = claim.get(key)
+            if not raw:
+                continue
+            try:
+                ts = dt.datetime.fromisoformat(raw)
+            except (TypeError, ValueError):
+                continue
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=dt.timezone.utc)
+            return (dt.datetime.now(dt.timezone.utc) - ts).total_seconds()
+        return None
+
     async def _settle_uncertain_claim(self, user_id: str, claim: dict, p) -> None:
         token = claim["token_id"]
         row = await self.db.fetchone(
@@ -393,10 +424,26 @@ class CopyEngine:
                             user_id[:10], token)
                 await self._release_buy_claim(user_id, token, claim["claim_id"])
             elif p is None:
-                # Data-api absence is not authoritative proof of non-fill.
-                # Retain the durable fence for operator reconciliation.
-                log.warning("uncertain OPEN claim retained (no authoritative fill status): %s %s",
-                            user_id[:10], token)
+                # Data-api absence is not authoritative proof of non-fill --
+                # for a while. Past UNCERTAIN_CLAIM_RELEASE_SECONDS, with the
+                # wallet scan COMPLETE and the token still absent, it is: the
+                # indexer lags a fill by seconds, not a day. Releasing here is
+                # what stops a routine rejection from fencing a token for the
+                # life of the deployment.
+                age = self._claim_age_seconds(claim)
+                if age is not None and age >= UNCERTAIN_CLAIM_RELEASE_SECONDS:
+                    await self._release_buy_claim(user_id, token, claim["claim_id"])
+                    log.critical(
+                        "uncertain OPEN claim RELEASED after %.1fh: complete wallet "
+                        "scan shows no holding and no tracked row — treating as "
+                        "never filled: %s %s (last error: %s)",
+                        age / 3600.0, user_id[:10], token,
+                        (claim.get("last_error") or "")[:120])
+                else:
+                    log.warning(
+                        "uncertain OPEN claim retained (no authoritative fill status, "
+                        "age %.0fs of %.0fs): %s %s",
+                        age or 0.0, UNCERTAIN_CLAIM_RELEASE_SECONDS, user_id[:10], token)
             else:
                 await self._adopt_uncertain_fill(user_id, claim, p)
             return
@@ -506,13 +553,23 @@ class CopyEngine:
             by_user[r["user_id"]].append(r)
         for user_id, user_rows in by_user.items():
             try:
-                positions = await self.pm.get_positions(user_id, size_threshold=0)
+                # Paged + completeness-checked, like every other reconciler
+                # here. A single 500-row page sorted by current value made
+                # absence from it look like "the shares are gone", which is
+                # exactly the truncation bug plan_actions already guards
+                # against with positions_complete.
+                positions, complete = await self.pm.get_all_positions(
+                    user_id, size_threshold=0)
             except Exception:
                 log.exception("stuck-closing recovery: position read failed for %s",
                               user_id[:10])
                 continue
             held = {p.asset: p for p in positions if p.size > 0.01}
             for row in user_rows:
+                if row["token_id"] not in held and not complete:
+                    log.warning("stuck closing row %s left alone: wallet scan "
+                                "incomplete, absence proves nothing", row["id"])
+                    continue
                 try:
                     await self._settle_stuck_closing(user_id, row,
                                                      held.get(row["token_id"]))
@@ -720,9 +777,17 @@ class CopyEngine:
 
             client = await self._get_client(user)   # expensive — after the cheap checks
             available, client = await self._read_collateral(user, client)
+            # Same definition of capital at risk as _sync_user and
+            # _prepare_buy: a row mid-close still holds real shares, and a
+            # reconciliation_required row may represent an order that DID
+            # fill. Counting only 'open' here made this path's MAX OPEN and
+            # MAX EXPOSURE pre-checks laxer than the gate that actually
+            # enforces them, and the comment in _sync_user asserted these
+            # already agreed. They did not.
             all_open = await self.db.fetchall(
                 "SELECT notional_usd, trader_address FROM copy_positions "
-                "WHERE user_id = ? AND status = 'open'", (user_id,))
+                "WHERE user_id = ? AND status IN ('open','closing','reconciliation_required')",
+                (user_id,))
             trader_open_rows = [r for r in all_open if r["trader_address"] == trader]
             if frisk["max_open"] is not None and len(trader_open_rows) >= frisk["max_open"]:
                 log.info("fast-open skipped %s reason=max_open (%d) trader=%s",
@@ -1569,23 +1634,10 @@ class CopyEngine:
                     "before exit)", row["id"], exit_price)
 
     # --- shared persistence (used by both fast and reconcile paths) ---------
-    async def _insert_open(self, user_id, trader_address, condition_id, token_id,
-                           slug, title, outcome, shares, trader_shares, entry_price,
-                           notional) -> str | None:
-        pid = uuid.uuid4().hex
-        try:
-            await self.db.execute(
-                "INSERT INTO copy_positions(id, user_id, trader_address, condition_id, "
-                "token_id, market_slug, market_title, outcome, shares, trader_shares, "
-                "entry_price, notional_usd, status, opened_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'open',?)",
-                (pid, user_id, trader_address, condition_id, token_id, slug, title,
-                 outcome, shares, trader_shares, entry_price, notional, now_iso()))
-        except aiosqlite.IntegrityError:
-            log.info("open skipped (already open): %s %s", user_id, token_id)
-            return None
-        await self._event(user_id, pid, "open", notional, None)
-        return pid
+    # _insert_open lived here and was removed: no callers, no tests, and it
+    # duplicated the INSERT that _record_open and _adopt_untracked_submissions
+    # each do inside their own fencing transaction. An un-fenced copy of a
+    # money-writing path is a trap, not a spare.
 
     async def _close_row(self, user_id, row, exit_price, filled_shares,
                          *, event_type="close", status="closed") -> None:
