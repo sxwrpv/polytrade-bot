@@ -327,7 +327,7 @@ MIGRATIONS = (
     "ALTER TABLE trader_cache ADD COLUMN exits_90d INTEGER",
     "ALTER TABLE trader_cache ADD COLUMN fill_exit_ratio_90d REAL",
     # token auth + Telegram Mini App login (tokens are backfilled at startup
-    # by auth.ensure_api_tokens for rows that predate these columns). The
+    # at session issue; legacy plaintext values are destroyed at boot). The
     # indexes live here, not in SCHEMA_SQL, because on a pre-existing DB the
     # columns only exist after the ALTERs above have run.
     "ALTER TABLE users ADD COLUMN api_token TEXT",

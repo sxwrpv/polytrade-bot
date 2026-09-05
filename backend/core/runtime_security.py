@@ -17,9 +17,20 @@ def harden_runtime_files(root: str | Path, *, db_path: str = "copybot.db") -> No
     candidates = [root / ".env", db, Path(f"{db}-wal"), Path(f"{db}-shm")]
     if logs.exists():
         candidates.extend(p for p in logs.iterdir() if p.is_file())
+    # Per-path, because the loop used to abort on the first unreadable
+    # candidate and silently skip everything after it. In the container that
+    # is /app/data/copybot.db -- root-owned 0700 in the bind mount, unreadable
+    # to the non-root app user -- so this function raised PermissionError and
+    # hardened NOTHING, logging an ERROR on every boot since 2026-08-27 while
+    # the runbook said it ran.
     for path in candidates:
-        if path.exists() and path.is_file():
-            path.chmod(0o600)
+        try:
+            if path.exists() and path.is_file():
+                path.chmod(0o600)
+        except OSError:
+            # Not ours to tighten (or already gone). The other candidates still
+            # matter more than this one's failure.
+            continue
 
 
 def secure_process_umask() -> None:
