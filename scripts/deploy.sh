@@ -17,7 +17,13 @@
 set -Eeuo pipefail
 
 DEPLOY_DIR="${DEPLOY_DIR:-/opt/polytrade}"
-BASE_URL="${BASE_URL:-http://127.0.0.1}"
+# Verify through Caddy's plain-HTTP IP block, which the Caddyfile carries for
+# exactly this purpose ("so health checks and monitoring don't depend on DNS
+# or a certificate"). http://127.0.0.1 does NOT work: no site block matches
+# that Host, so it falls through to the automatic HTTPS redirect and every
+# check reads an empty 308 body. That is what failed the 2026-09-05 deploy
+# verification on a deployment that was in fact healthy.
+BASE_URL="${BASE_URL:-http://52.51.200.58}"
 READY_TIMEOUT="${READY_TIMEOUT:-120}"
 COMPOSE=(docker compose)
 
@@ -29,7 +35,13 @@ die()  { fail "$*"; exit 1; }
 cd "$DEPLOY_DIR"
 
 # --- what is running right now, so rollback has a target ------------------
+# Asked two ways. `compose images -q` came back empty during the 2026-09-05
+# deploy, which was only discovered after verification failed and there was
+# nothing to roll back to -- the worst possible moment to learn it.
 PREVIOUS_IMAGE="$("${COMPOSE[@]}" images -q app 2>/dev/null | head -1 || true)"
+if [[ -z "$PREVIOUS_IMAGE" ]]; then
+  PREVIOUS_IMAGE="$(docker inspect --format '{{.Image}}' polytrade-app-1 2>/dev/null || true)"
+fi
 
 verify() {
   # $1 = expected revision, or "" to just report
@@ -152,6 +164,18 @@ if ! grep -q '^COPY_ENGINE_AUTOSTART=1' .env 2>/dev/null; then
   die "refusing to deploy a silently disabled engine"
 fi
 ok "engine autostart configured"
+
+# A rollback target is a precondition, not a detail discovered during the
+# rollback itself. If nothing is running yet this is a first deploy and there
+# is genuinely nothing to roll back to, which is fine -- but it must be an
+# explicit decision rather than a surprise.
+if [[ -n "$PREVIOUS_IMAGE" ]]; then
+  ok "rollback target ${PREVIOUS_IMAGE:0:19}"
+elif [[ -n "$(docker ps -q -f name=polytrade-app-1)" ]]; then
+  die "a container is running but its image could not be identified — refusing to deploy without a rollback target"
+else
+  fail "nothing running: first deploy, no rollback target (continuing)"
+fi
 
 # --- build ----------------------------------------------------------------
 BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
