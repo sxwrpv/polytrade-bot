@@ -28,7 +28,11 @@ echo "[$(date -u +%FT%TZ)] refreshing screener snapshot"
 "${COMPOSE[@]}" run --rm --no-deps trader-screener node scripts/ingest.mjs
 
 # Report what the live service now believes, so a silent no-op is visible.
+# Via Caddy's plain-HTTP IP block, NOT 127.0.0.1: no site block matches that
+# Host, so the request falls through to the HTTPS redirect and the readback
+# silently prints "unknown" (observed on the first real run, 2026-09-05).
+BASE_URL="${BASE_URL:-http://52.51.200.58}"
 sleep 2
-generated="$(curl -fsS --max-time 10 http://127.0.0.1/screener/api/health 2>/dev/null \
+generated="$(curl -fsS --max-time 10 "$BASE_URL/screener/api/health" 2>/dev/null \
   | sed -n 's/.*"generatedAt":"\([^"]*\)".*/\1/p' || true)"
 echo "[$(date -u +%FT%TZ)] service reports generatedAt=${generated:-unknown}"
