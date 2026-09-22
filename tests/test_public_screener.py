@@ -329,14 +329,23 @@ class WireContractTests(PublicScreenerTestBase):
     def test_every_key_the_screener_sends_is_a_parameter_this_route_accepts(self):
         """A renamed parameter fails silently: FastAPI ignores the unknown key
         and returns an unfiltered list that still looks correct. Nothing else
-        in either suite would catch that, so pin the contract here."""
-        model = (Path(__file__).parents[1]
-                 / "frontend/src/screener/screenerModel.js").read_text()
-        emitted = set(re.findall(r"query\.([a-z_]+)\s*=", model))
-        emitted |= {"period", "sort", "limit"}  # set in the object literal
+        in either suite would catch that, so pin the contract here.
+
+        The client used to be the React screener's screenerModel.js. That page
+        is gone; the remaining caller of this route is the trader-screener
+        service's PolyTrade source adapter, so the contract is pinned against
+        that builder instead."""
+        source = (Path(__file__).parents[1]
+                  / "trader-screener/public/lib/dataSource.js").read_text()
+        start = source.index("export function toPolytradeQuery")
+        builder = source[start:source.index("\n}", start)]
+        # Keys arrive two ways: assigned onto the object, and in the literal
+        # that creates it (including `limit,` shorthand).
+        emitted = set(re.findall(r"\bq\.([a-z_]+)\s*=", builder))
+        emitted |= set(re.findall(r"^\s{4}([a-z_]+)\s*[:,]", builder, re.M))
         accepted = set(inspect.signature(routes_public_screener.public_wallets).parameters)
 
-        self.assertTrue(emitted, "no query keys parsed out of the screener model")
+        self.assertTrue(emitted, "no query keys parsed out of the screener client")
         self.assertLessEqual(emitted, accepted, emitted - accepted)
 
     def test_the_filters_actually_narrow_the_result(self):

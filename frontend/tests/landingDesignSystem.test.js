@@ -243,7 +243,6 @@ test('--faint never sets text: it cannot reach AA on paper', async () => {
   const sheets = await Promise.all([
     read('src/styles/brutalism.css'),
     read('src/styles/public-landing.css'),
-    read('src/styles/screener.css'),
   ])
   const css = sheets.join('\n')
 
@@ -254,11 +253,12 @@ test('--faint never sets text: it cannot reach AA on paper', async () => {
   assert.doesNotMatch(css, /color:\s*var\(--faint\)/)
 })
 
-test('the selected screener row keeps its text above AA', async () => {
-  const [tokens, screener] = await Promise.all([
-    read('src/styles/brutalism.css'),
-    read('src/styles/screener.css'),
-  ])
+test('muted text stays above AA over the green row wash', async () => {
+  // --green-wash exists to tint a row without pushing its text under AA, so
+  // the rule is checked on the tokens themselves. It used to be asserted
+  // against the React screener's stylesheet; that page is gone, but any future
+  // surface reaching for this tint inherits the same constraint.
+  const tokens = await read('src/styles/brutalism.css')
 
   // Composite the row wash over paper and check the muted text on top of it.
   const wash = tokens.match(/--green-wash:\s*rgba\(([^)]+)\)/)
@@ -272,8 +272,6 @@ test('the selected screener row keeps its text above AA', async () => {
   const muted = tokens.match(/--muted:\s*([^;]+);/)[1].trim()
   assert.ok(
     contrast(muted, `#${blended}`) >= 4.5,
-    `muted on the selected row is ${contrast(muted, `#${blended}`).toFixed(2)}:1`,
+    `muted on the row wash is ${contrast(muted, `#${blended}`).toFixed(2)}:1`,
   )
-  // Selection is not signalled by the tint alone.
-  assert.match(screener, /tr\.selected > th[^}]*box-shadow/)
 })

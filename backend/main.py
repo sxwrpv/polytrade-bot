@@ -505,20 +505,15 @@ if os.path.isfile(_DOCS_INDEX):
         return FileResponse(_DOCS_INDEX)
 
 
-# Standalone Wallet Screener. Its own Vite entry, served here same-origin so
-# no cross-site cookie or CORS relaxation is needed today; the same built page
-# can later be published at screener.polytradebot.live unchanged (see
-# docs/deployment.md). Declared before the SPA mount so "/screener" resolves to
-# the screener page rather than falling through to the app's index.html.
-_SCREENER_PAGE = os.path.join(_FRONTEND_DIST, "screener.html")
-if os.path.isfile(_SCREENER_PAGE):
-
-    @app.get("/screener", include_in_schema=False)
-    @app.get("/screener/", include_in_schema=False)
-    async def wallet_screener():
-        return FileResponse(_SCREENER_PAGE)
+# /screener is NOT served here. The canonical trader research surface is the
+# dedicated trader-screener service, which Caddy proxies (see Caddyfile); this
+# app used to answer /screener with a React page built from frontend/src/
+# screener, and that page is gone. Nothing is registered for the path on
+# purpose: a stub here would shadow the real surface the moment the edge config
+# changed, and it is better for that mistake to 404 loudly than to serve a
+# second, different screener.
 
 
-# SPA — mount last so it doesn't shadow /api, /docs or /screener.
+# SPA — mount last so it doesn't shadow /api or /docs.
 if os.path.isdir(_FRONTEND_DIST):
     app.mount("/", StaticFiles(directory=_FRONTEND_DIST, html=True), name="spa")
