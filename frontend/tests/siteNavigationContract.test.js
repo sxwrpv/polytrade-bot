@@ -15,34 +15,17 @@ test('the shared public switcher links Home, Screener and Docs with one active d
   assert.match(switcher, /aria-current=\{active === key \? 'page' : undefined\}/)
 })
 
-test('home and screener place the same switcher in the center of their headers', async () => {
-  const [home, screener] = await Promise.all([
-    read('src/pages/PublicHome.jsx'),
-    read('src/screener/ScreenerPage.jsx'),
-  ])
+test('home places the shared switcher in the center of its header', async () => {
+  const home = await read('src/pages/PublicHome.jsx')
 
   assert.match(home, /<SiteSwitcher active="home" \/>/)
-  assert.match(screener, /<SiteSwitcher active="screener" \/>/)
 })
 
-test('screener centers the switcher in a three-track header and stacks safely before tablet widths', async () => {
-  const [page, css] = await Promise.all([
-    read('src/screener/ScreenerPage.jsx'),
-    read('src/styles/screener.css'),
-  ])
-
-  assert.match(page, /className="screener-nav-primary"/)
-  const desktop = css.match(/\.screener-nav\s*{[^}]*}/s)
-  assert.ok(desktop)
-  assert.match(desktop[0], /display:\s*grid/)
-  assert.match(desktop[0], /grid-template-columns:\s*minmax\(0,\s*1fr\)\s+auto\s+minmax\(0,\s*1fr\)/)
-  assert.match(css, /\.screener-nav\s*>\s*\.site-switcher\s*{[^}]*justify-self:\s*center/s)
-
-  const tablet = css.slice(css.indexOf('@media (max-width: 820px)'))
-  assert.match(tablet, /\.screener-nav-primary\s*{[^}]*display:\s*contents/s)
-  assert.match(tablet, /\.screener-nav\s*>\s*\.site-switcher\s*{[^}]*grid-row:\s*2/s)
-  assert.match(tablet, /\.screener-search\s*{[^}]*grid-row:\s*3/s)
-})
+/* The screener's own header layout is no longer contracted here. That test
+   read src/screener/ScreenerPage.jsx and src/styles/screener.css, which this
+   app no longer ships — /screener is the dedicated trader-screener service.
+   Its header is that service's to cover; see trader-screener/tests. The
+   switcher's own destinations are still pinned above. */
 
 test('the switcher is a restrained liquid-glass capsule like the Saved control', async () => {
   const css = await read('src/styles/brutalism.css')
