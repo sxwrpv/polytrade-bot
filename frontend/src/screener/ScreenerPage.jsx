@@ -6,8 +6,6 @@ import { isSaved, toggleSaved, savedList, savedCount, subscribeSaved, clearSaved
 import SiteSwitcher from '../components/SiteSwitcher'
 import {
   DEFAULT_FILTERS,
-  DEFAULT_PERIOD,
-  DEFAULT_SORT,
   PERIODS,
   POLYMARKET_PROFILE,
   SORTS,
@@ -40,14 +38,9 @@ import {
   cohortAge,
   cohortFilterChips,
   cohortToCsv,
-  money as cohortMoney,
-  pnlIn,
-  roiIn,
-  signedMoney,
   signedPercent,
   staleHeldBack,
   toCohortPeriod,
-  volumeIn,
 } from './cohortModel'
 
 const short = (address) => `${address.slice(0, 6)}…${address.slice(-4)}`

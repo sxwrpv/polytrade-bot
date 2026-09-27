@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import time
 import unittest
-from dataclasses import replace
 from unittest.mock import AsyncMock
 
 from backend.core import copy_engine as ce

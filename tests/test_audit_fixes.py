@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
-import os
 import stat as stat_mod
 import tempfile
 import unittest
@@ -89,7 +88,6 @@ class UncertainClaimReleaseTests(unittest.TestCase):
         self.assertEqual(eng.released, [])
 
     def test_claim_age_survives_a_naive_timestamp(self):
-        eng = self._engine()
         naive = dt.datetime.now() - dt.timedelta(seconds=120)
         age = CopyEngine._claim_age_seconds({"claimed_at": naive.isoformat()})
         self.assertIsNotNone(age)

@@ -11,8 +11,6 @@ services:
     env_file:
       - .env
     environment:
-      HOST: 0.0.0.0
-      PORT: "8080"
       DB_PATH: /app/data/copybot.db
       ENFORCE_FRONTEND_GEOBLOCK: "0"
       # Safe default: a fresh or unconfigured deploy must NOT start trading.

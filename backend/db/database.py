@@ -23,7 +23,7 @@ import asyncio
 import datetime as dt
 import logging
 from contextlib import asynccontextmanager
-from typing import Any, Iterable, Sequence
+from typing import Any, Sequence
 
 import aiosqlite
 
@@ -275,32 +275,6 @@ class Database:
             await self._conn.commit()
             return cur.rowcount
 
-    async def claim_wallet_creation(self, telegram_user_id: int, claim_token: str,
-                                    *, stale_before: str) -> bool:
-        """Acquire the durable pre-side-effect fence for one Telegram identity.
-
-        A fresh ``claimed`` row belongs to a live request. Only an aged claim
-        that never advanced to ``side_effect_started`` may be taken over. Every
-        later state is fail-closed and requires operator reconciliation.
-        """
-        now = now_iso()
-        async with self.transaction(write=True) as tx:
-            inserted = await tx.execute(
-                "INSERT INTO wallet_creation_claims(telegram_user_id,claim_token,state,"
-                "claimed_at,updated_at) VALUES(?,?,'claimed',?,?) "
-                "ON CONFLICT(telegram_user_id) DO NOTHING",
-                (telegram_user_id, claim_token, now, now),
-            )
-            if inserted == 1:
-                return True
-            recovered = await tx.execute(
-                "UPDATE wallet_creation_claims SET claim_token=?,claimed_at=?,updated_at=?,"
-                "last_error=NULL WHERE telegram_user_id=? AND state='claimed' "
-                "AND updated_at < ?",
-                (claim_token, now, now, telegram_user_id, stale_before),
-            )
-            return recovered == 1
-
     async def acquire_wallet_creation_lease(
             self, telegram_user_id: int, owner: str, *, stale_before: str,
             lease_expires_at: str) -> dict | None:
@@ -458,19 +432,6 @@ class Database:
                 "UPDATE copy_positions SET status = ? WHERE id = ? AND status = ?",
                 (to_status, position_id, from_status))
         return rowcount > 0
-
-    async def executemany(self, sql: str, rows: Iterable[Sequence[Any]]) -> None:
-        rows = list(rows)
-        if self.is_pg:
-            import asyncpg
-            try:
-                await self._pool.executemany(_to_pg(sql), rows)
-            except asyncpg.UniqueViolationError as e:
-                raise aiosqlite.IntegrityError(str(e)) from e
-            return
-        async with self._sqlite_lock:
-            await self._conn.executemany(sql, rows)
-            await self._conn.commit()
 
     async def fetchone(self, sql: str, params: Sequence[Any] = ()) -> dict | None:
         async def run():
