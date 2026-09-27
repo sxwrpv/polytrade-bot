@@ -26,5 +26,5 @@ export default defineConfig({
       },
     },
   },
-  server: { proxy: { '/api': 'http://localhost:8123' } },
+  server: { proxy: { '/api': 'http://localhost:8080' } },   // backend default port (README)
 })

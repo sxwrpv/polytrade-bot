@@ -17,8 +17,8 @@
  *
  * REGENERATING
  *
- *   node scripts/ingest.mjs                     # in the polycopy-clone repo
- *   node scripts/build_cohort.mjs <dataset.json>
+ *   node trader-screener/scripts/ingest.mjs   # refreshes trader-screener/data/dataset.json
+ *   node scripts/build_cohort.mjs              # reads that file; or pass a path
  *
  * The output is committed, because the deploy path is `git pull` on the VPS
  * and production must not depend on a third-party endpoint being reachable at
@@ -35,7 +35,7 @@ const OUT = join(ROOT, 'frontend', 'public', 'screener-cohort.json')
 
 const source = process.argv[2]
   ? resolve(process.argv[2])
-  : join(process.env.HOME || '', 'polycopy-clone', 'data', 'dataset.json')
+  : join(ROOT, 'trader-screener', 'data', 'dataset.json')
 
 /** Round, but keep an absent value absent — a null here is not a zero. */
 const round = (value, places = 2) =>

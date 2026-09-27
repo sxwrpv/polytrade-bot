@@ -201,8 +201,8 @@ The cohort's windows are 7D, 30D and **lifetime**, which is not the live board's
 ### Regenerating
 
 ```bash
-node scripts/ingest.mjs                     # in the polycopy-clone repo
-node scripts/build_cohort.mjs <dataset.json>
+node trader-screener/scripts/ingest.mjs   # refreshes trader-screener/data/dataset.json
+node scripts/build_cohort.mjs              # reads that file; or pass a path
 ```
 
 The output is committed so production never depends on a third-party endpoint being reachable at deploy time. The asset is served `Cache-Control: no-cache` (see `Caddyfile`) so a refreshed cohort cannot be served from cache under an old date.

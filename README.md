@@ -71,7 +71,10 @@ backend/
 frontend/
   src/                  React application
   dist/                 production build served by FastAPI
+trader-screener/        standalone Node trader screener, served at /screener/
 supabase/migrations/    Postgres schema and security migrations
+scripts/                deploy, screener refresh, broadcast and one-off tools
+deploy/                 systemd units for the screener snapshot refresh
 tests/                  backend, safety and deployment contracts
 docs/                   consumer help, developer, and operator documentation
 compose.yaml            production service topology
@@ -108,8 +111,16 @@ source .venv/bin/activate
 PYTHONPATH=. python -m pytest -q
 
 cd frontend
+npm test
 npm run build
+
+cd ../trader-screener
+npm test
 ```
+
+The Python suite is hermetic: `tests/conftest.py` disables `.env` loading and
+pins test-only secrets, so a local `.env` never changes results or reaches a
+real database.
 
 ## Documentation
 
