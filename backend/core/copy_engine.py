@@ -24,7 +24,7 @@ import os
 import time
 import uuid
 from collections import defaultdict
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from types import SimpleNamespace
 
 import aiosqlite
@@ -103,17 +103,6 @@ SUBMITTED_BASIS_TTL_SECONDS = 120.0
 MAX_LEADER_TRADE_AGE_SECONDS = float(
     os.environ.get("MAX_LEADER_TRADE_AGE_SECONDS", "300"))
 
-# Transport failures on a CACHED SDK client. The client keeps one long-lived
-# HTTP/2 connection, and the edge closes it with a clean GOAWAY after 10,000
-# streams (observed 7x in 3.4 days, always `last_stream_id:19999`). The SDK
-# surfaces that as an exception on whatever read happened to be in flight,
-# and the cached client stays poisoned until the process restarts — so a
-# single connection recycle silently cost us every copy decision that tick.
-#
-# These are retried ONLY for idempotent reads (balance/positions/activity),
-# and only after the client is rebuilt. Order submission is never retried
-# here: execution.py owns that, and an ambiguous submission must reconcile
-# rather than re-fire.
 # How long an available-collateral reading may be reused across copy
 # decisions for one user.
 #
@@ -133,6 +122,17 @@ MAX_LEADER_TRADE_AGE_SECONDS = float(
 COLLATERAL_CACHE_SECONDS = float(
     os.environ.get("COLLATERAL_CACHE_SECONDS", "5"))
 
+# Transport failures on a CACHED SDK client. The client keeps one long-lived
+# HTTP/2 connection, and the edge closes it with a clean GOAWAY after 10,000
+# streams (observed 7x in 3.4 days, always `last_stream_id:19999`). The SDK
+# surfaces that as an exception on whatever read happened to be in flight,
+# and the cached client stays poisoned until the process restarts — so a
+# single connection recycle silently cost us every copy decision that tick.
+#
+# These are retried ONLY for idempotent reads (balance/positions/activity),
+# and only after the client is rebuilt. Order submission is never retried
+# here: execution.py owns that, and an ambiguous submission must reconcile
+# rather than re-fire.
 CLIENT_TRANSPORT_ERRORS = (
     httpx.RemoteProtocolError,
     httpx.ConnectError,
@@ -699,7 +699,17 @@ class CopyEngine:
                 cursor = self._cursors[key]
                 seen = self._seen[key]
                 for t in trades:
-                    if t.timestamp <= cursor:
+                    if t.timestamp < cursor:
+                        continue
+                    # The cursor second is shared. The activity indexer does
+                    # not publish a second's fills together, so a fill that
+                    # surfaces a tick after another fill in the same second
+                    # arrives with timestamp == cursor, and skipping the whole
+                    # second dropped it from the fast path. Only a tx_hash
+                    # tells a repeat from a new fill, so without one the trade
+                    # stays skipped: re-handling a proportional SELL would
+                    # sell twice.
+                    if t.timestamp == cursor and not t.tx_hash:
                         continue
                     if t.tx_hash and t.tx_hash in seen:
                         continue
@@ -1085,7 +1095,6 @@ class CopyEngine:
             })
         return rescued
 
-    # --- execution + persistence ------------------------------------------
     # --- fill-or-kill attempt budget --------------------------------------
     @staticmethod
     def _attempt_key(user_id: str, action: Action) -> tuple:
@@ -1166,6 +1175,7 @@ class CopyEngine:
             log.info("killed after %d attempts (%s %s): %s", attempts,
                      action.kind, action.token_id[:16], reason)
 
+    # --- execution + persistence ------------------------------------------
     async def _execute(self, user_id: str, client, action: Action,
                        slippage: float = MAX_COPY_SLIPPAGE_PCT) -> float:
         if self._fill_budget_exhausted(user_id, action):
@@ -1587,19 +1597,20 @@ class CopyEngine:
 
     async def _realize_resolution(self, user_id, action) -> None:
         """Market resolved: realize PnL from the resolution price (~1 if won, ~0 if
-        lost). The on-chain CTF redeem is a separate flow finalized in phase 10."""
+        lost). This books the result only; nothing here redeems the winning
+        tokens on-chain."""
         row, p = action.row, action.position
         await self._close_row(user_id, row, p.cur_price, row["shares"],
                               event_type="resolve", status="resolved")
 
     async def _resolve_departed(self, user_id: str, row: dict) -> None:
         """Finalize a position whose market died before we could exit (resolved
-        and possibly auto-redeemed). The winning TOKEN comes from Gamma's
-        resolved outcome prices — NOT from the wallet's REDEEM records, which
-        are per-condition and can't tell the sides apart when both were held
-        (seen live 2026-07-03: matching on conditionId marked losing sides of
-        both-sides copies as $1 winners). Redeem records remain the fallback
-        when Gamma doesn't know the market."""
+        and possibly auto-redeemed). The winning TOKEN comes from the CLOB's
+        per-token winner flags (pm.get_resolved_prices) — NOT from the wallet's
+        REDEEM records, which are per-condition and can't tell the sides apart
+        when both were held (seen live 2026-07-03: matching on conditionId
+        marked losing sides of both-sides copies as $1 winners). Redeem records
+        remain the fallback when the CLOB doesn't know the market."""
         if not row.get("condition_id"):
             # Opened blind (on-chain fast path, metadata never backfilled) —
             # the resolution cannot be looked up, so flag the row for review
@@ -1616,14 +1627,14 @@ class CopyEngine:
             if row["token_id"] in prices:
                 exit_price = 1.0 if prices[row["token_id"]] >= 0.5 else 0.0
         except Exception:
-            log.exception("gamma outcome lookup failed for %s", row["id"])
+            log.exception("resolved-outcome lookup failed for %s", row["id"])
         if exit_price is None:
             try:
                 redeems = await self.pm.get_redeems(user_id)
                 paid = sum(float(r.get("usdcSize", 0) or 0) for r in redeems
                            if r.get("conditionId") == row["condition_id"])
                 # per-condition only: correct when we held one side; ambiguous
-                # for both-sides copies (gamma path above covers those)
+                # for both-sides copies (the CLOB lookup above covers those)
                 exit_price = 1.0 if paid > 0 else 0.0
             except Exception:
                 log.exception("redeem lookup failed for %s — assuming lost", row["id"])
