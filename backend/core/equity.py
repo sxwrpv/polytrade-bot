@@ -67,8 +67,9 @@ async def take_snapshot(db, user_id: str, client, pm) -> dict | None:
     """Read the account's current worth and persist one snapshot row.
 
     equity = free cash + market value of everything held (open positions plus
-    resolved-but-unredeemed winners). Returns the snapshot, or None if the
-    balance read failed (we don't store a half-known equity)."""
+    resolved-but-unredeemed winners). Returns the snapshot, or None if either
+    read failed (we don't store a half-known equity: a failed positions read
+    used to be stored as cash-only equity, a fake crash on the chart)."""
     try:
         bal = await client.get_balance_allowance(asset_type="COLLATERAL")
         balance = bal.balance / 1e6
@@ -78,7 +79,8 @@ async def take_snapshot(db, user_id: str, client, pm) -> dict | None:
     try:
         positions = await pm.get_positions(user_id, size_threshold=0)
     except Exception:
-        positions = []
+        log.exception("snapshot: positions read failed for %s", user_id[:10])
+        return None
     held = [p for p in positions if p.size > 0.01]
     positions_value = round(sum(p.current_value for p in held), 2)
     unrealized = round(sum(p.cash_pnl for p in held if not p.redeemable), 2)
@@ -115,49 +117,6 @@ def _epoch(ts: str) -> float:
         return dt.datetime.fromisoformat(ts).timestamp()
     except ValueError:
         return 0.0
-
-
-# Retention tiers: (min_age_days, max_age_days|None, bucket_seconds). Snapshots
-# in each age band are thinned to one row per bucket — exactly the resolution
-# the matching chart renders, so pruning never changes a chart. Snapshots
-# younger than the first tier's min_age are kept untouched (7d chart = full
-# 5-min resolution).
-_RETENTION = (
-    (7, 30, 1800),      # 7–30d old  -> 30-min buckets (30d chart)
-    (30, None, 14400),  # >30d old   -> 4-hour buckets (all chart)
-)
-
-
-async def prune_snapshots(db) -> int:
-    """Thin equity_snapshots to the resolution the charts actually draw and
-    delete the rest — bounds storage without altering any chart. Keeps the
-    latest snapshot in each (user, time-bucket); drops the redundant middle."""
-    now = dt.datetime.now(dt.timezone.utc)
-    to_delete: list[int] = []
-    for min_age, max_age, bucket in _RETENTION:
-        hi = (now - dt.timedelta(days=min_age)).isoformat()          # older than this
-        lo = ((now - dt.timedelta(days=max_age)).isoformat()
-              if max_age is not None else None)
-        if lo is not None:
-            rows = await db.fetchall(
-                "SELECT id, user_id, ts FROM equity_snapshots WHERE ts < ? AND ts >= ? "
-                "ORDER BY ts", (hi, lo))
-        else:
-            rows = await db.fetchall(
-                "SELECT id, user_id, ts FROM equity_snapshots WHERE ts < ? ORDER BY ts",
-                (hi,))
-        keep: dict[tuple, int] = {}   # (user, bucket_key) -> id to keep (latest wins)
-        for r in rows:
-            key = (r["user_id"], int(_epoch(r["ts"]) // bucket))
-            keep[key] = r["id"]        # rows are ts-ordered, so last seen = latest
-        keep_ids = set(keep.values())
-        to_delete += [r["id"] for r in rows if r["id"] not in keep_ids]
-    for i in range(0, len(to_delete), 500):   # chunk to keep the SQL param list sane
-        chunk = to_delete[i:i + 500]
-        await db.execute(
-            f"DELETE FROM equity_snapshots WHERE id IN ({','.join('?' * len(chunk))})",
-            chunk)
-    return len(to_delete)
 
 
 async def get_series(db, user_id: str, period: str = "7d") -> list[dict]:
