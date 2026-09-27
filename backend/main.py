@@ -40,7 +40,8 @@ logging.basicConfig(
 # httpx logs a line per request at INFO. The engine polls Polymarket constantly,
 # so this alone was ~86% of the log volume and grew server.log to 1.5 GB with no
 # rotation. Warnings and errors still come through; set HTTP_LOG_LEVEL=INFO to
-# get the per-request trace back when debugging.
+# get the per-request trace back when debugging. That trace logs full URLs,
+# and Telegram's embed the bot token, so treat such a log as a secret.
 for _noisy in ("httpx", "httpcore", "urllib3", "web3", "websockets"):
     logging.getLogger(_noisy).setLevel(
         os.environ.get("HTTP_LOG_LEVEL", "WARNING").upper())
