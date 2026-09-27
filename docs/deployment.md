@@ -78,25 +78,26 @@ docker compose exec caddy grep -c Cache-Control /etc/caddy/Caddyfile
 Editing the file in place on the box (`nano`, `sed -i` without a rename) keeps
 the inode and does work with a plain reload. Syncing does not.
 
-## The screener's Copy Score asset
+## The screener snapshot
 
-`frontend/public/screener-cohort.json` is a committed, unhashed ~3MB asset that
-the React wallet screener (`frontend/src/screener`) loads for its Copy Score
-column. The Trader Screener service at `/screener/` does not use it; its
-snapshot lives in `screener-data/` (see `scripts/refresh-screener-data.sh`). Two consequences for a
-deploy:
+The Wallet Screener service (`trader-screener/`) serves its board from a
+cohort snapshot in `./screener-data`, mounted at `/app/data`. On a fresh host
+the directory is empty, so the container seeds it once from the copy bundled
+in the image; an existing snapshot is never overwritten by a redeploy.
 
-1. It ships with the frontend build (`npm run build` copies `public/` into
-   `dist/`), so `git pull` plus a rebuild is all that moves it. There is no
-   third-party fetch at deploy time, by design.
-2. It is served `Cache-Control: no-cache`, which is a Caddyfile rule. If that
-   rule is ever changed, the Caddyfile change needs the container **recreated,
-   not reloaded** — see the section above.
+`scripts/refresh-screener-data.sh` re-runs the ingest into that directory, and
+the service picks the new file up by mtime (`SNAPSHOT_RELOAD_SECONDS`), with no
+rebuild or restart. On the VPS it runs daily from the systemd units in
+`deploy/`:
 
-The board prints the asset's generation date and warns once it is more than two
-days old, so a deploy that forgets to regenerate it degrades visibly rather than
-silently. Regeneration is documented in
-[Screener metric contract](screener-metric-contract.md).
+```bash
+sudo cp deploy/polytrade-screener-refresh.{service,timer} /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now polytrade-screener-refresh.timer
+```
+
+The board prints the snapshot's generation date and warns once it is more than
+two days old, so a stalled refresh degrades visibly rather than silently.
 
 ## Caddy and TLS
 
@@ -165,98 +166,17 @@ Never roll code back across an incompatible migration while orders are being sub
 
 ## Wallet Screener hosting
 
-In production, `https://polytradebot.live/screener/` is the **Trader Screener
-service** (`trader-screener/`, its own container in `compose.yaml`). Caddy
-strips the `/screener` prefix and proxies to `trader-screener:4310`, so the
-FastAPI app never sees those requests.
+`https://polytradebot.live/screener/` is the **Wallet Screener service**
+(`trader-screener/`, its own container in `compose.yaml`). Caddy strips the
+`/screener` prefix and proxies to `trader-screener:4310`, so the FastAPI app
+never sees those requests. The service sits on its own Docker network and has
+no route to the app or its database.
 
-The older React screener is a second Vite entry (`frontend/screener.html`),
-still built into `frontend/dist`. FastAPI serves it at `/screener` only when
-reached directly (local development without Caddy); behind Caddy it is
-reachable only as `/screener.html`. It talks to `/api/public/screener/*` on the
-same origin, so nothing about the auth model changes — no CORS entry, no cookie
-relaxation, no new certificate.
-
-`/api/public/screener/*` is anonymous, read-only and rate limited. It reads
-only precomputed `trader_cache` columns, so a public request can never trigger
-an upstream Polymarket call or a cache write. Authenticated
-`/api/traders/{address}` remains the on-demand route that spends upstream API budget.
-
-### Optional: screener.polytradebot.live
-
-Only worth doing if you want the React screener build on its own host. It is
-not required, and same-origin is the safer default.
-
-**DNS.** One record, pointed at the same host as the apex:
-
-```
-screener.polytradebot.live.  A  52.51.200.58
-```
-
-Let it resolve **before** the first Caddy start. Caddy provisions the
-certificate over the HTTP-01 challenge on port 80; repeated failures count
-against Let's Encrypt rate limits.
-
-**Caddy.** Add a host block to the existing Caddyfile — one Caddy instance, not
-a second one:
-
-```
-screener.polytradebot.live {
-	encode zstd gzip
-
-	header {
-		-Server
-		X-Content-Type-Options "nosniff"
-		Referrer-Policy "strict-origin-when-cross-origin"
-		Strict-Transport-Security "max-age=31536000; includeSubDomains"
-		# Nothing embeds the screener, and it is not a Telegram Mini App.
-		Content-Security-Policy "frame-ancestors 'none'"
-	}
-
-	root * /srv/screener
-	try_files {path} /screener.html
-	file_server
-}
-```
-
-`/srv/screener` holds the built `dist`. Note the apex block already sends
-`includeSubDomains`, so this name is inside the existing HSTS policy — it must
-be served over HTTPS from the moment that header is first honoured.
-
-**TLS.** Automatic, same as the apex. `includeSubDomains` means a subdomain
-that cannot present a valid certificate becomes unreachable rather than falling
-back to HTTP, so bring DNS up first.
-
-**CORS and sessions.** Build the screener with
-
-```
-VITE_API_BASE=https://polytradebot.live/api
-```
-
-and add `https://screener.polytradebot.live` to `CORS_ALLOW_ORIGINS`. The
-existing middleware sets `allow_credentials=False`; leave it that way. The
-public screener client sends `credentials: 'omit'`, so no cookie crosses
-origins and `SameSite` on the real session cookie never has to be weakened.
-
-**Same-origin versus cross-origin.**
-
-| | `polytradebot.live/screener` | `screener.polytradebot.live` |
-| --- | --- | --- |
-| Auth model | untouched | untouched *only if* credentials stay off |
-| CORS | none needed | one origin, no credentials |
-| Certificates | existing | one more name |
-| Failure blast radius | shared with the app | isolated |
-| Cost of a mistake | low | a credentialed CORS entry would expose the session cross-site |
-
-Prefer same-origin unless the isolation is worth that last row.
-
-**Rollback.** Remove the Caddy host block and reload Caddy
-(`docker compose exec caddy caddy reload --config /etc/caddy/Caddyfile`); the
-apex `/screener/` (the Trader Screener service) is untouched and keeps serving. Drop the origin
-from `CORS_ALLOW_ORIGINS` and restart the app. Leave the DNS record in place
-until HSTS `max-age` has lapsed for anyone who visited the subdomain, or point
-it back at the same host — with `includeSubDomains` active, a name that stops
-resolving is a hard failure for those clients, not a silent one.
+`/api/public/screener/*` on the main app is a separate, anonymous, read-only
+and rate-limited API. It reads only precomputed `trader_cache` columns, so a
+public request can never trigger an upstream Polymarket call or a cache write.
+Authenticated `/api/traders/{address}` remains the on-demand route that spends
+upstream API budget.
 
 ## Production checklist
 
@@ -268,9 +188,8 @@ resolving is a hard failure for those clients, not a silent one.
 - [ ] Gasless flow was tested with a small amount.
 - [ ] Base Compose keeps autostart off.
 - [ ] Exactly one production engine is enabled.
-- [ ] Only one screener is advertised: `/screener/` (the Trader Screener
-      service), plus the subdomain only if you deliberately host the React
-      build there.
+- [ ] `/screener/` answers from the trader-screener service and its snapshot
+      is less than two days old.
 - [ ] Engine, claims, disk, logs, DNS, and TLS are monitored.
 - [ ] Telegram menu targets production HTTPS.
 - [ ] Pause and rotation procedures are documented.

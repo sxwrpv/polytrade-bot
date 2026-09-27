@@ -179,11 +179,10 @@ function segControl(label, options, current, onPick) {
   return wrap;
 }
 
-/* One numeric filter as a slider — the same contract as polytrade's
- * RangeFilter.jsx: parked at the "off" end means no filter at all, mirrored as
- * the empty string the model already treats as inactive. That distinction
- * matters: a threshold of zero is a real filter that hides everything below
- * zero, which is not what an untouched control should do. */
+/* One numeric filter as a slider. Parked at the "off" end means no filter at
+ * all, mirrored as the empty string the model already treats as inactive.
+ * That distinction matters: a threshold of zero is a real filter that hides
+ * everything below zero, which is not what an untouched control should do. */
 function rangeFilter({ key, label, min, max, step = 1, off = 'min', format }) {
   const value = state.filters[key];
   const numeric = Number(value);

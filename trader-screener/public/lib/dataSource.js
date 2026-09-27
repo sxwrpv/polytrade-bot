@@ -1,9 +1,9 @@
 /* Where the board's rows come from.
  *
- * Two sources, one row shape. Today the board reads a cached Polycopy cohort
- * snapshot, because that is where the Copy Score signal lives. Tomorrow it
- * reads PolyTrade's own `/api/public/screener/*`, which publishes truthful
- * per-window metrics but deliberately no composite score.
+ * Three sources, one row shape. 'live' (the default) is the current Polymarket
+ * leaderboard; 'snapshot' is the cached Polycopy cohort, where the Copy Score
+ * signal lives; 'polytrade' is PolyTrade's own `/api/public/screener/*`, which
+ * publishes truthful per-window metrics but deliberately no composite score.
  *
  * The adapter below is the whole integration surface: point `SOURCE` at
  * 'polytrade', set `API_BASE`, and the same board renders PolyTrade's cache.
@@ -11,7 +11,7 @@
  * never rendered as a zero.
  */
 
-/** Same contract as polytrade/frontend/src/screener/publicApi.js. */
+/** `/public/screener/*` has the same contract as backend/api/routes_public_screener.py. */
 const API_BASE = globalThis.__API_BASE__ || '/screener/api';
 
 /** 'live' — current Polymarket leaderboard. 'snapshot' and 'polytrade' are explicit fallbacks. */
@@ -42,8 +42,8 @@ export const api = {
   smi: () => get('/smi'),
   search: (q) => get('/search', { q }),
   trader: (address) => get(`/trader/${address}`),
-  // PolyTrade-compatible surface, served locally by this app and by the
-  // FastAPI router once this moves in-tree.
+  // PolyTrade-compatible surface, served both by this app and by the main
+  // FastAPI app (backend/api/routes_public_screener.py).
   wallets: (params) => get('/public/screener/wallets', params),
   wallet: (address, params) => get(`/public/screener/wallets/${address}`, params),
   provenance: () => get('/public/screener/provenance'),

@@ -498,20 +498,7 @@ if os.path.isfile(_DOCS_INDEX):
         return FileResponse(_DOCS_INDEX)
 
 
-# Standalone Wallet Screener. Its own Vite entry, served here same-origin so
-# no cross-site cookie or CORS relaxation is needed today; the same built page
-# can later be published at screener.polytradebot.live unchanged (see
-# docs/deployment.md). Declared before the SPA mount so "/screener" resolves to
-# the screener page rather than falling through to the app's index.html.
-_SCREENER_PAGE = os.path.join(_FRONTEND_DIST, "screener.html")
-if os.path.isfile(_SCREENER_PAGE):
-
-    @app.get("/screener", include_in_schema=False)
-    @app.get("/screener/", include_in_schema=False)
-    async def wallet_screener():
-        return FileResponse(_SCREENER_PAGE)
-
-
-# SPA — mount last so it doesn't shadow /api, /docs or /screener.
+# SPA — mount last so it doesn't shadow /api or /docs. /screener/* never
+# reaches this app: Caddy routes it to the trader-screener service.
 if os.path.isdir(_FRONTEND_DIST):
     app.mount("/", StaticFiles(directory=_FRONTEND_DIST, html=True), name="spa")
