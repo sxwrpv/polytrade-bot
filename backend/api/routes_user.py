@@ -380,9 +380,9 @@ async def deposit_address(user=Depends(get_current_user), db=Depends(get_db),
                           pmc=Depends(get_pm)):
     """Bridge deposit addresses so the user can fund their wallet from any
     supported chain in USDC/USDT/etc — arrives as pUSD automatically. This is
-    Polymarket's own bridge, not something we run; see BUILD_PLAN §wallet model
-    for why the one-time allowance approval (separate from funding) still
-    needs a little MATIC on this EOA wallet model."""
+    Polymarket's own bridge, not something we run. Funding is separate from
+    the one-time trading approvals, which are gasless on a deposit wallet but
+    need a little MATIC in the EOA fallback (see wallet.py)."""
     accepted = await db.fetchone(
         "SELECT accepted_at FROM funding_acknowledgements WHERE user_id=? AND version=?",
         (user["id"], CURRENT_FUNDING_ACK_VERSION),
@@ -475,7 +475,6 @@ async def update_settings(body: SettingsBody, request: Request,
             async with lock:
                 await apply_update()
     if updates:
-        import asyncio
         for _ in range(50):
             pending = await db.fetchval(
                 "SELECT COUNT(*) FROM copy_open_claims WHERE user_id=? AND state='submitting'",
