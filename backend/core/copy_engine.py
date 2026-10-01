@@ -424,26 +424,10 @@ class CopyEngine:
                             user_id[:10], token)
                 await self._release_buy_claim(user_id, token, claim["claim_id"])
             elif p is None:
-                # Data-api absence is not authoritative proof of non-fill --
-                # for a while. Past UNCERTAIN_CLAIM_RELEASE_SECONDS, with the
-                # wallet scan COMPLETE and the token still absent, it is: the
-                # indexer lags a fill by seconds, not a day. Releasing here is
-                # what stops a routine rejection from fencing a token for the
-                # life of the deployment.
-                age = self._claim_age_seconds(claim)
-                if age is not None and age >= UNCERTAIN_CLAIM_RELEASE_SECONDS:
-                    await self._release_buy_claim(user_id, token, claim["claim_id"])
-                    log.critical(
-                        "uncertain OPEN claim RELEASED after %.1fh: complete wallet "
-                        "scan shows no holding and no tracked row — treating as "
-                        "never filled: %s %s (last error: %s)",
-                        age / 3600.0, user_id[:10], token,
-                        (claim.get("last_error") or "")[:120])
-                else:
-                    log.warning(
-                        "uncertain OPEN claim retained (no authoritative fill status, "
-                        "age %.0fs of %.0fs): %s %s",
-                        age or 0.0, UNCERTAIN_CLAIM_RELEASE_SECONDS, user_id[:10], token)
+                # Neither elapsed time nor indexer absence proves non-fill.
+                # Retain the durable fence until authoritative reconciliation.
+                log.warning("uncertain OPEN claim retained (no authoritative fill status): %s %s",
+                            user_id[:10], token)
             else:
                 await self._adopt_uncertain_fill(user_id, claim, p)
             return
@@ -992,17 +976,9 @@ class CopyEngine:
                         (p.condition_id, p.title, p.event_slug or p.slug,
                          (r.get("outcome") or p.outcome or "").upper(), r["id"]))
                     r.update(condition_id=p.condition_id, market_title=p.title)
-            # A BUY the exchange reported as failed may still have filled. That
-            # leaves shares in the wallet with no row, no claim and no alert —
-            # the position is invisible and will never be managed or exited
-            # (incident 2026-08-23). We only adopt what we can PROVE we
-            # submitted for, so a user's own manual trades are never swept up.
-            adopted = await self._adopt_untracked_submissions(
-                user_id, trader, positions, open_rows)
-            if adopted:
-                open_rows = [r for r in await self.db.fetchall(
-                    "SELECT * FROM copy_positions WHERE user_id=? AND status='open'",
-                    (user_id,)) if r["trader_address"] == trader]
+            # These are LEADER holdings, never evidence of a user fill.
+            # Recovery belongs to durable uncertain-claim reconciliation using
+            # the user's wallet; claimless legacy outcomes need manual review.
 
             block_opens = frisk["paused"] or inactive or await self._opens_blocked(
                 user_id, trader, frisk["daily_limit"])
@@ -1042,58 +1018,15 @@ class CopyEngine:
 
     async def _adopt_untracked_submissions(
             self, user_id: str, trader: str, positions, open_rows) -> int:
-        """Rescue shares that filled from a BUY reported as failed.
+        """Legacy recovery is disabled: an intent is not execution evidence.
 
-        Scope is deliberately narrow. Only tokens with a live _submitted record
-        qualify — that is proof this engine put an order on the wire for them
-        within the TTL. A holding we cannot tie to our own submission is the
-        user's own trade and is left alone.
-
-        Returns the number of rows created.
+        Callers historically pass LEADER holdings here. Even user holdings
+        alone cannot establish ownership by this engine. Do not create rows,
+        alerts, or release claims from this path. Durable uncertain claims
+        are reconciled separately against the USER wallet and reserved budget.
+        Legacy claimless outcomes require operator reconciliation.
         """
-        tracked = {r["token_id"] for r in open_rows}
-        rescued = 0
-        for p in positions:
-            token = p.asset
-            if p.size <= 0.01 or token in tracked:
-                continue
-            if self._submitted_basis(user_id, token) <= 0:
-                continue
-            claim = await self.db.fetchone(
-                "SELECT claim_id FROM copy_open_claims WHERE user_id=? AND token_id=?",
-                (user_id, token))
-            if claim:
-                continue          # the uncertain-claim path owns this one
-            notional = round(float(p.size) * float(p.avg_price or 0), 2)
-            pid = uuid.uuid4().hex
-            try:
-                async with self.db.transaction(write=True) as tx:
-                    user_sql = "SELECT id FROM users WHERE id=?" + (
-                        " FOR UPDATE" if self.db.is_pg else "")
-                    await tx.fetchone(user_sql, (user_id,))
-                    await tx.execute(
-                        "INSERT INTO copy_positions(id,user_id,trader_address,condition_id,"
-                        "token_id,market_slug,market_title,outcome,shares,entry_price,"
-                        "notional_usd,status,opened_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,'open',?)",
-                        (pid, user_id, trader, p.condition_id, token,
-                         p.event_slug or p.slug, p.title, (p.outcome or "").upper(),
-                         float(p.size), float(p.avg_price), notional, now_iso()))
-                    await self._event(user_id, pid, "open", notional, None, store=tx)
-            except aiosqlite.IntegrityError:
-                continue          # another worker rescued it first
-            self._clear_submitted(user_id, token)
-            rescued += 1
-            log.warning("ADOPTED untracked fill: %s %s %.2f shares @ %.4f ($%.2f) — a "
-                        "BUY reported as failed had actually filled",
-                        user_id[:10], token[:16], p.size, p.avg_price, notional)
-            await self._notify_position({
-                "event": "opened", "user_id": user_id, "position_id": pid,
-                "market_title": p.title, "market_slug": p.event_slug or p.slug,
-                "outcome": (p.outcome or "").upper(), "shares": float(p.size),
-                "entry_price": float(p.avg_price), "notional_usd": notional,
-                "trader_address": trader,
-            })
-        return rescued
+        return 0
 
     # --- fill-or-kill attempt budget --------------------------------------
     @staticmethod
@@ -1259,6 +1192,8 @@ class CopyEngine:
             # Recorded BEFORE the await, not after: if the process dies or the
             # call raises mid-flight the order may still have reached the
             # exchange, and the next attempt must size against it either way.
+            prior_submission = self._submitted.get((user_id, action.token_id))
+            prior_submission = list(prior_submission) if prior_submission else None
             self._note_submitted(user_id, action.token_id, action.amount)
             try:
                 result = await self._place_order(
@@ -1266,11 +1201,11 @@ class CopyEngine:
                     reference_price=action.reference_price,
                     max_slippage_pct=risk["slippage"],
                     min_price=risk["min_price"], max_price=risk["max_price"])
-            except Exception:
-                # execution.place_market_order converts every exception at or
-                # after the submission boundary into submission_uncertain. A
-                # raised exception is therefore pre-submission and retryable.
-                await self._release_buy_claim(user_id, action.token_id, action.claim_id)
+            except Exception as exc:
+                # A parser or collaborator can raise AFTER the SDK submitted.
+                # Without explicit pre-submission evidence, retain the fence.
+                await self._mark_claim_uncertain(
+                    user_id, action, f"unclassified order outcome: {type(exc).__name__}")
                 raise
             if not result.ok:
                 log.warning("order skipped (%s %s): %s", action.kind,
@@ -1280,6 +1215,12 @@ class CopyEngine:
                     # must not consume the fill budget
                     await self._mark_claim_uncertain(user_id, action, result.reason)
                 else:
+                    # Only this attempt is proven not submitted. Preserve any
+                    # earlier intent rather than clearing aggregate protection.
+                    if prior_submission is None:
+                        self._clear_submitted(user_id, action.token_id)
+                    else:
+                        self._submitted[(user_id, action.token_id)] = prior_submission
                     self._record_fill_outcome(user_id, action, filled=False,
                                               reason=result.reason)
                     await self._release_buy_claim(user_id, action.token_id, action.claim_id)

@@ -77,7 +77,9 @@ async def take_snapshot(db, user_id: str, client, pm) -> dict | None:
         log.exception("snapshot: balance read failed for %s", user_id[:10])
         return None
     try:
-        positions = await pm.get_positions(user_id, size_threshold=0)
+        positions, complete = await pm.get_all_positions(user_id, size_threshold=0)
+        if not complete:
+            return None  # Never persist a truncated portfolio as total equity.
     except Exception:
         log.exception("snapshot: positions read failed for %s", user_id[:10])
         return None

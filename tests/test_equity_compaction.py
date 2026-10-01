@@ -155,7 +155,7 @@ class EquityCompactionTests(unittest.IsolatedAsyncioTestCase):
         drew a crash to the cash balance on the chart, then a recovery."""
         client = SimpleNamespace(get_balance_allowance=AsyncMock(
             return_value=SimpleNamespace(balance=50_000_000)))
-        pm = SimpleNamespace(get_positions=AsyncMock(side_effect=RuntimeError("503")))
+        pm = SimpleNamespace(get_all_positions=AsyncMock(side_effect=RuntimeError("503")))
         with self.assertLogs("equity", level="ERROR"):
             snap = await equity_mod.take_snapshot(self.db, USER, client, pm)
         self.assertIsNone(snap)
@@ -166,7 +166,7 @@ class EquityCompactionTests(unittest.IsolatedAsyncioTestCase):
             return_value=SimpleNamespace(balance=50_000_000)))
         held = SimpleNamespace(size=10.0, current_value=30.0, cash_pnl=5.0,
                                redeemable=False)
-        pm = SimpleNamespace(get_positions=AsyncMock(return_value=[held]))
+        pm = SimpleNamespace(get_all_positions=AsyncMock(return_value=([held], True)))
         snap = await equity_mod.take_snapshot(self.db, USER, client, pm)
         self.assertEqual(snap["equity"], 80.0)
         self.assertEqual(1, await self.count())

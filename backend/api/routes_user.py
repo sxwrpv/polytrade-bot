@@ -338,7 +338,9 @@ async def me(request: Request, balance: bool = False,
         except Exception:
             bal = None
         try:
-            positions = await pmc.get_positions(user["id"], size_threshold=0)
+            positions, complete = await pmc.get_all_positions(user["id"], size_threshold=0)
+            if not complete:
+                raise ValueError("account positions incomplete")
             positions_val = round(sum(p.current_value for p in positions
                                       if p.size > 0 and not p.redeemable), 2)
             claimable = round(sum(p.current_value for p in positions

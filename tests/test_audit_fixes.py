@@ -63,12 +63,12 @@ class UncertainClaimReleaseTests(unittest.TestCase):
         run(eng._settle_uncertain_claim("0xu", self._claim(60), None))
         self.assertEqual(eng.released, [], "released before the window elapsed")
 
-    def test_an_aged_claim_the_wallet_cannot_explain_is_released(self):
+    def test_an_aged_claim_the_wallet_cannot_explain_is_retained(self):
         eng = self._engine()
         age = ce.UNCERTAIN_CLAIM_RELEASE_SECONDS + 60
         run(eng._settle_uncertain_claim("0xu", self._claim(age), None))
-        self.assertEqual(eng.released, [("0xu", "tok", "c1")],
-                         "token stayed fenced past the release window")
+        self.assertEqual(eng.released, [],
+                         "elapsed time and indexer absence cannot prove non-fill")
 
     def test_a_visible_holding_is_still_adopted_not_released(self):
         """Release is for provable non-fills only. Shares present must still
