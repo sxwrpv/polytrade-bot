@@ -53,14 +53,20 @@ _LEADERBOARD_USER_ENDPOINT = (
     "timePeriod=ALL&orderBy=PNL&user={address}"
 )
 _ACTIVITY_ENDPOINTS = (_TRADE_ENDPOINT, _REDEEM_ENDPOINT, _POSITIONS_ENDPOINT)
+# Fetch limits applied by refresh_trader_analysis. The contract publishes them
+# from these same names, so it cannot describe limits the code does not apply.
+_PAGE_SIZE = 1000        # activity endpoint's verified single-call max
+_MAX_TRADE_PAGES = 4     # up to 4000 trades — covers 90d for all but extreme whales
+_MAX_REDEEM_PAGES = 2
+_POSITIONS_LIMIT = 500
 _FETCH_LIMITS = {
-    "activity_page_size": 1000,
-    "trade_max_pages": 4,
-    "redeem_max_pages": 2,
-    "positions_limit": 500,
+    "activity_page_size": _PAGE_SIZE,
+    "trade_max_pages": _MAX_TRADE_PAGES,
+    "redeem_max_pages": _MAX_REDEEM_PAGES,
+    "positions_limit": _POSITIONS_LIMIT,
 }
-_TRADE_LIMITS = {"activity_page_size": 1000, "trade_max_pages": 4}
-_POSITIONS_LIMITS = {"positions_limit": 500}
+_TRADE_LIMITS = {"activity_page_size": _PAGE_SIZE, "trade_max_pages": _MAX_TRADE_PAGES}
+_POSITIONS_LIMITS = {"positions_limit": _POSITIONS_LIMIT}
 _REFRESH_CADENCE = {
     "default_interval_seconds": 900,
     "default_batch_size": 200,
@@ -583,12 +589,6 @@ async def discover_active_wallets(db, pm, *, target: int = 2000) -> int:
                     fields["volume_usd"] = e.vol
                 await _upsert(db, e.proxy_wallet, fields)
     return len(seen)
-
-
-_PAGE_SIZE = 1000        # activity endpoint's verified single-call max
-_MAX_TRADE_PAGES = 4     # up to 4000 trades — covers 90d for all but extreme whales
-_MAX_REDEEM_PAGES = 2
-_POSITIONS_LIMIT = 500
 
 
 @dataclass(frozen=True)

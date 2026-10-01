@@ -329,15 +329,30 @@ class WireContractTests(PublicScreenerTestBase):
     def test_every_key_the_screener_sends_is_a_parameter_this_route_accepts(self):
         """A renamed parameter fails silently: FastAPI ignores the unknown key
         and returns an unfiltered list that still looks correct. Nothing else
-        in either suite would catch that, so pin the contract here."""
-        model = (Path(__file__).parents[1]
-                 / "frontend/src/screener/screenerModel.js").read_text()
-        emitted = set(re.findall(r"query\.([a-z_]+)\s*=", model))
+        in either suite would catch that, so pin the contract here against
+        the trader-screener's 'polytrade' source (toPolytradeQuery)."""
+        source = (Path(__file__).parents[1]
+                  / "trader-screener/public/lib/dataSource.js").read_text()
+        builder = source[source.index("export function toPolytradeQuery"):]
+        builder = builder[:builder.index("\n}\n")]
+        emitted = set(re.findall(r"\bq\.([a-z_]+)\s*=", builder))
         emitted |= {"period", "sort", "limit"}  # set in the object literal
         accepted = set(inspect.signature(routes_public_screener.public_wallets).parameters)
 
-        self.assertTrue(emitted, "no query keys parsed out of the screener model")
+        self.assertTrue(emitted - {"period", "sort", "limit"},
+                        "no query keys parsed out of toPolytradeQuery")
         self.assertLessEqual(emitted, accepted, emitted - accepted)
+
+        # Values fail the same way: an unknown period or sort is a 422 or a
+        # silently different board.
+        periods = re.search(r"PERIOD_TO_POLYTRADE = \{([^}]*)\}", source).group(1)
+        sent_periods = set(re.findall(r"'(\w+)'", periods))
+        sort_expr = builder[builder.index("sort:"):builder.index("limit,")]
+        sent_sorts = set(re.findall(r"\? '(\w+)'|: '(\w+)'", sort_expr))
+        sent_sorts = {a or b for a, b in sent_sorts}
+        self.assertTrue(sent_periods and sent_sorts)
+        self.assertLessEqual(sent_periods, set(routes_public_screener.PERIODS))
+        self.assertLessEqual(sent_sorts, routes_public_screener.SORTS)
 
     def test_the_filters_actually_narrow_the_result(self):
         """Guards the same failure from the other side: an ignored parameter

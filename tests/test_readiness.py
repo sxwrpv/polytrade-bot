@@ -13,7 +13,6 @@ import unittest
 
 from fastapi.testclient import TestClient
 
-from backend.core import health
 from backend.core.health import Heartbeats, UpstreamCounters
 
 

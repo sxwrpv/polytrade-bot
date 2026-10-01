@@ -350,15 +350,21 @@ class WalletCreationClaimTests(SQLiteDBTest):
             "VALUES(?,?,?,?,?)",
             (51, "dead", "claimed", "2020-01-01T00:00:00+00:00", "2020-01-01T00:00:00+00:00"),
         )
-        recovered = await self.db.claim_wallet_creation(51, "new-token", stale_before="2021-01-01T00:00:00+00:00")
-        self.assertTrue(recovered)
+        recovered = await self.db.acquire_wallet_creation_lease(
+            51, "new-token", stale_before="2021-01-01T00:00:00+00:00",
+            lease_expires_at="2030-01-01T00:00:00+00:00")
+        self.assertIsNotNone(recovered)
+        self.assertEqual("new-token", recovered["lease_owner"])
 
         await self.db.execute(
             "UPDATE wallet_creation_claims SET state='side_effect_started', claim_token='started' "
             "WHERE telegram_user_id=?", (51,)
         )
-        replay = await self.db.claim_wallet_creation(51, "another", stale_before="2030-01-01T00:00:00+00:00")
-        self.assertFalse(replay)
+        # Still owned (never explicitly released), so no staleness recovers it.
+        replay = await self.db.acquire_wallet_creation_lease(
+            51, "another", stale_before="2030-01-01T00:00:00+00:00",
+            lease_expires_at="2030-01-01T00:00:00+00:00")
+        self.assertIsNone(replay)
 
     async def test_deterministic_pre_side_effect_failure_releases_claim_for_immediate_retry(self):
         client = AsyncMock()

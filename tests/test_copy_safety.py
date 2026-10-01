@@ -247,7 +247,7 @@ class CopySafetyTests(unittest.IsolatedAsyncioTestCase):
             "SELECT state FROM copy_open_claims WHERE user_id=? AND token_id=?", (USER, TOKEN))
         self.assertEqual("uncertain", claim["state"])
 
-    async def test_buy_exception_before_submission_releases_claim(self):
+    async def test_unclassified_buy_exception_retains_claim(self):
         async def place(*args, **kwargs):
             raise RuntimeError("preflight failed")
 
@@ -255,8 +255,8 @@ class CopySafetyTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(RuntimeError, "preflight failed"):
             await engine._execute(USER, object(), open_action())
 
-        self.assertEqual(0, await self.db.fetchval(
-            "SELECT COUNT(*) FROM copy_open_claims WHERE user_id=? AND token_id=?",
+        self.assertEqual("uncertain", await self.db.fetchval(
+            "SELECT state FROM copy_open_claims WHERE user_id=? AND token_id=?",
             (USER, TOKEN)))
 
     async def test_master_user_pause_blocks_buy(self):

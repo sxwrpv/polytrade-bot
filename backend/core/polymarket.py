@@ -1,13 +1,15 @@
 """Polymarket read layer — all market-data / public-wallet API calls.
 
 Polymarket only. No other venues, no order placement (that lives in
-the executor, phase 6). Every response shape here is frozen against the live
-APIs in ``backend/core/API_RECON.md`` — read that for endpoints, params, and
-parsing gotchas.
+execution.py). Every response shape here is frozen against the live APIs in
+``backend/core/API_RECON.md`` — read that for endpoints, params, and parsing
+gotchas.
 
-Two hosts (both GET, no auth for these reads):
-  - data-api  : leaderboard, positions, activity, holders
-  - clob      : order book
+Hosts (no auth for any of these):
+  - data-api       : leaderboard, positions, activity
+  - clob           : order book, resolved markets
+  - polymarket.com : frontend geoblock probe
+  - bridge         : deposit-address creation (the one POST)
 
 Gotchas handled here: a browser-like User-Agent (data-api 403s library UAs);
 activity is mixed-type so trade history filters ``type=TRADE``.
@@ -43,7 +45,7 @@ log = logging.getLogger("polymarket")
 #     on a fresh connection, so an in-flight read fails for a reason that has
 #     nothing to do with the request.
 #
-# Only idempotent GETs go through here. Nothing in this module writes.
+# Only idempotent GETs go through _get; the bridge POST does not retry.
 READ_MAX_ATTEMPTS = 4
 READ_BACKOFF_BASE = 0.5      # seconds
 READ_BACKOFF_CAP = 8.0
@@ -318,6 +320,7 @@ class PolymarketClient:
                 continue
             if r.status_code in RETRYABLE_STATUS and not final:
                 delay = _backoff_delay(attempt)
+                upstream.record(retry=True)
                 log.warning("%d from %s — retry %d/%d in %.2fs",
                             r.status_code, url, attempt + 1, last_attempt, delay)
                 await asyncio.sleep(delay)
@@ -449,7 +452,7 @@ class PolymarketClient:
         Collateral Onramp. No gas needed on our side for this step (the bridge
         itself is a Polymarket-run service); the on-chain allowance approval
         for actually trading is a separate, still gas-costing step for an EOA
-        wallet (see BUILD_PLAN §wallet model).
+        wallet (see wallet.py).
         Returns {"address": {"evm": "0x...", "svm": "...", "btc": "...", ...}}.
         """
         r = await self._client.post(f"{BRIDGE_API}/deposit", json={"address": wallet_address})

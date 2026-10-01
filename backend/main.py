@@ -40,7 +40,8 @@ logging.basicConfig(
 # httpx logs a line per request at INFO. The engine polls Polymarket constantly,
 # so this alone was ~86% of the log volume and grew server.log to 1.5 GB with no
 # rotation. Warnings and errors still come through; set HTTP_LOG_LEVEL=INFO to
-# get the per-request trace back when debugging.
+# get the per-request trace back when debugging. That trace logs full URLs,
+# and Telegram's embed the bot token, so treat such a log as a secret.
 for _noisy in ("httpx", "httpcore", "urllib3", "web3", "websockets"):
     logging.getLogger(_noisy).setLevel(
         os.environ.get("HTTP_LOG_LEVEL", "WARNING").upper())
@@ -177,14 +178,6 @@ async def _equity_snapshot_loop(app, stop: asyncio.Event) -> None:
             log.info("equity snapshot: recorded %d users", n)
         except Exception:
             log.exception("equity snapshot pass failed (continuing)")
-        try:
-            # thin old snapshots to the resolution the charts render (keeps
-            # storage bounded; never changes a chart)
-            pruned = await equity.prune_snapshots(db)
-            if pruned:
-                log.info("equity snapshot: pruned %d redundant rows", pruned)
-        except Exception:
-            log.exception("equity snapshot prune failed (continuing)")
         try:
             await asyncio.wait_for(stop.wait(), timeout=interval)
         except asyncio.TimeoutError:
@@ -505,20 +498,7 @@ if os.path.isfile(_DOCS_INDEX):
         return FileResponse(_DOCS_INDEX)
 
 
-# Standalone Wallet Screener. Its own Vite entry, served here same-origin so
-# no cross-site cookie or CORS relaxation is needed today; the same built page
-# can later be published at screener.polytradebot.live unchanged (see
-# docs/deployment.md). Declared before the SPA mount so "/screener" resolves to
-# the screener page rather than falling through to the app's index.html.
-_SCREENER_PAGE = os.path.join(_FRONTEND_DIST, "screener.html")
-if os.path.isfile(_SCREENER_PAGE):
-
-    @app.get("/screener", include_in_schema=False)
-    @app.get("/screener/", include_in_schema=False)
-    async def wallet_screener():
-        return FileResponse(_SCREENER_PAGE)
-
-
-# SPA — mount last so it doesn't shadow /api, /docs or /screener.
+# SPA — mount last so it doesn't shadow /api or /docs. /screener/* never
+# reaches this app: Caddy routes it to the trader-screener service.
 if os.path.isdir(_FRONTEND_DIST):
     app.mount("/", StaticFiles(directory=_FRONTEND_DIST, html=True), name="spa")

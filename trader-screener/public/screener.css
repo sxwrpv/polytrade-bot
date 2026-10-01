@@ -1,12 +1,11 @@
 /* Trader screener — PolyTrade surface.
  *
- * Structure and class names mirror polytrade/frontend/src/screener so this can
- * be lifted into that app: same shell grid, same nav, same sidebar controls,
- * same results table. Tokens come from tokens.css, which mirrors the
+ * Shell grid, nav, sidebar controls and results table. Tokens come from
+ * tokens.css, which mirrors the main app's brutalism.css token layer and the
  * documentation — this page is reference material and should read like it.
  *
- * Additions beyond the existing polytrade screener, all prefixed so they are
- * easy to find when porting: .band-*, .cchip, .angle-*, .index-*, .event-*.
+ * Copy-board additions are prefixed so they are easy to find: .band-*,
+ * .cchip, .angle-*, .index-*, .event-*.
  */
 
 /* --- page ground ---------------------------------------------------------

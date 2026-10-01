@@ -6,11 +6,12 @@ guarded against that fill price), instead of waiting for the 30s
 position-diff sweep.
 
 Two tiers behind one interface:
-  - ActivityPollDetector (now): polls /activity?type=TRADE per leader. ~3-8s
-    end-to-end, bounded by Polymarket's indexer lag. No extra dependencies.
-  - OnChainDetector (later): subscribe to Polygon OrderFilled logs filtered by
-    the leader's address. ~2-4s and attributed. Drops in here unchanged — needs
-    a Polygon WebSocket RPC endpoint. Stub left below.
+  - ActivityPollDetector (default): polls /activity?type=TRADE per leader.
+    ~3-8s end-to-end, bounded by Polymarket's indexer lag. No extra
+    dependencies.
+  - OnChainDetector (used when POLYGON_RPC_URL is set): polls Polygon
+    OrderFilled logs filtered by the leader's address over HTTP JSON-RPC.
+    ~2-4s and attributed.
 """
 from __future__ import annotations
 
@@ -32,7 +33,12 @@ ORDERFILLED_TOPIC = "0xd543adfd945773f1a62f74f0ee55a5e3b9b1a28262980ba90b1a89f2e
 class TradeDetector(ABC):
     @abstractmethod
     async def new_trades(self, trader_address: str, since_ts: int) -> list:
-        """Leader trades with timestamp > since_ts (each carries side + price)."""
+        """Leader trades with timestamp >= since_ts (each carries side + price).
+
+        Inclusive on purpose: the engine's cursor is the timestamp of the last
+        trade it handled, and another fill in that second can be indexed a
+        tick later. The engine dedupes the boundary second by tx_hash.
+        """
         ...
 
 
@@ -43,7 +49,7 @@ class ActivityPollDetector(TradeDetector):
 
     async def new_trades(self, trader_address: str, since_ts: int) -> list:
         trades = await self.pm.get_trade_history(trader_address, limit=self.limit)
-        return [t for t in trades if t.timestamp > since_ts]
+        return [t for t in trades if t.timestamp >= since_ts]
 
 
 class OnChainDetector(TradeDetector):

@@ -62,12 +62,16 @@ async def broadcast(message: str, *, dry_run: bool, to_owner: bool) -> int:
                     if r.status_code == 403:      # user blocked the bot
                         blocked += 1
                         print(f"  blocked: {u['id'][:10]}…")
+                    elif r.status_code >= 400:
+                        failed += 1
+                        print(f"  failed:  {u['id'][:10]}… (HTTP {r.status_code})")
                     else:
-                        r.raise_for_status()
                         sent += 1
                 except Exception as exc:          # keep going; report at the end
+                    # Type only: httpx error text carries the request URL, and
+                    # the Bot API URL embeds the token.
                     failed += 1
-                    print(f"  failed:  {u['id'][:10]}… ({exc})")
+                    print(f"  failed:  {u['id'][:10]}… ({type(exc).__name__})")
                 await asyncio.sleep(SEND_DELAY_S)
         print(f"done: sent={sent} blocked={blocked} failed={failed}")
         return 0 if failed == 0 else 1
