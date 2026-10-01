@@ -421,7 +421,8 @@ async def activity(limit: int = 30, user=Depends(get_current_user), db=Depends(g
         "p.entry_price, p.exit_price, c.display_name AS trader_name "
         "FROM trade_events e JOIN copy_positions p ON p.id = e.position_id "
         "LEFT JOIN trader_cache c ON c.address = p.trader_address "
-        "WHERE e.user_id = ? AND e.event_type != 'resolve' AND e.ts >= ? "
+        "WHERE e.user_id = ? AND p.status != 'reconciled_invalid' "
+        "AND e.event_type != 'resolve' AND e.ts >= ? "
         "ORDER BY e.ts DESC LIMIT ?",
         (user["id"], cutoff, limit))
 
