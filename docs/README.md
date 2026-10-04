@@ -21,7 +21,7 @@ PolyTrade watches a selected source wallet, checks each detected position change
 3. Review the custody, eligibility, and risk information before creating a wallet.
 4. Create your custodial wallet in the Telegram Mini App and back up the private key securely.
 5. Make a small test deposit using a displayed supported route.
-6. Choose a source wallet, set conservative limits, and monitor the first copy.
+6. Review already-copied wallets, set conservative limits, and monitor positions.
 
 Read the complete [Getting Started](getting-started.md) walkthrough before funding.
 
@@ -39,7 +39,7 @@ Only fund an amount you can afford to lose completely. See [Risk and Security](r
 
 ## Consumer guides
 
-- [Getting Started](getting-started.md) — bot-first setup through the first monitored copy.
+- [Getting Started](getting-started.md) — bot-first setup, funding, and monitoring existing copied wallets.
 - [How PolyTrade Works](core-concepts.md) — plain-language market, wallet, order, and balance concepts.
 - [Copy Trading](copy-trading.md) — detection, sizing, order submission, pauses, exits, and divergence.
 - [Wallet and Funding](wallet-and-funding.md) — custody, deposits, balances, key export, and redemption.

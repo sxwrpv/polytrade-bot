@@ -1,10 +1,10 @@
 # Getting Started
 
-Use PolyTrade through [@cpolytrade_bot](https://t.me/cpolytrade_bot). This guide takes you from a verified Telegram launch to a configured first copy.
+Use PolyTrade through [@cpolytrade_bot](https://t.me/cpolytrade_bot). This guide covers verified Telegram launch, wallet setup, funding, and monitoring existing copied wallets.
 
 ## Why use PolyTrade?
 
-PolyTrade puts wallet discovery, copy sizing, risk limits, and position monitoring into one Telegram Mini App. You choose the public wallet to follow and set the limits; PolyTrade submits real orders only when its checks pass.
+PolyTrade combines a standalone public wallet screener with copy sizing, risk limits, and position monitoring in the Telegram Mini App. The current Mini App manages wallets already copied by the account; PolyTrade submits real orders only when its checks pass.
 
 It cannot guarantee a copy, a matching price, or a profit.
 
@@ -44,11 +44,11 @@ There is no withdrawal API and no in-app withdrawal workflow. Read [Wallet and F
 
 ## 5. Choose a source wallet
 
-On **Home**, browse discovered wallets over a 7d/30d/90d window, sort the statistics, or paste a full `0x` address.
+Use the standalone **Wallet Screener** to research cached public wallet history over a 7d/30d/90d window. The screener is read-only. The current Mini App Home contains only wallets already copied by the account, and adding a new copied wallet from the public screener is not available in this release.
 
 Statistics are estimates from public history and may be delayed or incomplete. Past profit does not predict future results, and a source may hold hedges or positions elsewhere.
 
-## 6. Set limits before following
+## 6. Review limits on an already-copied wallet
 
 Review each one:
 
@@ -63,7 +63,7 @@ Review each one:
 
 Defaults are deliberately small. No default and no limit makes trading safe or prevents loss.
 
-## 7. Follow and monitor
+## 7. Monitor existing copied wallets
 
 Following aligns you toward the source wallet's *current* holdings, not only its future trades: fast detection starts immediately, and reconciliation can pick up positions the source already held.
 

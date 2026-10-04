@@ -11,6 +11,7 @@ Use this hub for PolyTrade architecture and API contracts. Consumer onboarding b
 
 ## Architecture and core concepts
 
+- [System Design](https://polytradebot.live/docs/system-design) — seven diagrams drawn from the source: topology, onboarding, the copy cycle, risk surfaces, position lifecycle, the screener pipeline, and the production workflow.
 - [How PolyTrade Works](core-concepts.md) — positions, detection, reconciliation, FOK execution, custody, and balances.
 - [Copy Trading](copy-trading.md) — sizing, safety checks, durable claims, exits, and divergence.
 - [Risk and Security](risk-and-security.md) — authentication, custody, execution controls, and material boundaries.

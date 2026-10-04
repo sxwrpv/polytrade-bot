@@ -23,7 +23,6 @@ def validate_slippage_pct(value: float | str, name: str = "slippage") -> float:
 CLOB_API = "https://clob.polymarket.com"
 DATA_API = "https://data-api.polymarket.com"
 BRIDGE_API = "https://bridge.polymarket.com"
-CHAIN_ID = 137  # Polygon mainnet
 
 # --- HTTP ---
 # data-api 403s library/default user-agents (see API_RECON.md gotcha #1); send a
@@ -86,8 +85,8 @@ MAX_COPY_SLIPPAGE_PCT = validate_slippage_pct(
 ENFORCE_FRONTEND_GEOBLOCK = os.environ.get("ENFORCE_FRONTEND_GEOBLOCK", "0") == "1"
 
 # --- Server ---
-HOST = os.environ.get("HOST", "0.0.0.0")
-PORT = int(os.environ.get("PORT", "8080"))
+# The listen address and port are uvicorn command-line flags (Dockerfile CMD),
+# not settings read here.
 # Cross-origin callers of the API, comma-separated (e.g. a Vite dev server on
 # another port). Empty (the default) means NO cross-origin access — the SPA is
 # served same-origin by this backend, so browsers need no CORS at all. The old
@@ -96,10 +95,10 @@ CORS_ALLOW_ORIGINS = tuple(
     o.strip() for o in os.environ.get("CORS_ALLOW_ORIGINS", "").split(",") if o.strip())
 
 # --- Wallet / signing ---
-# Trading goes through polymarket-client's AsyncSecureClient (see BUILD_PLAN.md
-# §wallet model — py-clob-client and py-clob-client-v2 both have real, unfixed
-# upstream bugs for anything beyond plain EOA reads). Builder API credentials
-# (from polymarket.com/settings?tab=builder) enable gasless deposit-wallet
+# Trading goes through polymarket-client's AsyncSecureClient (see
+# backend/core/wallet.py — py-clob-client and py-clob-client-v2 both have
+# real, unfixed upstream bugs for anything beyond plain EOA reads). Builder API
+# credentials (from polymarket.com/settings?tab=builder) enable gasless deposit-wallet
 # trading: wallet creation/deployment, and — via ensure_allowances' individual
 # per-operator approval calls — trading approvals, all with no MATIC needed.
 # Without these set, wallet.py falls back to plain EOA mode (needs a little
@@ -139,3 +138,12 @@ DEV_PREVIEW = os.environ.get("DEV_PREVIEW", "0") == "1"
 SESSION_COOKIE_SECURE = (
     os.environ.get("SESSION_COOKIE_SECURE", "0" if DEV_PREVIEW else "1") == "1"
 )
+# --- Database pool ---
+# Retire an idle pooled connection before Supabase's pooler or the network
+# does it for us. One ConnectionDoesNotExistError was observed in production
+# (2026-09-02); the worker recovered on its next cycle, and Database._read now
+# retries a single safe read past it.
+DB_POOL_MIN_SIZE = int(os.environ.get("DB_POOL_MIN_SIZE", "1"))
+DB_POOL_MAX_SIZE = int(os.environ.get("DB_POOL_MAX_SIZE", "10"))
+DB_POOL_MAX_INACTIVE_SECONDS = float(
+    os.environ.get("DB_POOL_MAX_INACTIVE_SECONDS", "180"))

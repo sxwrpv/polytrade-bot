@@ -1,7 +1,8 @@
 # Polymarket API — frozen response shapes (recon, verified live 2026-06-30)
 
 Probed against the live public APIs. All endpoints below are **GET, no auth**.
-Feeds `polymarket.py` (phase 3). Trading/auth endpoints are covered in BUILD_PLAN §3.
+Feeds `polymarket.py`. Order placement is not covered here: it goes through
+polymarket-client's AsyncSecureClient (see `execution.py` and `wallet.py`).
 
 ## Cross-cutting gotchas (read first)
 1. **User-Agent required.** `data-api` returns **403** to the default urllib UA. Set a

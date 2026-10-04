@@ -25,11 +25,88 @@ polytradebot.live, www.polytradebot.live {
 		Content-Security-Policy "frame-ancestors 'self' https://web.telegram.org https://*.telegram.org"
 	}
 
-	reverse_proxy app:8080
+	# Cache policy. Nothing set one before, so browsers fell back to HEURISTIC
+	# freshness — roughly a tenth of the file's age — and happily served a
+	# stale index.html for hours after a deploy. The HTML names the hashed
+	# bundles, so a stale entry document pins every asset with it: the deploy
+	# lands on the server and the browser never sees any of it. Telegram's
+	# WebView is the worst case, since a Mini App user cannot hard-refresh.
+	#
+	# Vite fingerprints everything under /assets, so those are immutable and
+	# can be cached forever. Everything else must revalidate: `no-cache` still
+	# caches, it just forces an ETag check first, which is one cheap 304.
+	@immutable path /assets/*
+	header @immutable Cache-Control "public, max-age=31536000, immutable"
+
+	# The docs ship UNHASHED filenames (/docs/assets/app.js, styles.css), so
+	# they are the most exposed of all — without revalidation a cached copy
+	# never updates at any point in the future.
+	@revalidate {
+		path /
+		path /screener /screener/*
+		path /docs /docs/*
+		path *.html
+	}
+	header @revalidate Cache-Control "no-cache"
+
+	# --- Scanner traffic -------------------------------------------------
+	# 3,798 of 14,650 requests over 30 Aug - 2 Sep were 404s from automated
+	# scanners: /.env (62), /wp-admin/install.php (54), /.env.bak, /.git/config,
+	# /config.php, /config.js and friends. All were correctly refused by the
+	# app, but each still cost a proxied round trip to uvicorn and a log line.
+	# Refuse them at the edge instead.
+	#
+	# One `path` directive with many arguments: the arguments are OR'd, and
+	# repeating `path` inside a named matcher is not valid Caddy.
+	#
+	# 404, not 403: a 403 confirms the path is special. 404 says nothing.
+	@hidden path /.env /.env.* /.git /.git/* /.svn /.svn/* /.hg /.hg/* /.htaccess /.htpasswd /.aws /.aws/* /.ssh /.ssh/* /.vscode /.vscode/* /.idea /.idea/* /wp-admin /wp-admin/* /wp-login.php /wp-content/* /wp-includes/* /xmlrpc.php /config.php /config.json /config.js /configuration.php /phpinfo.php /phpmyadmin /phpmyadmin/* /vendor/* /*.sql /*.bak /*.old /*.swp /*.pem /*.key
+
+	# A `handle` block, not a bare `respond`: handle blocks are mutually
+	# exclusive and evaluated in written order, so this is deterministic rather
+	# than dependent on Caddy's directive-ordering rules.
+	handle @hidden {
+		respond 404
+	}
+
+	# --- Access logging --------------------------------------------------
+	# There was no Caddy access log at all: six days produced 135 lines, all
+	# startup and certificate events. Everything known about request volume had
+	# to be reconstructed from uvicorn's log, which recorded the proxy's address
+	# rather than the caller until --proxy-headers was enabled.
+	#
+	# Rotation is stated rather than defaulted: an unrotated server.log reached
+	# 1.5 GB on this project in August.
+	log {
+		output file /var/log/caddy/access.log {
+			roll_size 32MiB
+			roll_keep 5
+			roll_keep_for 336h
+		}
+		format json
+	}
+
+	# The canonical /screener surface is the dedicated Trader Screener service.
+	# handle_path strips /screener before proxying, so its internal routes remain
+	# /, /api/* and /trader/* without colliding with the main FastAPI app.
+	redir /screener /screener/ 308
+	handle_path /screener/* {
+		reverse_proxy trader-screener:4310
+	}
+
+	handle {
+		reverse_proxy app:8080
+	}
 }
 
 # Plain-HTTP access by IP, kept so health checks and monitoring don't depend on
 # DNS or a certificate. No TLS here (a public CA will not issue for a bare IP).
 http://52.51.200.58 {
-	reverse_proxy app:8080
+	redir /screener /screener/ 308
+	handle_path /screener/* {
+		reverse_proxy trader-screener:4310
+	}
+	handle {
+		reverse_proxy app:8080
+	}
 }

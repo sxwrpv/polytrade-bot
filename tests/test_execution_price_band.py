@@ -57,6 +57,14 @@ class FailingClient:
         raise self.error
 
 
+class RejectedClient:
+    async def place_market_order(self, **kwargs):
+        return SimpleNamespace(
+            ok=False, code="fok_killed", message="reported unfilled",
+            model_dump=lambda: {"ok": False, "code": "fok_killed"},
+        )
+
+
 class FineTickPM(FakePM):
     async def get_orderbook(self, token_id):
         book = await super().get_orderbook(token_id)
@@ -69,7 +77,7 @@ class FineTickPM(FakePM):
 
 
 class AbsolutePriceBandTests(unittest.IsolatedAsyncioTestCase):
-    async def test_fok_insufficient_liquidity_is_a_definitive_kill(self):
+    async def test_sdk_liquidity_exception_after_submit_is_uncertain(self):
         result = await place_market_order(
             FailingClient(InsufficientLiquidityError(
                 "order couldn't be fully filled. FOK orders are fully filled or killed.")),
@@ -78,13 +86,22 @@ class AbsolutePriceBandTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertFalse(result.ok)
-        self.assertFalse(result.submission_uncertain)
+        self.assertTrue(result.submission_uncertain)
         self.assertIn("insufficient_liquidity", result.reason)
 
     async def test_transport_failure_after_submission_remains_uncertain(self):
         result = await place_market_order(
             FailingClient(TransportError("connection lost")),
             FineTickPM(), "token", "BUY", 10,
+            reference_price=0.50, max_slippage_pct=2,
+        )
+
+        self.assertFalse(result.ok)
+        self.assertTrue(result.submission_uncertain)
+
+    async def test_returned_rejection_after_submit_is_also_uncertain(self):
+        result = await place_market_order(
+            RejectedClient(), FineTickPM(), "token", "BUY", 10,
             reference_price=0.50, max_slippage_pct=2,
         )
 

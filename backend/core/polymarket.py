@@ -1,13 +1,15 @@
 """Polymarket read layer — all market-data / public-wallet API calls.
 
 Polymarket only. No other venues, no order placement (that lives in
-the executor, phase 6). Every response shape here is frozen against the live
-APIs in ``backend/core/API_RECON.md`` — read that for endpoints, params, and
-parsing gotchas.
+execution.py). Every response shape here is frozen against the live APIs in
+``backend/core/API_RECON.md`` — read that for endpoints, params, and parsing
+gotchas.
 
-Two hosts (both GET, no auth for these reads):
-  - data-api  : leaderboard, positions, activity, holders
-  - clob      : order book
+Hosts (no auth for any of these):
+  - data-api       : leaderboard, positions, activity
+  - clob           : order book, resolved markets
+  - polymarket.com : frontend geoblock probe
+  - bridge         : deposit-address creation (the one POST)
 
 Gotchas handled here: a browser-like User-Agent (data-api 403s library UAs);
 activity is mixed-type so trade history filters ``type=TRADE``.
@@ -15,6 +17,8 @@ activity is mixed-type so trade history filters ``type=TRADE``.
 from __future__ import annotations
 
 import asyncio
+import logging
+import random
 from dataclasses import dataclass
 from typing import Any
 
@@ -23,6 +27,63 @@ import httpx
 from backend.config import (
     BRIDGE_API, CLOB_API, DATA_API, HTTP_TIMEOUT, HTTP_USER_AGENT,
 )
+from backend.core.health import upstream
+
+log = logging.getLogger("polymarket")
+
+# Read-retry policy for the public GET endpoints.
+#
+# Two upstream behaviours drive this, both measured in production (2026-09-02):
+#
+#  1. data-api answers 429 under our own load. The old policy was two fixed
+#     sleeps (1s, 3s) with no jitter, so every worker that hit the limit
+#     retried in lockstep and re-collided. Full jitter spreads them out.
+#  2. The edge sends a clean HTTP/2 GOAWAY once a connection has carried
+#     10,000 streams (`ConnectionTerminated error_code:0,
+#     last_stream_id:19999` — the same id every time, 7 occurrences in 3.4
+#     days). httpx surfaces that as RemoteProtocolError rather than retrying
+#     on a fresh connection, so an in-flight read fails for a reason that has
+#     nothing to do with the request.
+#
+# Only idempotent GETs go through _get; the bridge POST does not retry.
+READ_MAX_ATTEMPTS = 4
+READ_BACKOFF_BASE = 0.5      # seconds
+READ_BACKOFF_CAP = 8.0
+RETRY_AFTER_CAP = 30.0
+# Transport-level failures: the request provably did not produce a response,
+# so re-issuing a GET is safe.
+RETRYABLE_TRANSPORT = (
+    httpx.RemoteProtocolError,   # GOAWAY / connection terminated mid-stream
+    httpx.ConnectError,
+    httpx.ConnectTimeout,
+    httpx.ReadTimeout,
+    httpx.WriteTimeout,
+    httpx.PoolTimeout,
+    httpx.ReadError,
+    httpx.WriteError,
+)
+# Gateway-class statuses only. A 500 from data-api is deterministic per wallet
+# (two addresses produced 381 of 388 failures over 3.4 days), so retrying it
+# just multiplies load — trader_stats quarantines those instead.
+RETRYABLE_STATUS = (502, 503, 504)
+
+
+def _retry_after_seconds(response: httpx.Response) -> float | None:
+    """Honour Retry-After when the server sets it (delta-seconds form)."""
+    raw = response.headers.get("retry-after")
+    if not raw:
+        return None
+    try:
+        return max(0.0, min(float(raw.strip()), RETRY_AFTER_CAP))
+    except (TypeError, ValueError):
+        return None
+
+
+def _backoff_delay(attempt: int) -> float:
+    """Exponential backoff with full jitter (AWS's formulation)."""
+    ceiling = min(READ_BACKOFF_CAP, READ_BACKOFF_BASE * (2 ** attempt))
+    return random.uniform(0.0, ceiling)
+
 
 
 # ---------------------------------------------------------------------------
@@ -223,15 +284,49 @@ class PolymarketClient:
             await self._client.aclose()
 
     async def _get(self, url: str, params: dict | None = None) -> Any:
-        # Courtesy retry on 429: the background stats crawler and the copy
-        # engine share these hosts, so a burst of crawler traffic must not
-        # turn into hard failures (seen live: data-api 429s at concurrency 8).
-        for attempt, delay in ((0, 1.0), (1, 3.0), (2, None)):
-            r = await self._client.get(url, params=params)
-            if r.status_code == 429 and delay is not None:
+        """GET with bounded retries: jittered backoff, Retry-After, and one
+        class of transport failure (see RETRYABLE_TRANSPORT above).
+
+        The last attempt always raises rather than returning None, so callers
+        keep their existing `except Exception` semantics.
+        """
+        last_attempt = READ_MAX_ATTEMPTS - 1
+        for attempt in range(READ_MAX_ATTEMPTS):
+            final = attempt == last_attempt
+            try:
+                r = await self._client.get(url, params=params)
+            except RETRYABLE_TRANSPORT as exc:
+                upstream.record(transport_error=True)
+                if final:
+                    raise
+                delay = _backoff_delay(attempt)
+                upstream.record(retry=True)
+                log.warning("transport failure on %s (%s: %s) — retry %d/%d in %.2fs",
+                            url, type(exc).__name__, exc, attempt + 1, last_attempt, delay)
+                await asyncio.sleep(delay)
+                continue
+            if r.status_code == 429:
+                upstream.record(rate_limited=True)
+            elif r.status_code >= 500:
+                upstream.record(server_error=True)
+            if r.status_code == 429 and not final:
+                delay = _retry_after_seconds(r)
+                if delay is None:
+                    delay = _backoff_delay(attempt)
+                upstream.record(retry=True)
+                log.warning("429 from %s — retry %d/%d in %.2fs",
+                            url, attempt + 1, last_attempt, delay)
+                await asyncio.sleep(delay)
+                continue
+            if r.status_code in RETRYABLE_STATUS and not final:
+                delay = _backoff_delay(attempt)
+                upstream.record(retry=True)
+                log.warning("%d from %s — retry %d/%d in %.2fs",
+                            r.status_code, url, attempt + 1, last_attempt, delay)
                 await asyncio.sleep(delay)
                 continue
             r.raise_for_status()
+            upstream.record(ok=True)
             return r.json()
 
     # --- orderbook ---------------------------------------------------------
@@ -357,7 +452,7 @@ class PolymarketClient:
         Collateral Onramp. No gas needed on our side for this step (the bridge
         itself is a Polymarket-run service); the on-chain allowance approval
         for actually trading is a separate, still gas-costing step for an EOA
-        wallet (see BUILD_PLAN §wallet model).
+        wallet (see wallet.py).
         Returns {"address": {"evm": "0x...", "svm": "...", "btc": "...", ...}}.
         """
         r = await self._client.post(f"{BRIDGE_API}/deposit", json={"address": wallet_address})

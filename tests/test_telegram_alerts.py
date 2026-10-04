@@ -38,7 +38,7 @@ class TelegramAlertTests(unittest.IsolatedAsyncioTestCase):
         db = AsyncMock()
         db.fetchone.return_value = {"telegram_user_id": 12345}
         http = AsyncMock()
-        http.post.return_value = AsyncMock(raise_for_status=lambda: None)
+        http.post.return_value = SimpleNamespace(status_code=200)
         notifier = TelegramPositionNotifier(db, "bot-token", http=http)
 
         await notifier({"event": "opened", "user_id": "wallet", "market_title": "Market",

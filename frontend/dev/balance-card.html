@@ -1,0 +1,45 @@
+<!doctype html>
+<!-- Dev-only harness for the Home balance card.
+     Not an entry in vite.config.js, so it is never built or shipped. It stubs
+     fetch() rather than the api module, so the real component and the real
+     api wrapper run exactly as they do in the app. -->
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BalanceCard — dev harness</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>body{margin:0;padding:18px;max-width:430px}</style>
+</head><body>
+<div id="root"></div>
+<script type="module">
+import '../src/styles/brutalism.css'
+
+const DAYS = 40, now = Date.now()
+let v = 58
+const series = Array.from({ length: DAYS }, (_, i) => {
+  v += Math.sin(i / 3.2) * 5 + (i > 28 ? 7 : 0.7)
+  return { ts: new Date(now - (DAYS - 1 - i) * 864e5).toISOString(), equity: Math.max(4, v) }
+})
+const real = window.fetch
+window.fetch = async (url, opts) => {
+  const u = String(url)
+  if (u.includes('/user/me')) {
+    return new Response(JSON.stringify({
+      equity: series.at(-1).equity, balance: 114.87, positions_value: 0, claimable: 12.5,
+    }), { headers: { 'content-type': 'application/json' } })
+  }
+  if (u.includes('/user/equity-series')) {
+    const p = new URL(u, location.origin).searchParams.get('period')
+    const take = p === '7d' ? 7 : p === '30d' ? 30 : DAYS
+    return new Response(JSON.stringify(series.slice(-take)),
+      { headers: { 'content-type': 'application/json' } })
+  }
+  return real(url, opts)
+}
+
+const React = (await import('react')).default
+const { createRoot } = await import('react-dom/client')
+const BalanceCard = (await import('../src/components/BalanceCard.jsx')).default
+createRoot(document.getElementById('root')).render(React.createElement(BalanceCard))
+</script>
+</body></html>

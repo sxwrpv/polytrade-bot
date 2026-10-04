@@ -87,6 +87,7 @@
 
 @media (max-width: 820px) {
   .api-topbar { padding: 0 14px; }
+  .api-topbar .brand > span { display: none; }
   .api-topbar .header-links a:nth-child(n+3) { display: none; }
   .api-reference { width: min(100% - 32px, 760px); padding-top: 38px; }
   .api-intro { margin-bottom: 30px; }

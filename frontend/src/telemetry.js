@@ -2,16 +2,10 @@ import { api } from './api.js'
 
 const STORAGE_KEY = 'polytrade.telemetry.session.v1'
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
-const PERIODS = new Set(['7d', '30d', '90d'])
-const SOURCES = new Set(['screener', 'analysis', 'positions'])
+const SOURCES = new Set(['positions'])
 const STATES = new Set(['confirming', 'confirmed', 'rejected', 'reconciliation_required', 'failed'])
 
 const EVENT_KEYS = Object.freeze({
-  screener_search_submitted: ['query_kind', 'period', 'active_filters'],
-  period_changed: ['period', 'source'],
-  advanced_filters_opened: ['period'],
-  wallet_analysis_opened: ['period', 'source'],
-  copy_settings_opened: ['source'],
   close_modal_opened: ['source'],
   close_submitted: ['source'],
   close_confirmed: ['duration_ms'],
@@ -22,10 +16,7 @@ const EVENT_KEYS = Object.freeze({
 })
 
 const validProperty = (key, value) => {
-  if (key === 'period') return PERIODS.has(value)
   if (key === 'source') return SOURCES.has(value)
-  if (key === 'query_kind') return value === 'address' || value === 'text'
-  if (key === 'active_filters') return typeof value === 'boolean'
   if (key === 'duration_ms') return Number.isInteger(value) && value >= 0 && value <= 3_600_000
   if (key === 'state') return STATES.has(value)
   return false

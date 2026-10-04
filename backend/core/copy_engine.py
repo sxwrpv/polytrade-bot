@@ -20,14 +20,16 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import logging
+import os
 import time
 import uuid
 from collections import defaultdict
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from types import SimpleNamespace
 
 import aiosqlite
 import httpx
+from polymarket import errors as pm_errors
 
 from backend.config import (
     COPY_ENGINE_POLL_SECONDS,
@@ -42,6 +44,7 @@ from backend.config import (
     validate_slippage_pct,
 )
 from backend.core import detection, execution, wallet
+from backend.core.health import heartbeats
 from backend.core.polymarket import Position
 from backend.db.database import now_iso
 
@@ -61,6 +64,88 @@ MAX_FILL_ATTEMPTS = 3
 # (stuck closings) before the wallet is treated as ground truth.
 UNCERTAIN_CLAIM_MIN_AGE_SECONDS = 180.0
 CLOSING_STUCK_MIN_AGE_SECONDS = 600.0
+# How long an uncertain BUY claim may stay unresolved before a COMPLETE wallet
+# scan showing no holding is finally accepted as proof that nothing filled.
+#
+# Why this exists: every failure at or after the submission boundary is
+# classified uncertain (execution.place_market_order, deliberately -- a 4xx
+# label proved untrustworthy on 2026-08-23 when shares arrived anyway). But
+# _settle_uncertain_claim only ever ADOPTED or RETAINED, so a claim the wallet
+# could not explain was fenced forever: no new BUY of that token for that user,
+# no SELL, no admin route to clear it, only direct SQL. A rate-limit rejection
+# -- routine against these hosts -- was enough to permanently freeze a token.
+#
+# 24h is far past any indexer lag (seconds), so a token still absent from a
+# complete scan after a day did not fill. Released loudly, never silently.
+UNCERTAIN_CLAIM_RELEASE_SECONDS = float(
+    os.environ.get("UNCERTAIN_CLAIM_RELEASE_SECONDS", str(24 * 3600)))
+# How long a submitted BUY keeps counting against this token's cap even when
+# the exchange reported failure and the indexer has not shown the shares yet.
+#
+# Why this exists (incident 2026-08-23): three BUYs of ~$15.54 went out for one
+# token in 13 seconds against a $15 cap. Each attempt was reported as failed,
+# so the claim was released and nothing was written; the retry budget
+# (MAX_FILL_ATTEMPTS) then spent itself, and every attempt sized itself fresh
+# because the two guards that should have stopped it were both blind:
+# `row_basis` is 0 until a position row exists, and `wallet_cost` comes from an
+# indexer that lags a fill by seconds. All three orders actually filled.
+#
+# So a submitted notional is remembered here and counted as basis until the
+# indexer catches up. It is deliberately NOT a reclassification of the failure
+# as uncertain — doing that froze six tokens behind unreconciled claims on
+# 2026-07-11. This bounds the damage without touching that classification.
+SUBMITTED_BASIS_TTL_SECONDS = 120.0
+# A leader trade older than this is not worth copying: the price that made it
+# worth mirroring is gone. leader_age was computed and logged since the fast
+# path was written but never enforced, so a trade detected late — after a
+# restart, a detector stall, or a funding change — was copied at whatever the
+# book said hours later (incident 2026-08-23).
+MAX_LEADER_TRADE_AGE_SECONDS = float(
+    os.environ.get("MAX_LEADER_TRADE_AGE_SECONDS", "300"))
+
+# How long an available-collateral reading may be reused across copy
+# decisions for one user.
+#
+# _handle_leader_trade reads the balance for EVERY detected leader trade, via
+# an authenticated CLOB round-trip, and does it before the dust-floor check.
+# In the 30 Aug - 2 Sep window that was ~14,300 reads of which 10,126 were
+# immediately discarded by that check, and it is the traffic that walks a
+# connection into its 10,000-stream recycle.
+#
+# Reusing a reading is safe in the direction that matters. The balance only
+# falls when WE spend, and every submission invalidates the entry
+# (_note_submitted), so a cached value can only be stale-low -- which
+# under-sizes, never over-sizes. An external withdrawal inside the window is
+# the one gap, and it is still caught downstream: _prepare_buy re-derives
+# every cap in its write transaction, _clamp_to_verified_position re-reads the
+# wallet, and the exchange rejects on not_enough_balance.
+COLLATERAL_CACHE_SECONDS = float(
+    os.environ.get("COLLATERAL_CACHE_SECONDS", "5"))
+
+# Transport failures on a CACHED SDK client. The client keeps one long-lived
+# HTTP/2 connection, and the edge closes it with a clean GOAWAY after 10,000
+# streams (observed 7x in 3.4 days, always `last_stream_id:19999`). The SDK
+# surfaces that as an exception on whatever read happened to be in flight,
+# and the cached client stays poisoned until the process restarts — so a
+# single connection recycle silently cost us every copy decision that tick.
+#
+# These are retried ONLY for idempotent reads (balance/positions/activity),
+# and only after the client is rebuilt. Order submission is never retried
+# here: execution.py owns that, and an ambiguous submission must reconcile
+# rather than re-fire.
+CLIENT_TRANSPORT_ERRORS = (
+    httpx.RemoteProtocolError,
+    httpx.ConnectError,
+    httpx.ConnectTimeout,
+    httpx.ReadTimeout,
+    httpx.WriteTimeout,
+    httpx.PoolTimeout,
+    httpx.ReadError,
+    httpx.WriteError,
+    pm_errors.TransportError,
+    pm_errors.ConnectionLostError,
+    pm_errors.TimeoutError,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -231,6 +316,21 @@ class CopyEngine:
         # that already 429s). Track consecutive non-fills and give up.
         # Value: [attempts, intent_fingerprint]
         self._attempts: dict[tuple, list] = {}
+        # (user_id, token_id) -> [notional_submitted, monotonic_deadline]. Held
+        # in memory on purpose: it guards a burst of retries within seconds, and
+        # a process restart re-reads the wallet anyway.
+        self._submitted: dict[tuple[str, str], list] = {}
+        # (user_id, trader) -> tokens the leader ALREADY held when copying
+        # started. The reconciler mirrors a leader's whole current book, so
+        # without this a new follow back-fills positions opened long before —
+        # which is exactly what happened on 2026-08-23, and the opposite of
+        # what the UI promises. Mirrors how _cursors seeds the detector
+        # ("first sight: start now, don't retro-copy the leader's history").
+        # In memory on purpose: after a restart the safe answer is the same one.
+        self._no_backfill: dict[tuple[str, str], set] = {}
+        # user_id -> [available_usd, monotonic_deadline]. See
+        # COLLATERAL_CACHE_SECONDS. In memory on purpose: a restart re-reads.
+        self._collateral_cache: dict[str, list] = {}
 
     # --- lifecycle ---------------------------------------------------------
     async def run(self, stop_event: asyncio.Event) -> None:
@@ -259,12 +359,10 @@ class CopyEngine:
     # --- uncertain-claim / stuck-closing reconciliation ---------------------
     async def _reconcile_uncertain_claims(self) -> None:
         """Settle BUY claims parked in 'uncertain' (submission outcome unknown).
-        The wallet is the ground truth: once the indexer has had time to catch
-        up, a holding no tracking row explains means the BUY filled — adopt it;
-        no holding means it never filled — release the claim. Without this,
-        every uncertain claim froze its token forever (no new copies, its
-        reserved_usd counted against exposure) and needed manual DB surgery —
-        six such claims were stuck live on 2026-07-11."""
+        A wallet holding may prove a bounded fill and be adopted. Absence is not
+        proof of non-fill, and an aggregate larger than the reserved claim is
+        quarantined. This intentionally prefers a stuck token requiring manual
+        review over another BUY that can breach the configured cap."""
         cutoff = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(
             seconds=UNCERTAIN_CLAIM_MIN_AGE_SECONDS)).isoformat()
         claims = await self.db.fetchall(
@@ -275,19 +373,43 @@ class CopyEngine:
             by_user[c["user_id"]].append(c)
         for user_id, user_claims in by_user.items():
             try:
-                positions = await self.pm.get_positions(user_id, size_threshold=0)
+                positions, complete = await self.pm.get_all_positions(
+                    user_id, size_threshold=0)
             except Exception:
                 log.exception("uncertain reconciliation: position read failed for %s",
                               user_id[:10])
                 continue
             held = {p.asset: p for p in positions if p.size > 0.01}
             for claim in user_claims:
+                # Absence from a truncated wallet page proves nothing. Releasing
+                # this claim would permit another BUY while the first may already
+                # be held beyond the page boundary.
+                if claim["token_id"] not in held and not complete:
+                    log.warning("uncertain claim retained: wallet scan incomplete for %s %s",
+                                user_id[:10], claim["token_id"])
+                    continue
                 try:
                     await self._settle_uncertain_claim(
                         user_id, claim, held.get(claim["token_id"]))
                 except Exception:
                     log.exception("uncertain claim settlement failed: %s %s",
                                   user_id[:10], claim["token_id"])
+
+    @staticmethod
+    def _claim_age_seconds(claim: dict) -> float | None:
+        """Seconds since the claim was first reserved, or None if unparseable."""
+        for key in ("claimed_at", "updated_at"):
+            raw = claim.get(key)
+            if not raw:
+                continue
+            try:
+                ts = dt.datetime.fromisoformat(raw)
+            except (TypeError, ValueError):
+                continue
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=dt.timezone.utc)
+            return (dt.datetime.now(dt.timezone.utc) - ts).total_seconds()
+        return None
 
     async def _settle_uncertain_claim(self, user_id: str, claim: dict, p) -> None:
         token = claim["token_id"]
@@ -302,22 +424,28 @@ class CopyEngine:
                             user_id[:10], token)
                 await self._release_buy_claim(user_id, token, claim["claim_id"])
             elif p is None:
-                log.info("uncertain OPEN claim released (no fill in wallet): %s %s",
-                         user_id[:10], token)
-                await self._release_buy_claim(user_id, token, claim["claim_id"])
+                # Neither elapsed time nor indexer absence proves non-fill.
+                # Retain the durable fence until authoritative reconciliation.
+                log.warning("uncertain OPEN claim retained (no authoritative fill status): %s %s",
+                            user_id[:10], token)
             else:
                 await self._adopt_uncertain_fill(user_id, claim, p)
             return
-        # resize-increase: realign the row to the wallet's aggregate when extra
-        # shares appeared; otherwise the top-up never filled — release.
+        # resize-increase: realign the row only when a bounded extra holding is
+        # visible. Any inconclusive or oversized result retains the fence.
         if row is None or p is None:
-            log.warning("uncertain RESIZE claim released (row/holding gone): %s %s",
+            log.warning("uncertain RESIZE claim retained (row/holding inconclusive): %s %s",
                         user_id[:10], token)
-            await self._release_buy_claim(user_id, token, claim["claim_id"])
             return
         extra = float(p.size) - float(row["shares"])
         if row["status"] == "open" and extra > 0.01:
             spent = round(extra * float(p.avg_price or 0), 2)
+            reserved = float(claim.get("reserved_usd") or 0)
+            tolerance = max(0.25, reserved * 0.02)
+            if spent > reserved + tolerance:
+                log.critical("uncertain RESIZE quarantined: observed $%.2f exceeds $%.2f claim for %s %s",
+                             spent, reserved, user_id[:10], token)
+                return
             async with self.db.transaction(write=True) as tx:
                 deleted = await tx.execute(
                     "DELETE FROM copy_open_claims WHERE user_id=? AND token_id=? "
@@ -345,7 +473,8 @@ class CopyEngine:
                 "trader_address": row.get("trader_address"),
             })
         else:
-            await self._release_buy_claim(user_id, token, claim["claim_id"])
+            log.warning("uncertain RESIZE claim retained (no authoritative non-fill): %s %s",
+                        user_id[:10], token)
 
     async def _adopt_uncertain_fill(self, user_id: str, claim: dict, p) -> None:
         """The BUY behind an uncertain claim demonstrably filled (the wallet
@@ -353,6 +482,15 @@ class CopyEngine:
         copy from the wallet snapshot and clear the claim atomically."""
         pid = uuid.uuid4().hex
         notional = round(float(p.size) * float(p.avg_price or 0), 2)
+        reserved = float(claim.get("reserved_usd") or 0)
+        tolerance = max(0.25, reserved * 0.02)
+        if notional > reserved + tolerance:
+            # Never attribute an aggregate/manual/duplicate holding larger than
+            # the submitted budget to one copy claim. Keep it quarantined so it
+            # cannot be retried or later auto-sold as engine-owned inventory.
+            log.critical("uncertain BUY quarantined: observed $%.2f exceeds $%.2f claim for %s %s",
+                         notional, reserved, user_id[:10], claim["token_id"])
+            return
         async with self.db.transaction(write=True) as tx:
             user_sql = "SELECT id FROM users WHERE id=?" + (
                 " FOR UPDATE" if self.db.is_pg else "")
@@ -399,13 +537,23 @@ class CopyEngine:
             by_user[r["user_id"]].append(r)
         for user_id, user_rows in by_user.items():
             try:
-                positions = await self.pm.get_positions(user_id, size_threshold=0)
+                # Paged + completeness-checked, like every other reconciler
+                # here. A single 500-row page sorted by current value made
+                # absence from it look like "the shares are gone", which is
+                # exactly the truncation bug plan_actions already guards
+                # against with positions_complete.
+                positions, complete = await self.pm.get_all_positions(
+                    user_id, size_threshold=0)
             except Exception:
                 log.exception("stuck-closing recovery: position read failed for %s",
                               user_id[:10])
                 continue
             held = {p.asset: p for p in positions if p.size > 0.01}
             for row in user_rows:
+                if row["token_id"] not in held and not complete:
+                    log.warning("stuck closing row %s left alone: wallet scan "
+                                "incomplete, absence proves nothing", row["id"])
+                    continue
                 try:
                     await self._settle_stuck_closing(user_id, row,
                                                      held.get(row["token_id"]))
@@ -474,11 +622,17 @@ class CopyEngine:
             except Exception:
                 pass
         self._clients.clear()
+        self._collateral_cache.clear()
 
     async def _loop(self, fn, interval: float, stop_event: asyncio.Event) -> None:
+        name = getattr(fn, "__name__", str(fn)).strip("_")
+        heartbeats.register(name, interval)
         while not stop_event.is_set():
             try:
                 await fn()
+                # A pass that completed is the only evidence the loop is alive;
+                # /api/health could not tell a running engine from a dead one.
+                heartbeats.mark(name)
             except Exception:
                 log.exception("loop %s failed", getattr(fn, "__name__", fn))
             try:
@@ -529,7 +683,17 @@ class CopyEngine:
                 cursor = self._cursors[key]
                 seen = self._seen[key]
                 for t in trades:
-                    if t.timestamp <= cursor:
+                    if t.timestamp < cursor:
+                        continue
+                    # The cursor second is shared. The activity indexer does
+                    # not publish a second's fills together, so a fill that
+                    # surfaces a tick after another fill in the same second
+                    # arrives with timestamp == cursor, and skipping the whole
+                    # second dropped it from the fast path. Only a tx_hash
+                    # tells a repeat from a new fill, so without one the trade
+                    # stays skipped: re-handling a proportional SELL would
+                    # sell twice.
+                    if t.timestamp == cursor and not t.tx_hash:
                         continue
                     if t.tx_hash and t.tx_hash in seen:
                         continue
@@ -606,10 +770,18 @@ class CopyEngine:
                 return
 
             client = await self._get_client(user)   # expensive — after the cheap checks
-            available = await self._collateral_fn(client)
+            available, client = await self._read_collateral(user, client)
+            # Same definition of capital at risk as _sync_user and
+            # _prepare_buy: a row mid-close still holds real shares, and a
+            # reconciliation_required row may represent an order that DID
+            # fill. Counting only 'open' here made this path's MAX OPEN and
+            # MAX EXPOSURE pre-checks laxer than the gate that actually
+            # enforces them, and the comment in _sync_user asserted these
+            # already agreed. They did not.
             all_open = await self.db.fetchall(
                 "SELECT notional_usd, trader_address FROM copy_positions "
-                "WHERE user_id = ? AND status = 'open'", (user_id,))
+                "WHERE user_id = ? AND status IN ('open','closing','reconciliation_required')",
+                (user_id,))
             trader_open_rows = [r for r in all_open if r["trader_address"] == trader]
             if frisk["max_open"] is not None and len(trader_open_rows) >= frisk["max_open"]:
                 log.info("fast-open skipped %s reason=max_open (%d) trader=%s",
@@ -625,6 +797,14 @@ class CopyEngine:
                 log.info(
                     "fast-open skipped %s age=%.1fs notional=%.2f reason=below_dust_floor trader=%s",
                     token, leader_age, notional, trader[:10])
+                return
+            if leader_age > MAX_LEADER_TRADE_AGE_SECONDS:
+                # Copying this now means entering at a price the leader never
+                # paid, on a decision they made long enough ago that the edge
+                # is gone. Skip rather than chase.
+                log.info(
+                    "fast-open skipped %s age=%.1fs (>%.0fs) reason=leader_trade_too_old trader=%s",
+                    token, leader_age, MAX_LEADER_TRADE_AGE_SECONDS, trader[:10])
                 return
             log.info(
                 "fast-open candidate %s age=%.1fs side=%s notional=%.2f ref=%.4f trader=%s",
@@ -718,6 +898,12 @@ class CopyEngine:
 
     async def _reconcile_tick(self) -> None:
         try:
+            # Also catches a process that restarted before a submitting claim
+            # crossed the startup age gate; startup-only recovery can miss it.
+            await self._recover_stale_claims()
+        except Exception:
+            log.exception("stale-claim recovery failed (continuing)")
+        try:
             await self._reconcile_uncertain_claims()
         except Exception:
             log.exception("uncertain-claim reconciliation failed (continuing)")
@@ -749,7 +935,7 @@ class CopyEngine:
         if not user:
             return
         client = await self._get_client(user)
-        available = await self._collateral_fn(client)
+        available, client = await self._read_collateral(user, client)
         # Capital at risk, not just settled positions: a row mid-close still
         # holds real shares, and a reconciliation_required row may represent an
         # order that DID fill. The fast-detection path already counted all
@@ -790,8 +976,28 @@ class CopyEngine:
                         (p.condition_id, p.title, p.event_slug or p.slug,
                          (r.get("outcome") or p.outcome or "").upper(), r["id"]))
                     r.update(condition_id=p.condition_id, market_title=p.title)
+            # These are LEADER holdings, never evidence of a user fill.
+            # Recovery belongs to durable uncertain-claim reconciliation using
+            # the user's wallet; claimless legacy outcomes need manual review.
+
             block_opens = frisk["paused"] or inactive or await self._opens_blocked(
                 user_id, trader, frisk["daily_limit"])
+
+            # First sight of this follow: everything the leader is holding right
+            # now predates us, so none of it may be opened. Tokens drop out of
+            # the set once the leader exits them, so a genuine RE-entry later is
+            # copied normally.
+            key = (user_id, trader)
+            held_now = {p.asset for p in positions if p.size > 0}
+            if key not in self._no_backfill:
+                self._no_backfill[key] = set(held_now)
+                if held_now:
+                    log.info("no-backfill seeded: %s %s holds %d position(s) that "
+                             "predate copying", user_id[:10], trader[:10], len(held_now))
+            else:
+                self._no_backfill[key] &= held_now
+            preexisting = self._no_backfill[key]
+
             actions = plan_actions(
                 positions, open_rows, follow, available,
                 max_total_exposure=frisk["max_exposure"], block_opens=block_opens,
@@ -801,12 +1007,27 @@ class CopyEngine:
                 max_price=frisk["max_price"],
                 positions_complete=complete)
             for action in actions:
+                if action.kind == "open" and action.token_id in preexisting:
+                    log.info("reconcile open skipped (predates copying): %s %s %s",
+                             user_id[:10], trader[:10], action.token_id[:16])
+                    continue
                 action.trader_address = trader
                 spent = await self._execute(user_id, client, action, slippage=frisk["slippage"])
                 if action.side == "BUY":
                     available = max(0.0, available - spent)
 
-    # --- execution + persistence ------------------------------------------
+    async def _adopt_untracked_submissions(
+            self, user_id: str, trader: str, positions, open_rows) -> int:
+        """Legacy recovery is disabled: an intent is not execution evidence.
+
+        Callers historically pass LEADER holdings here. Even user holdings
+        alone cannot establish ownership by this engine. Do not create rows,
+        alerts, or release claims from this path. Durable uncertain claims
+        are reconciled separately against the USER wallet and reserved budget.
+        Legacy claimless outcomes require operator reconciliation.
+        """
+        return 0
+
     # --- fill-or-kill attempt budget --------------------------------------
     @staticmethod
     def _attempt_key(user_id: str, action: Action) -> tuple:
@@ -837,6 +1058,33 @@ class CopyEngine:
             return False
         return attempts >= MAX_FILL_ATTEMPTS
 
+    def _note_submitted(self, user_id: str, token_id: str, notional: float) -> None:
+        """Remember a notional we actually put on the wire for this token."""
+        key = (user_id, token_id)
+        prior, deadline = self._submitted.get(key, [0.0, 0.0])
+        now = time.monotonic()
+        if deadline <= now:
+            prior = 0.0
+        self._submitted[key] = [prior + float(notional), now + SUBMITTED_BASIS_TTL_SECONDS]
+        # money is on the wire — the cached balance is now stale-high
+        self._invalidate_collateral(user_id)
+
+    def _submitted_basis(self, user_id: str, token_id: str) -> float:
+        """Notional submitted for this token inside the TTL, or 0."""
+        entry = self._submitted.get((user_id, token_id))
+        if not entry:
+            return 0.0
+        notional, deadline = entry
+        if deadline <= time.monotonic():
+            self._submitted.pop((user_id, token_id), None)
+            return 0.0
+        return float(notional)
+
+    def _clear_submitted(self, user_id: str, token_id: str) -> None:
+        """Called once the wallet or a tracked row can speak for the shares, so
+        the remembered figure stops shadowing real basis."""
+        self._submitted.pop((user_id, token_id), None)
+
     def _record_fill_outcome(self, user_id: str, action: Action, *,
                              filled: bool, reason: str = "") -> None:
         key = self._attempt_key(user_id, action)
@@ -860,6 +1108,7 @@ class CopyEngine:
             log.info("killed after %d attempts (%s %s): %s", attempts,
                      action.kind, action.token_id[:16], reason)
 
+    # --- execution + persistence ------------------------------------------
     async def _execute(self, user_id: str, client, action: Action,
                        slippage: float = MAX_COPY_SLIPPAGE_PCT) -> float:
         if self._fill_budget_exhausted(user_id, action):
@@ -910,6 +1159,7 @@ class CopyEngine:
             log.warning("order skipped (%s %s): %s", action.kind, action.token_id, result.reason)
             return 0.0
         self._record_fill_outcome(user_id, action, filled=True)
+        self._invalidate_collateral(user_id)   # proceeds change the balance
         if action.kind == "close":
             await self._record_close(user_id, action, result)
         elif action.kind == "resize":
@@ -939,17 +1189,23 @@ class CopyEngine:
             if not await self._mark_claim_submitting(user_id, action):
                 await self._release_buy_claim(user_id, action.token_id, action.claim_id)
                 return 0.0
+            # Recorded BEFORE the await, not after: if the process dies or the
+            # call raises mid-flight the order may still have reached the
+            # exchange, and the next attempt must size against it either way.
+            prior_submission = self._submitted.get((user_id, action.token_id))
+            prior_submission = list(prior_submission) if prior_submission else None
+            self._note_submitted(user_id, action.token_id, action.amount)
             try:
                 result = await self._place_order(
                     client, self.pm, action.token_id, "BUY", action.amount,
                     reference_price=action.reference_price,
                     max_slippage_pct=risk["slippage"],
                     min_price=risk["min_price"], max_price=risk["max_price"])
-            except Exception:
-                # execution.place_market_order converts every exception at or
-                # after the submission boundary into submission_uncertain. A
-                # raised exception is therefore pre-submission and retryable.
-                await self._release_buy_claim(user_id, action.token_id, action.claim_id)
+            except Exception as exc:
+                # A parser or collaborator can raise AFTER the SDK submitted.
+                # Without explicit pre-submission evidence, retain the fence.
+                await self._mark_claim_uncertain(
+                    user_id, action, f"unclassified order outcome: {type(exc).__name__}")
                 raise
             if not result.ok:
                 log.warning("order skipped (%s %s): %s", action.kind,
@@ -959,6 +1215,12 @@ class CopyEngine:
                     # must not consume the fill budget
                     await self._mark_claim_uncertain(user_id, action, result.reason)
                 else:
+                    # Only this attempt is proven not submitted. Preserve any
+                    # earlier intent rather than clearing aggregate protection.
+                    if prior_submission is None:
+                        self._clear_submitted(user_id, action.token_id)
+                    else:
+                        self._submitted[(user_id, action.token_id)] = prior_submission
                     self._record_fill_outcome(user_id, action, filled=False,
                                               reason=result.reason)
                     await self._release_buy_claim(user_id, action.token_id, action.claim_id)
@@ -1007,10 +1269,20 @@ class CopyEngine:
     async def _clamp_to_verified_position(self, user_id: str, action: Action,
                                           risk: dict) -> Action | None:
         """Hard per-position gate against exchange ground truth. Basis = the
-        LARGER of the wallet's actual cost for this token and our tracked
-        cost, so neither bookkeeping drift nor an indexer lagging behind a
-        just-filled buy can free up headroom that isn't real. Returns the
-        (possibly clamped) action, or None when there's no room / no proof."""
+        LARGEST of three figures, because each one is blind on its own:
+
+          wallet_cost  what the wallet really holds — but the indexer lags a
+                       fill by seconds, so it reads 0 right after a buy.
+          row_basis    our tracked cost — but it is 0 until a position row
+                       exists, so it says nothing about a FIRST open.
+          submitted    what we have actually put on the wire for this token
+                       inside the TTL — the only one that is true immediately,
+                       and the one that stops a retry burst from sizing itself
+                       fresh each time (incident 2026-08-23, see
+                       SUBMITTED_BASIS_TTL_SECONDS).
+
+        Returns the (possibly clamped) action, or None when there's no room /
+        no proof."""
         verified = await self._wallet_position(
             user_id, action.token_id,
             action.condition_id or (action.row or {}).get("condition_id") or "")
@@ -1020,7 +1292,13 @@ class CopyEngine:
             return None
         wallet_cost, _ = verified
         row_basis = float((action.row or {}).get("notional_usd") or 0.0)
-        basis = max(wallet_cost, row_basis)
+        submitted = self._submitted_basis(user_id, action.token_id)
+        # The wallet is authoritative once it can see the shares; at that point
+        # the remembered figure has done its job and must not double-count.
+        if wallet_cost > 0 and wallet_cost >= submitted:
+            self._clear_submitted(user_id, action.token_id)
+            submitted = 0.0
+        basis = max(wallet_cost, row_basis, submitted)
         allowed = min(float(action.amount),
                       max(0.0, risk["max_per_trade"] - basis))
         # SINGLE SOURCE OF TRUTH for minimum size: the per-wallet
@@ -1032,9 +1310,13 @@ class CopyEngine:
         # too-low setting from retrying forever.
         floor = risk["ignore_below"]
         if allowed < floor:
-            log.info("buy skipped (%s %s): verified wallet basis %.2f leaves no "
-                     "headroom under cap %.2f", action.kind, action.token_id,
-                     basis, risk["max_per_trade"])
+            # user_id included deliberately: without it this line cannot be
+            # tied to an account, which cost real time during the 2026-08-23
+            # investigation.
+            log.info("buy skipped (%s %s %s): basis %.2f (wallet %.2f, row %.2f, "
+                     "submitted %.2f) leaves no headroom under cap %.2f",
+                     user_id[:10], action.kind, action.token_id, basis,
+                     wallet_cost, row_basis, submitted, risk["max_per_trade"])
             return None
         if allowed < float(action.amount) - 0.005:
             log.warning("buy clamped by verified wallet position: %s %.2f -> %.2f "
@@ -1175,6 +1457,8 @@ class CopyEngine:
                 "AND state='submitting'", (user_id, action.token_id, action.claim_id))
             if deleted != 1:
                 raise RuntimeError("BUY claim fencing token lost during open finalization")
+        # A tracked row now carries the basis; the remembered figure retires.
+        self._clear_submitted(user_id, action.token_id)
         await self._notify_position({
             "event": "opened", "user_id": user_id, "position_id": pid,
             "market_title": getattr(p, "title", ""),
@@ -1254,19 +1538,20 @@ class CopyEngine:
 
     async def _realize_resolution(self, user_id, action) -> None:
         """Market resolved: realize PnL from the resolution price (~1 if won, ~0 if
-        lost). The on-chain CTF redeem is a separate flow finalized in phase 10."""
+        lost). This books the result only; nothing here redeems the winning
+        tokens on-chain."""
         row, p = action.row, action.position
         await self._close_row(user_id, row, p.cur_price, row["shares"],
                               event_type="resolve", status="resolved")
 
     async def _resolve_departed(self, user_id: str, row: dict) -> None:
         """Finalize a position whose market died before we could exit (resolved
-        and possibly auto-redeemed). The winning TOKEN comes from Gamma's
-        resolved outcome prices — NOT from the wallet's REDEEM records, which
-        are per-condition and can't tell the sides apart when both were held
-        (seen live 2026-07-03: matching on conditionId marked losing sides of
-        both-sides copies as $1 winners). Redeem records remain the fallback
-        when Gamma doesn't know the market."""
+        and possibly auto-redeemed). The winning TOKEN comes from the CLOB's
+        per-token winner flags (pm.get_resolved_prices) — NOT from the wallet's
+        REDEEM records, which are per-condition and can't tell the sides apart
+        when both were held (seen live 2026-07-03: matching on conditionId
+        marked losing sides of both-sides copies as $1 winners). Redeem records
+        remain the fallback when the CLOB doesn't know the market."""
         if not row.get("condition_id"):
             # Opened blind (on-chain fast path, metadata never backfilled) —
             # the resolution cannot be looked up, so flag the row for review
@@ -1283,14 +1568,14 @@ class CopyEngine:
             if row["token_id"] in prices:
                 exit_price = 1.0 if prices[row["token_id"]] >= 0.5 else 0.0
         except Exception:
-            log.exception("gamma outcome lookup failed for %s", row["id"])
+            log.exception("resolved-outcome lookup failed for %s", row["id"])
         if exit_price is None:
             try:
                 redeems = await self.pm.get_redeems(user_id)
                 paid = sum(float(r.get("usdcSize", 0) or 0) for r in redeems
                            if r.get("conditionId") == row["condition_id"])
                 # per-condition only: correct when we held one side; ambiguous
-                # for both-sides copies (gamma path above covers those)
+                # for both-sides copies (the CLOB lookup above covers those)
                 exit_price = 1.0 if paid > 0 else 0.0
             except Exception:
                 log.exception("redeem lookup failed for %s — assuming lost", row["id"])
@@ -1301,23 +1586,10 @@ class CopyEngine:
                     "before exit)", row["id"], exit_price)
 
     # --- shared persistence (used by both fast and reconcile paths) ---------
-    async def _insert_open(self, user_id, trader_address, condition_id, token_id,
-                           slug, title, outcome, shares, trader_shares, entry_price,
-                           notional) -> str | None:
-        pid = uuid.uuid4().hex
-        try:
-            await self.db.execute(
-                "INSERT INTO copy_positions(id, user_id, trader_address, condition_id, "
-                "token_id, market_slug, market_title, outcome, shares, trader_shares, "
-                "entry_price, notional_usd, status, opened_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'open',?)",
-                (pid, user_id, trader_address, condition_id, token_id, slug, title,
-                 outcome, shares, trader_shares, entry_price, notional, now_iso()))
-        except aiosqlite.IntegrityError:
-            log.info("open skipped (already open): %s %s", user_id, token_id)
-            return None
-        await self._event(user_id, pid, "open", notional, None)
-        return pid
+    # _insert_open lived here and was removed: no callers, no tests, and it
+    # duplicated the INSERT that _record_open and _adopt_untracked_submissions
+    # each do inside their own fencing transaction. An un-fenced copy of a
+    # money-writing path is a trap, not a spare.
 
     async def _close_row(self, user_id, row, exit_price, filled_shares,
                          *, event_type="close", status="closed") -> None:
@@ -1413,6 +1685,66 @@ class CopyEngine:
         if cid not in self._clients:
             self._clients[cid] = await self._client_factory(user)
         return self._clients[cid]
+
+    async def _reset_client(self, user: dict):
+        """Drop and rebuild a user's cached CLOB client.
+
+        Called after a transport failure: the cached client holds a connection
+        the server has already terminated, so every later read on it fails the
+        same way until the process restarts.
+        """
+        cid = user["id"]
+        stale = self._clients.pop(cid, None)
+        if stale is not None:
+            close = getattr(stale, "close", None)
+            if close is not None:
+                try:
+                    await close()
+                except Exception:
+                    pass          # the connection is gone anyway
+        return await self._get_client(user)
+
+    def _cached_collateral(self, user_id: str) -> float | None:
+        entry = self._collateral_cache.get(user_id)
+        if not entry:
+            return None
+        value, deadline = entry
+        if deadline <= time.monotonic():
+            self._collateral_cache.pop(user_id, None)
+            return None
+        return float(value)
+
+    def _invalidate_collateral(self, user_id: str) -> None:
+        """Called the moment we put money on the wire, so the next decision
+        sizes against a fresh balance rather than the pre-spend one."""
+        self._collateral_cache.pop(user_id, None)
+
+    async def _read_collateral(self, user: dict, client, *,
+                               allow_cached: bool = True) -> tuple[float, object]:
+        """Available collateral, cached briefly and surviving one connection
+        recycle.
+
+        Returns (value, client) — the client may have been rebuilt, and the
+        caller must use the returned one. Reading a balance is idempotent, so
+        a transport failure is safe to retry; anything else propagates.
+        """
+        user_id = user["id"]
+        if allow_cached and COLLATERAL_CACHE_SECONDS > 0:
+            cached = self._cached_collateral(user_id)
+            if cached is not None:
+                return cached, client
+        try:
+            value = await self._collateral_fn(client)
+        except CLIENT_TRANSPORT_ERRORS as exc:
+            log.warning("collateral read hit a transport failure (%s: %s) — "
+                        "rebuilding client for %s and retrying once",
+                        type(exc).__name__, exc, str(user_id)[:10])
+            client = await self._reset_client(user)
+            value = await self._collateral_fn(client)
+        if COLLATERAL_CACHE_SECONDS > 0:
+            self._collateral_cache[user_id] = [
+                float(value), time.monotonic() + COLLATERAL_CACHE_SECONDS]
+        return value, client
 
     async def _default_client_factory(self, user: dict):
         pk = wallet.decrypt_private_key(user["private_key_enc"], ENCRYPTION_SECRET)

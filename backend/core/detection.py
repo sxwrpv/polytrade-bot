@@ -6,11 +6,12 @@ guarded against that fill price), instead of waiting for the 30s
 position-diff sweep.
 
 Two tiers behind one interface:
-  - ActivityPollDetector (now): polls /activity?type=TRADE per leader. ~3-8s
-    end-to-end, bounded by Polymarket's indexer lag. No extra dependencies.
-  - OnChainDetector (later): subscribe to Polygon OrderFilled logs filtered by
-    the leader's address. ~2-4s and attributed. Drops in here unchanged — needs
-    a Polygon WebSocket RPC endpoint. Stub left below.
+  - ActivityPollDetector (default): polls /activity?type=TRADE per leader.
+    ~3-8s end-to-end, bounded by Polymarket's indexer lag. No extra
+    dependencies.
+  - OnChainDetector (used when POLYGON_RPC_URL is set): polls Polygon
+    OrderFilled logs filtered by the leader's address over HTTP JSON-RPC.
+    ~2-4s and attributed.
 """
 from __future__ import annotations
 
@@ -32,7 +33,12 @@ ORDERFILLED_TOPIC = "0xd543adfd945773f1a62f74f0ee55a5e3b9b1a28262980ba90b1a89f2e
 class TradeDetector(ABC):
     @abstractmethod
     async def new_trades(self, trader_address: str, since_ts: int) -> list:
-        """Leader trades with timestamp > since_ts (each carries side + price)."""
+        """Leader trades with timestamp >= since_ts (each carries side + price).
+
+        Inclusive on purpose: the engine's cursor is the timestamp of the last
+        trade it handled, and another fill in that second can be indexed a
+        tick later. The engine dedupes the boundary second by tx_hash.
+        """
         ...
 
 
@@ -43,7 +49,7 @@ class ActivityPollDetector(TradeDetector):
 
     async def new_trades(self, trader_address: str, since_ts: int) -> list:
         trades = await self.pm.get_trade_history(trader_address, limit=self.limit)
-        return [t for t in trades if t.timestamp > since_ts]
+        return [t for t in trades if t.timestamp >= since_ts]
 
 
 class OnChainDetector(TradeDetector):
@@ -56,6 +62,14 @@ class OnChainDetector(TradeDetector):
     otherwise a SELL of makerAssetId. Price = USDC-leg / shares-leg (both 1e6).
     Order metadata (title/slug/condition) isn't in the event — left empty; the
     reconciler backfills from positions.
+
+    The trade's timestamp is the BLOCK's timestamp, not the scan time. It used
+    to be time.time(), which made every on-chain-detected trade look brand new
+    and silently disabled the engine's MAX_LEADER_TRADE_AGE_SECONDS gate — the
+    guard added after 2026-08-23 precisely to stop a late-detected trade being
+    copied at a price the leader never paid. A stall or restart gap makes
+    _scan walk up to max_block_span blocks (~1h of Polygon) and every one of
+    those fills would have claimed an age of zero.
     """
 
     def __init__(self, rpc_url: str, *, exchanges=None, max_block_span: int = 2000) -> None:
@@ -66,12 +80,32 @@ class OnChainDetector(TradeDetector):
                           for a in (exchanges or [CTF_EXCHANGE, NEGRISK_EXCHANGE])]
         self.max_block_span = max_block_span
         self._last_block: dict[str, int] = {}
+        # block number -> unix seconds. A scan touches few distinct blocks and
+        # the same block recurs across leaders, so this saves most of the RPC
+        # round-trips a per-log lookup would cost. Bounded below.
+        self._block_times: dict[int, int] = {}
+
+    def _block_time(self, number: int) -> int:
+        """Mined-at time for a block, memoized.
+
+        This is the whole point of the change: the trade's timestamp must be
+        when the fill HAPPENED, not when we happened to scan for it.
+        """
+        cached = self._block_times.get(number)
+        if cached is not None:
+            return cached
+        ts = int(self.w3.eth.get_block(number)["timestamp"])
+        if len(self._block_times) > 4096:
+            for k in list(self._block_times)[:2048]:
+                del self._block_times[k]
+        self._block_times[number] = ts
+        return ts
 
     @staticmethod
     def _maker_topic(address: str) -> str:
         return "0x" + address.lower().removeprefix("0x").rjust(64, "0")
 
-    def _decode(self, log, leader: str) -> Trade:
+    def _decode(self, log, leader: str, timestamp: int | None = None) -> Trade:
         data = bytes(log["data"])
         w = [int.from_bytes(data[i:i + 32], "big") for i in range(0, 160, 32)]
         maker_asset, taker_asset, maker_amt, taker_amt = w[0], w[1], w[2], w[3]
@@ -81,7 +115,9 @@ class OnChainDetector(TradeDetector):
             side, token, usdc, shares = "SELL", maker_asset, taker_amt, maker_amt
         price = (usdc / shares) if shares else 0.0
         return Trade(
-            proxy_wallet=leader, timestamp=int(time.time()), condition_id="",
+            proxy_wallet=leader, timestamp=int(timestamp if timestamp is not None
+                                               else time.time()),
+            condition_id="",
             side=side, asset=str(token), outcome="", outcome_index=0,
             price=round(price, 6), size=shares / 1e6, usd_size=usdc / 1e6,
             title="", slug="", tx_hash=self._Web3.to_hex(log["transactionHash"]))
@@ -92,7 +128,17 @@ class OnChainDetector(TradeDetector):
             "topics": [ORDERFILLED_TOPIC, None, self._maker_topic(leader)],
         })
         logs = sorted(logs, key=lambda lg: (lg["blockNumber"], lg["logIndex"]))
-        return [self._decode(lg, leader) for lg in logs]
+        out = []
+        for lg in logs:
+            try:
+                ts = self._block_time(int(lg["blockNumber"]))
+            except Exception:
+                # Fail SAFE, not fresh: if the block time is unavailable, an
+                # unknown-age trade must not present itself as brand new. Zero
+                # reads as very old, so the engine's age gate skips it.
+                ts = 0
+            out.append(self._decode(lg, leader, timestamp=ts))
+        return out
 
     async def new_trades(self, trader_address: str, since_ts: int) -> list:
         def _run():

@@ -1,0 +1,27 @@
+<!doctype html>
+<!-- Dev-only harness for the daily-PnL heat-map. Not a vite entry, never built. -->
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PnlHeatmap — dev harness</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>body{margin:0;padding:18px;max-width:430px}</style>
+</head><body><div id="root"></div>
+<script type="module">
+import '../src/styles/brutalism.css'
+const React = (await import('react')).default
+const { createRoot } = await import('react-dom/client')
+const PnlHeatmap = (await import('../src/components/PnlHeatmap.jsx')).default
+
+// A realistic month: mostly small days, a couple of big ones, some blanks.
+const today = new Date(); today.setUTCHours(0,0,0,0)
+const curve = []
+for (let i = 29; i >= 0; i--) {
+  const d = new Date(today); d.setUTCDate(d.getUTCDate() - i)
+  const r = Math.sin(i * 1.7) * Math.cos(i / 2.3)
+  if (i % 7 === 3) continue                       // days with no closings
+  const pnl = i === 11 ? -180.4 : i === 4 ? 240.9 : i % 9 === 0 ? 0 : Math.round(r * 46 * 100) / 100
+  curve.push({ date: d.toISOString().slice(0,10), pnl })
+}
+createRoot(document.getElementById('root')).render(
+  React.createElement('div', { className: 'card' }, React.createElement(PnlHeatmap, { curve })))
+</script></body></html>

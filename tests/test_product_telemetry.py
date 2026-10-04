@@ -46,15 +46,15 @@ class ProductTelemetryTests(unittest.IsolatedAsyncioTestCase):
     def test_strict_event_and_property_validation(self):
         valid = TelemetryEvent(
             session_id=SESSION,
-            event_name="period_changed",
-            properties={"period": "7d", "source": "screener"},
+            event_name="close_modal_opened",
+            properties={"source": "positions"},
         )
-        self.assertEqual("7d", valid.properties["period"])
+        self.assertEqual("positions", valid.properties["source"])
         bad_cases = [
-            {"session_id": "not-a-uuid", "event_name": "period_changed", "properties": {"period": "7d"}},
+            {"session_id": "not-a-uuid", "event_name": "close_modal_opened", "properties": {"source": "positions"}},
             {"session_id": SESSION, "event_name": "wallet_dumped", "properties": {}},
-            {"session_id": SESSION, "event_name": "period_changed", "properties": {"period": "all"}},
-            {"session_id": SESSION, "event_name": "period_changed", "properties": {"period": "7d", "wallet": "0x" + "a" * 40}},
+            {"session_id": SESSION, "event_name": "close_modal_opened", "properties": {"source": "screener"}},
+            {"session_id": SESSION, "event_name": "close_modal_opened", "properties": {"source": "positions", "wallet": "0x" + "a" * 40}},
             {"session_id": SESSION, "event_name": "close_confirmed", "properties": {"duration_ms": 9_000_001}},
         ]
         for payload in bad_cases:
@@ -65,16 +65,16 @@ class ProductTelemetryTests(unittest.IsolatedAsyncioTestCase):
     async def test_persisted_event_has_no_authenticated_identity_or_query(self):
         body = TelemetryEvent(
             session_id=SESSION,
-            event_name="screener_search_submitted",
-            properties={"query_kind": "address", "period": "30d", "active_filters": True},
+            event_name="close_modal_opened",
+            properties={"source": "positions"},
         )
         result = await record_event(body, user={"id": "0x" + "f" * 40}, db=self.db)
         self.assertEqual({"accepted": True}, result)
         row = await self.db.fetchone("SELECT * FROM product_events")
         self.assertEqual(SESSION, row["session_id"])
-        self.assertEqual("screener_search_submitted", row["event_name"])
+        self.assertEqual("close_modal_opened", row["event_name"])
         self.assertEqual(
-            {"active_filters": True, "period": "30d", "query_kind": "address"},
+            {"source": "positions"},
             json.loads(row["properties_json"]),
         )
         self.assertNotIn("user_id", row)
@@ -86,7 +86,7 @@ class ProductTelemetryTests(unittest.IsolatedAsyncioTestCase):
         for event_id, ts in (("old", old), ("fresh", fresh)):
             await self.db.execute(
                 "INSERT INTO product_events(id,session_id,event_name,properties_json,ts) VALUES(?,?,?,?,?)",
-                (event_id, SESSION, "wallet_analysis_opened", "{}", ts),
+                (event_id, SESSION, "close_modal_opened", "{}", ts),
             )
         removed = await prune_product_events(self.db, retention_days=90)
         self.assertEqual(1, removed)
@@ -97,7 +97,7 @@ class ProductTelemetryTests(unittest.IsolatedAsyncioTestCase):
         for index in range(2):
             await self.db.execute(
                 "INSERT INTO product_events(id,session_id,event_name,properties_json,ts) VALUES(?,?,?,?,?)",
-                (f"recent-{index}", SESSION, "wallet_analysis_opened", "{}", now.isoformat()),
+                (f"recent-{index}", SESSION, "close_modal_opened", "{}", now.isoformat()),
             )
         with self.assertRaises(HTTPException) as context:
             await enforce_product_event_limits(
@@ -110,7 +110,7 @@ class ProductTelemetryTests(unittest.IsolatedAsyncioTestCase):
         for index in range(3):
             await self.db.execute(
                 "INSERT INTO product_events(id,session_id,event_name,properties_json,ts) VALUES(?,?,?,?,?)",
-                (f"old-{index}", str(uuid.uuid4()), "wallet_analysis_opened", "{}", old_ts),
+                (f"old-{index}", str(uuid.uuid4()), "close_modal_opened", "{}", old_ts),
             )
         await enforce_product_event_limits(
             self.db, SESSION, now=now, session_limit=20, global_limit=20, max_rows=3,
@@ -166,8 +166,8 @@ class ProductTelemetryTests(unittest.IsolatedAsyncioTestCase):
 
         response = TestClient(app).post("/api/telemetry/events", json={
             "session_id": SESSION,
-            "event_name": "wallet_analysis_opened",
-            "properties": {"period": "30d", "source": "screener"},
+            "event_name": "close_modal_opened",
+            "properties": {"source": "positions"},
         })
         self.assertEqual(401, response.status_code)
         self.assertEqual("missing session token", response.json()["detail"])

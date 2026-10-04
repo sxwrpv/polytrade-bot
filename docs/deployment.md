@@ -55,6 +55,50 @@ docker compose up -d --no-deps --force-recreate app
 
 Verify one engine and fresh reconciliation logs. Never run local and cloud engines against the same users/database simultaneously.
 
+## Deploying a Caddyfile change
+
+The Caddyfile is bind-mounted as a single FILE. Any sync that replaces it —
+rsync and scp both do, writing a temp file then renaming — gives the host a new
+inode while the container keeps holding the old one. `caddy reload` then
+succeeds, reports the new config, and changes nothing, because it is re-reading
+the stale inode through the mount.
+
+So a Caddyfile change needs the container recreated, not reloaded:
+
+```bash
+docker compose up -d --force-recreate --no-deps caddy
+```
+
+Verify against the container, never the host:
+
+```bash
+docker compose exec caddy grep -c Cache-Control /etc/caddy/Caddyfile
+```
+
+Editing the file in place on the box (`nano`, `sed -i` without a rename) keeps
+the inode and does work with a plain reload. Syncing does not.
+
+## The screener snapshot
+
+The Wallet Screener service (`trader-screener/`) serves its board from a
+cohort snapshot in `./screener-data`, mounted at `/app/data`. On a fresh host
+the directory is empty, so the container seeds it once from the copy bundled
+in the image; an existing snapshot is never overwritten by a redeploy.
+
+`scripts/refresh-screener-data.sh` re-runs the ingest into that directory, and
+the service picks the new file up by mtime (`SNAPSHOT_RELOAD_SECONDS`), with no
+rebuild or restart. On the VPS it runs daily from the systemd units in
+`deploy/`:
+
+```bash
+sudo cp deploy/polytrade-screener-refresh.{service,timer} /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now polytrade-screener-refresh.timer
+```
+
+The board prints the snapshot's generation date and warns once it is more than
+two days old, so a stalled refresh degrades visibly rather than silently.
+
 ## Caddy and TLS
 
 The Caddyfile serves `polytradebot.live` and `www.polytradebot.live`, obtains and renews certificates, redirects HTTP, proxies internally, permits Telegram framing, and adds HSTS, `nosniff`, and referrer policy.
@@ -120,6 +164,23 @@ Logs may contain public wallet metadata but must never contain keys, cookies, Te
 
 Never roll code back across an incompatible migration while orders are being submitted.
 
+## Wallet Screener hosting
+
+`https://polytradebot.live/screener/` is the **Wallet Screener service**
+(`trader-screener/`, its own container in `compose.yaml`). Caddy strips the
+`/screener` prefix and proxies to `trader-screener:4310`, so the FastAPI app
+never sees those requests. The service sits on its own Docker network and has
+no route to the app or its database. There is no React screener entry in the
+app bundle and no FastAPI screener route: keep this as the only research UI,
+rather than adding a fallback that could shadow the service. A future dedicated
+hostname should proxy this same service, not revive a separate frontend build.
+
+`/api/public/screener/*` on the main app is a separate, anonymous, read-only
+and rate-limited API. It reads only precomputed `trader_cache` columns, so a
+public request can never trigger an upstream Polymarket call or a cache write.
+Authenticated `/api/traders/{address}` remains the on-demand route that spends
+upstream API budget.
+
 ## Production checklist
 
 - [ ] DNS and trusted HTTPS work.
@@ -130,10 +191,8 @@ Never roll code back across an incompatible migration while orders are being sub
 - [ ] Gasless flow was tested with a small amount.
 - [ ] Base Compose keeps autostart off.
 - [ ] Exactly one production engine is enabled.
+- [ ] `/screener/` answers from the trader-screener service and its snapshot
+      is less than two days old.
 - [ ] Engine, claims, disk, logs, DNS, and TLS are monitored.
 - [ ] Telegram menu targets production HTTPS.
 - [ ] Pause and rotation procedures are documented.
-
-## Legacy Mac mini path
-
-`deploy/macmini/` contains local launchd/ngrok tooling. It is not production. Never start it while the cloud engine is active.

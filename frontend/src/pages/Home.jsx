@@ -1,42 +1,50 @@
-import { useEffect, useState } from 'react'
-import { api } from '../api'
+import { useState } from 'react'
 import Folder from '../components/Folder'
-import GettingStarted from '../components/GettingStarted'
-import KpiStrip from '../components/KpiStrip'
-import WalletScreener from '../components/WalletScreener'
 import CopiedWallets from '../components/CopiedWallets'
+import BalanceCard from '../components/BalanceCard'
+import CopyWalletCard from '../components/CopyWalletCard'
 
+/* Home leads with the account's own money — balance and the equity curve —
+   because that is what the account opens the app to see. Wallet research stays
+   a standalone public surface at /screener; everything else here is the wallets
+   already copied by this account. */
 export default function Home() {
-  const [me, setMe] = useState(null)
-  const [pnl, setPnl] = useState(null)
-  const [followingCount, setFollowingCount] = useState(0)
-
-  const refreshFollowing = () => api.following().then((r) => setFollowingCount(r.length)).catch(() => {})
-
-  useEffect(() => {
-    // fast paint without balance, then upgrade — the balance read builds the
-    // CLOB client server-side on first call, which can take a few seconds.
-    // The plain call never overwrites a balance-carrying result if it loses
-    // the race.
-    api.me().then((m) => setMe((prev) => prev ?? m)).catch(() => {})
-    api.me(true).then(setMe).catch(() => {})
-    api.pnl('7d').then(setPnl).catch(() => {})
-    refreshFollowing()
-  }, [])
-
+  // Bumped after a wallet is added so the list below refetches rather than
+  // showing a stale set until the next tab switch.
+  const [added, setAdded] = useState(0)
   return (
     <div>
-      <KpiStrip me={me} pnl={pnl} followingCount={followingCount} />
+      <BalanceCard />
 
-      {me && <GettingStarted balance={me.balance} followingCount={followingCount} />}
-
-      <Folder id="home-screener" title="COPY WALLET" open>
-        <WalletScreener onFollowed={refreshFollowing} balance={me?.balance} />
+      <Folder id="home-copy-wallet" title="COPY A WALLET">
+        <CopyWalletCard onAdded={() => setAdded((n) => n + 1)} />
       </Folder>
 
-      <Folder id="home-copied" title="COPIED WALLETS" count={followingCount}>
-        <CopiedWallets onChange={refreshFollowing} />
+      <ScreenerEntryPoint />
+
+      <Folder id="home-copied" title="COPIED WALLETS">
+        <CopiedWallets key={added} />
       </Folder>
+    </div>
+  )
+}
+
+/* Opens in a new tab. Inside Telegram, `target="_blank"` on an <a> is what the
+   WebView hands to the system browser (or Telegram's in-app browser) on both
+   iOS and Android. */
+function ScreenerEntryPoint() {
+  return (
+    <div className="card screener-entry">
+      <div className="section-header">WALLET SCREENER</div>
+      <p className="muted">
+        Research public Polymarket wallet history in the standalone screener.
+      </p>
+      <a
+        className="btn"
+        href="/screener"
+        target="_blank"
+        rel="noreferrer noopener"
+      >OPEN WALLET SCREENER ↗</a>
     </div>
   )
 }

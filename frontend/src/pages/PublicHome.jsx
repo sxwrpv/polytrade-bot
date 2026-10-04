@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import SiteSwitcher from '../components/SiteSwitcher'
 
 const BOT_URL = 'https://t.me/cpolytrade_bot'
 
@@ -47,9 +48,11 @@ export default function PublicHome() {
         <a className="public-brand" href="#top" aria-label="PolyTrade home">
           <img className="brand-logo" src="/brand/polytrade-mark.png" alt="" /><span>PolyTrade</span>
         </a>
-        <a className="public-nav-link" href="#speed">Speed</a>
-        <a className="public-nav-link" href="#how-it-works">How it works</a>
-        <a className="btn public-small-cta" href={BOT_URL}>Open Telegram <Arrow /></a>
+        <SiteSwitcher active="home" />
+        <div className="public-nav-actions">
+          <a className="public-nav-link" href="/docs/system-design">System Design</a>
+          <a className="btn public-small-cta" href={BOT_URL}>Open Telegram <Arrow /></a>
+        </div>
       </header>
 
       <main id="top">
@@ -111,49 +114,67 @@ export default function PublicHome() {
           <div className="pipeline-figure reveal">
             <PipelineDiagram />
           </div>
+          <div className="architecture-link reveal">
+            <div>
+              <strong>See how the whole system fits together.</strong>
+              <p>Explore seven architecture diagrams covering topology, onboarding, execution, risk controls, position lifecycle, the screener pipeline and production workflow.</p>
+            </div>
+            <a className="btn btn-ghost" href="/docs/system-design">Explore full System Design <Arrow /></a>
+          </div>
         </section>
 
         <section className="public-wrap benefits" aria-labelledby="benefits-title">
-          <div className="reveal">
-            <div className="eyebrow">WHY POLYTRADE</div>
-            <h2 id="benefits-title">Control without the clutter.</h2>
+          <div>
+            <div>
+              <div className="eyebrow">WHERE YOUR LIMITS APPLY</div>
+              <h2 id="benefits-title">Control without the clutter.</h2>
+            </div>
+            <p className="benefits-lede">
+              Your settings are not a suggestion the interface makes. They are re-read inside the
+              database transaction that reserves your money, and checked once more immediately
+              before the order is signed.
+            </p>
           </div>
-          <div className="benefit-grid">
-            <article className="public-card reveal"><span className="benefit-icon" aria-hidden="true">◎</span><h3>You choose who to follow</h3><p>Explore wallet activity and decide which traders fit your approach.</p></article>
-            <article className="public-card reveal" data-delay="1"><span className="benefit-icon" aria-hidden="true">⌁</span><h3>Your limits stay yours</h3><p>Set allocation and exposure controls rather than copying without boundaries.</p></article>
-            <article className="public-card reveal" data-delay="2"><span className="benefit-icon" aria-hidden="true">◌</span><h3>Built around Telegram</h3><p>Launch, review, and manage the experience where you already communicate.</p></article>
+          <div className="surface-figure reveal">
+            <RiskSurfaceDiagram />
+          </div>
+          <p className="benefits-footnote">
+            Simplified from the full enforcement diagram in the{' '}
+            <a href="/docs/system-design">System Design documentation</a>.
+          </p>
+        </section>
+
+        <section id="wallet-screener" className="screener-spotlight" aria-labelledby="wallet-screener-title">
+          <div className="public-wrap screener-spotlight-grid">
+            <div className="feature-copy reveal">
+              <div className="eyebrow">PUBLIC WALLET RESEARCH</div>
+              <h2 id="wallet-screener-title">Find the signal before you copy.</h2>
+              <p>
+                Explore public history from Polymarket wallets in a dedicated research view. Compare
+                7-day, 30-day and 90-day results, filter the list, and inspect how much fetched
+                history supports each figure.
+              </p>
+              <div className="feature-list">
+                <span>No account or Telegram login required</span>
+                <span>Unavailable data stays unavailable, never displayed as zero</span>
+                <span>Past activity is context, not a prediction</span>
+              </div>
+              <a className="btn public-primary screener-spotlight-cta" href="/screener">
+                Open Wallet Screener <Arrow />
+              </a>
+            </div>
+            <div className="reveal">
+              <ScreenerPanel />
+              <p className="screener-spotlight-note">
+                Read-only public data. Wallet statistics can be incomplete or delayed and are not financial advice.
+              </p>
+            </div>
           </div>
         </section>
 
         <section className="public-wrap features" aria-labelledby="features-title">
-          <div className="eyebrow">INSIDE THE APP</div>
-          <h2 id="features-title">See the signal,<br />not the noise.</h2>
-
-          <div className="feature-row reveal">
-            <div className="feature-copy">
-              <h3>A screener that admits what it knows</h3>
-              <p>Wallets are ranked on windowed statistics rebuilt from public history — and every card shows how much of that history was actually fetched.</p>
-              <div className="feature-list">
-                <span>7-day, 30-day and 90-day windows</span>
-                <span>Coverage stated on the card, not hidden</span>
-                <span>Reconstructed ratios kept behind advanced filters</span>
-              </div>
-            </div>
-            <ScreenerPanel />
-          </div>
-
-          <div className="feature-row flip reveal">
-            <div className="feature-copy">
-              <h3>Limits enforced where it counts</h3>
-              <p>Your settings are not a UI suggestion. They are re-read inside the database transaction that reserves your money, and checked again immediately before the order is sent.</p>
-              <div className="feature-list">
-                <span>Per-wallet ratio, position cap and price band</span>
-                <span>Account-wide exposure ceiling</span>
-                <span>Pause takes effect on in-flight orders</span>
-              </div>
-            </div>
-            <RiskPanel />
-          </div>
+          <div className="eyebrow">POSITION MANAGEMENT</div>
+          <h2 id="features-title">Every state stays visible.</h2>
 
           <div className="feature-row reveal">
             <div className="feature-copy">
@@ -218,7 +239,7 @@ function LiveDemo() {
       <div className="demo-shell">
         <div className="demo-head">
           <span><img className="brand-logo" src="/brand/polytrade-mark.png" alt="" /> PolyTrade</span>
-          <i className="demo-live">COPY ENGINE</i>
+          <i className="demo-tag">COPY SEQUENCE</i>
         </div>
         <div className="demo-steps">
           {PIPELINE.map((item, index) => (
@@ -277,21 +298,85 @@ function PipelineDiagram() {
       {nodes.map((node, index) => (
         <g key={node.title} className={`pipe-node n${index + 1}`}>
           <rect
-            x={node.x} y="62" width={node.w} height="76" rx="14"
-            fill="rgba(255,255,255,.66)" stroke="rgba(20,32,26,.12)"
+            x={node.x} y="62" width={node.w} height="76" rx="6"
+            fill="#eef2ef" stroke="rgba(20,32,26,.12)"
           />
           <text
             x={node.x + node.w / 2} y="96" textAnchor="middle"
-            fill="#14201a" fontSize="14" fontWeight="600"
+            fill="#14201a" fontSize="13" fontWeight="600"
             fontFamily="Inter, system-ui, sans-serif"
           >{node.title}</text>
           <text
             x={node.x + node.w / 2} y="116" textAnchor="middle"
-            fill="#5c6b62" fontSize="10"
+            fill="#5c6b62" fontSize="9"
             fontFamily="'JetBrains Mono', monospace"
           >{node.sub}</text>
         </g>
       ))}
+    </svg>
+  )
+}
+
+/* Simplified from System Design diagram 04 (risk surfaces) for a consumer
+   audience: four enforcement points in order, not the full six-layer stack.
+   Every label is a real control; nothing here is a live reading. */
+function RiskSurfaceDiagram() {
+  const stages = [
+    { x: 16, label: 'You set the limits', sub: 'ratio · cap · price band' },
+    { x: 254, label: 'Checked when reserved', sub: 'inside the transaction' },
+    { x: 492, label: 'Re-checked at submit', sub: 'settings changed? stop' },
+    { x: 730, label: 'Bounded in the order', sub: 'signed price ceiling' },
+  ]
+  return (
+    <svg viewBox="0 0 940 168" role="img" aria-labelledby="surf-title surf-desc">
+      <title id="surf-title">Where your limits are enforced</title>
+      <desc id="surf-desc">
+        Four enforcement points, in order. You set the copy ratio, position cap and price band.
+        They are re-read inside the database transaction that reserves your money. They are
+        checked again immediately before the order is submitted, so a limit you tightened still
+        applies to an order already in flight. Finally the price ceiling is encoded into the
+        signed order itself, so the exchange cannot fill it above your band.
+      </desc>
+      <defs>
+        <marker id="surf-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+          <polygon points="0 0, 8 3, 0 6" fill="#5c6b62" />
+        </marker>
+      </defs>
+      {[210, 448, 686].map((x) => (
+        <line
+          key={x} className="surf-line" x1={x} y1="74" x2={x + 36} y2="74"
+          stroke="#5c6b62" strokeWidth="1.2" markerEnd="url(#surf-arrow)"
+        />
+      ))}
+      {stages.map((stage, index) => (
+        <g key={stage.label} className={`surf-node n${index + 1}`}>
+          <rect
+            x={stage.x} y="40" width="194" height="68" rx="6"
+            fill="#eef2ef" stroke="rgba(20,32,26,.12)"
+          />
+          <rect
+            x={stage.x + 10} y="50" width="20" height="12" rx="2"
+            fill="none" stroke="rgba(11,158,99,.5)"
+          />
+          <text
+            x={stage.x + 20} y="59" textAnchor="middle" fill="#07603c"
+            fontSize="7" fontFamily="'JetBrains Mono', monospace" letterSpacing=".08em"
+          >{`S${index + 1}`}</text>
+          <text
+            x={stage.x + 97} y="82" textAnchor="middle" fill="#14201a"
+            fontSize="13" fontWeight="600" fontFamily="Inter, system-ui, sans-serif"
+          >{stage.label}</text>
+          <text
+            x={stage.x + 97} y="98" textAnchor="middle" fill="#5c6b62"
+            fontSize="9" fontFamily="'JetBrains Mono', monospace"
+          >{stage.sub}</text>
+        </g>
+      ))}
+      <line x1="16" y1="140" x2="924" y2="140" stroke="rgba(20,32,26,.12)" />
+      <text
+        x="16" y="158" fill="#5c6b62" fontSize="8"
+        fontFamily="'JetBrains Mono', monospace" letterSpacing=".12em"
+      >ENFORCEMENT ORDER · EACH POINT CAN STOP THE COPY</text>
     </svg>
   )
 }
@@ -322,32 +407,6 @@ function ScreenerPanel() {
           <div><small>REALISED</small><strong className="pos">+$980</strong></div>
           <div><small>TRADES</small><strong>41</strong></div>
           <div><small>COVERAGE</small><strong>62%</strong></div>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function RiskPanel() {
-  const rows = [
-    ['Copy ratio', '1%', 12],
-    ['Max per position', '$15', 34],
-    ['Entry price band', '0.10–0.98', 88],
-    ['Max slippage', '2%', 20],
-  ]
-  return (
-    <div className="panel">
-      <p className="panel-label">RISK CONTROLS · ILLUSTRATIVE</p>
-      <div className="panel-card">
-        <div className="slider-row">
-          {rows.map(([label, value, pct]) => (
-            <div key={label}>
-              <label>{label}<b>{value}</b></label>
-              <div className="slider-track">
-                <div className="slider-fill" style={{ width: `${pct}%` }} />
-              </div>
-            </div>
-          ))}
         </div>
       </div>
     </div>

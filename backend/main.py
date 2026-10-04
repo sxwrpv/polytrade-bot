@@ -14,20 +14,24 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.openapi.docs import get_swagger_ui_html
+from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from backend.config import CORS_ALLOW_ORIGINS, DB_PATH, DEV_PREVIEW, ENCRYPTION_SECRET, TELEGRAM_BOT_TOKEN
 from backend.core import auth, dev_preview, equity, runtime_security, telemetry, trader_stats, wallet
+from backend.config import CORS_ALLOW_ORIGINS, DB_PATH, ENCRYPTION_SECRET, TELEGRAM_BOT_TOKEN
+from backend.core import auth, equity, runtime_security, telemetry, trader_stats, wallet
+from backend.core.health import heartbeats, upstream
 from backend.core.copy_engine import CopyEngine
 from backend.core.polymarket import PolymarketClient
 from backend.core.telegram_alerts import TelegramPositionNotifier
 from backend.db.database import Database
 from backend.api import (
-    routes_auth, routes_positions, routes_telemetry, routes_traders, routes_user,
+    routes_auth, routes_positions, routes_public_screener, routes_telemetry,
+    routes_traders, routes_user,
 )
 
 logging.basicConfig(
@@ -38,12 +42,21 @@ logging.basicConfig(
 # httpx logs a line per request at INFO. The engine polls Polymarket constantly,
 # so this alone was ~86% of the log volume and grew server.log to 1.5 GB with no
 # rotation. Warnings and errors still come through; set HTTP_LOG_LEVEL=INFO to
-# get the per-request trace back when debugging.
+# get the per-request trace back when debugging. That trace logs full URLs,
+# and Telegram's embed the bot token, so treat such a log as a secret.
 for _noisy in ("httpx", "httpcore", "urllib3", "web3", "websockets"):
     logging.getLogger(_noisy).setLevel(
         os.environ.get("HTTP_LOG_LEVEL", "WARNING").upper())
 
 log = logging.getLogger("main")
+
+# Stamped by the build (Dockerfile ARG GIT_REVISION). "unknown" means the image
+# was not built through the deploy script, which is itself worth seeing.
+BUILD_REVISION = os.environ.get("GIT_REVISION", "unknown")
+BUILD_TIME = os.environ.get("BUILD_TIME", "")
+# Distinguishes one running engine from another without naming anything it
+# trades for. Regenerated per process, so two workers are visibly two.
+WORKER_ID = f"{os.uname().nodename}:{os.getpid()}"
 _FRONTEND_DIST = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")
 _DOCS_DIR = os.path.join(os.path.dirname(__file__), "..", "docs")
 _DOCS_INDEX = os.path.join(_DOCS_DIR, "site", "index.html")
@@ -65,6 +78,10 @@ _DOCS_PAGES = {
 }
 _DOCS_SLUGS = {
     "overview",
+    # Diagram collection. Its content is an HTML fragment under docs/site (the
+    # explicitly-public asset directory), not an allowlisted Markdown file, so
+    # it needs a slug here but no entry in _DOCS_PAGES.
+    "system-design",
     *(name.removesuffix(".md") for name in _DOCS_PAGES if name != "README.md"),
 }
 # Russian translations sit beside the English files. Only pages that actually
@@ -92,6 +109,7 @@ async def _stats_refresh_loop(db, pm, stop: asyncio.Event) -> None:
     # shares those hosts, so the crawler must stay under the radar.
     concurrency = int(os.environ.get("TRADER_STATS_REFRESH_CONCURRENCY", "4"))
     target = int(os.environ.get("DISCOVER_WALLETS_TARGET", "2000"))
+    heartbeats.register("screener_refresh", interval)
     while not stop.is_set():
         try:
             found = await trader_stats.discover_active_wallets(db, pm, target=target)
@@ -100,6 +118,7 @@ async def _stats_refresh_loop(db, pm, stop: asyncio.Event) -> None:
             log.exception("wallet discovery pass failed (continuing)")
         try:
             n = await trader_stats.refresh_all(db, pm, limit=limit, concurrency=concurrency)
+            heartbeats.mark("screener_refresh")
             log.info("wallet screener: refreshed windowed stats for %d traders", n)
         except Exception:
             log.exception("wallet screener stats refresh pass failed (continuing)")
@@ -125,6 +144,16 @@ async def _telemetry_retention_loop(db, stop: asyncio.Event) -> None:
                 log.info("product telemetry: pruned %d expired event(s)", pruned)
         except Exception:
             log.exception("product telemetry retention prune failed (continuing)")
+        try:
+            # Equity snapshots have no expiry — the curve is the product — so
+            # they are compacted rather than deleted. Aged rows collapse to the
+            # coarsest resolution any chart still renders them at, which is
+            # invisible to a reader and ~20x smaller over a year.
+            collapsed = await equity.compact_snapshots(db)
+            if collapsed:
+                log.info("equity snapshots: compacted %d aged row(s)", collapsed)
+        except Exception:
+            log.exception("equity snapshot compaction failed (continuing)")
 
 
 async def _equity_snapshot_loop(app, stop: asyncio.Event) -> None:
@@ -133,6 +162,7 @@ async def _equity_snapshot_loop(app, stop: asyncio.Event) -> None:
     per-user CLOB client cache (app.state.clients) so it doesn't rebuild creds.
     Runs once on boot so a fresh chart has a first point quickly."""
     interval = float(os.environ.get("EQUITY_SNAPSHOT_SECONDS", "300"))
+    heartbeats.register("equity_snapshot", interval)
     db, pm = app.state.db, app.state.pm
 
     async def client_for(user):
@@ -146,17 +176,10 @@ async def _equity_snapshot_loop(app, stop: asyncio.Event) -> None:
     while not stop.is_set():
         try:
             n = await equity.snapshot_all(db, pm, client_for)
+            heartbeats.mark("equity_snapshot")
             log.info("equity snapshot: recorded %d users", n)
         except Exception:
             log.exception("equity snapshot pass failed (continuing)")
-        try:
-            # thin old snapshots to the resolution the charts render (keeps
-            # storage bounded; never changes a chart)
-            pruned = await equity.prune_snapshots(db)
-            if pruned:
-                log.info("equity snapshot: pruned %d redundant rows", pruned)
-        except Exception:
-            log.exception("equity snapshot prune failed (continuing)")
         try:
             await asyncio.wait_for(stop.wait(), timeout=interval)
         except asyncio.TimeoutError:
@@ -269,7 +292,7 @@ app = FastAPI(
     title="PolyTrade API",
     lifespan=lifespan,
     docs_url=None,
-    redoc_url="/api/redoc",
+    redoc_url=None,
     openapi_url="/api/openapi.json",
 )
 # The SPA is served same-origin by this app, so cross-origin access stays OFF
@@ -286,6 +309,11 @@ app.include_router(routes_user.router, prefix="/api/user", tags=["user"])
 app.include_router(routes_traders.router, prefix="/api/traders", tags=["traders"])
 app.include_router(routes_positions.router, prefix="/api/positions", tags=["positions"])
 app.include_router(routes_telemetry.router, prefix="/api/telemetry", tags=["telemetry"])
+# Anonymous, read-only, rate-limited wallet research for the standalone
+# screener. Separate from /api/traders/* precisely so that router's session
+# gate and its upstream-spending routes stay exactly as they are.
+app.include_router(routes_public_screener.router, prefix="/api/public/screener",
+                   tags=["public-screener"])
 
 
 @app.get("/api/docs", include_in_schema=False)
@@ -320,6 +348,7 @@ async def api_documentation():
         '<body>\n'
         '<header class="topbar api-topbar">\n'
         '  <a class="brand" href="/docs"><img class="brand-logo" src="/docs/assets/polytrade-mark.png" alt=""><span>PolyTrade</span><span class="brand-divider"></span><span class="brand-docs">API Reference</span></a>\n'
+        '  <nav class="site-switcher" aria-label="PolyTrade sites"><a href="/">Home</a><a href="/screener">Screener</a><a href="/docs" aria-current="page">Docs</a></nav>\n'
         '  <div class="top-actions"><nav class="header-links" aria-label="Header links"><a href="https://t.me/cpolytrade_bot">Open Telegram bot</a><a href="/docs/developers">Developers</a><a href="/api/openapi.json">OpenAPI JSON</a><a href="https://github.com/sxwrpv/polytrade-bot">GitHub</a></nav>'
         '  <button class="theme-toggle" id="api-theme-toggle" aria-label="Toggle color theme"><svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v2m0 14v2M3 12h2m14 0h2M5.64 5.64l1.42 1.42m9.88 9.88 1.42 1.42m0-12.72-1.42 1.42M7.06 16.94l-1.42 1.42M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0Z"/></svg><svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 15.5A8.5 8.5 0 0 1 8.5 4 8.5 8.5 0 1 0 20 15.5Z"/></svg></button></div>\n'
         '</header>\n'
@@ -334,9 +363,126 @@ async def api_documentation():
     return HTMLResponse(html)
 
 
+@app.get("/api/redoc", include_in_schema=False)
+async def api_redoc_documentation():
+    """Serve ReDoc inside the same branded, cross-site navigation shell."""
+    response = get_redoc_html(
+        openapi_url="/api/openapi.json",
+        title="PolyTrade API — ReDoc",
+    )
+    html = bytes(response.body).decode("utf-8").replace(
+        "</head>",
+        '<meta name="theme-color" content="#eef2ef">\n'
+        '<link rel="preconnect" href="https://fonts.googleapis.com">\n'
+        '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>\n'
+        '<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">\n'
+        '<link rel="stylesheet" href="/docs/assets/styles.css">\n'
+        "</head>",
+    ).replace(
+        "<body>",
+        '<body><header class="topbar api-topbar">'
+        '<a class="brand" href="/docs"><img class="brand-logo" src="/docs/assets/polytrade-mark.png" alt=""><span>PolyTrade</span><span class="brand-divider"></span><span class="brand-docs">ReDoc</span></a>'
+        '<nav class="site-switcher" aria-label="PolyTrade sites"><a href="/">Home</a><a href="/screener">Screener</a><a href="/docs" aria-current="page">Docs</a></nav>'
+        '<div class="top-actions"><nav class="header-links" aria-label="Header links"><a href="/api/docs">Swagger UI</a><a href="/docs/developers">Developers</a><a href="/api/openapi.json">OpenAPI JSON</a></nav></div>'
+        '</header>',
+    )
+    return HTMLResponse(html)
+
+
 @app.get("/api/health")
 async def health():
+    """Process liveness only. Deliberately unchanged: container healthchecks
+    and uptime monitors depend on its shape. Use /api/ready to decide whether
+    the system is actually doing its job."""
     return {"status": "ok"}
+
+
+# The loops whose staleness makes the service degraded rather than merely
+# quiet. detect_tick and reconcile_tick are the copy engine; without them
+# nothing is copied, however healthy the web process looks.
+_CRITICAL_LOOPS = ("detect_tick", "reconcile_tick")
+
+
+@app.get("/api/version")
+async def version():
+    """What is actually deployed here.
+
+    The Screener commit reached GitHub on 27 Aug at 11:25 UTC and the running
+    container had started at 10:02 — stale, with nothing in the system able to
+    say so. GIT_REVISION is stamped at build time (see Dockerfile ARG).
+    """
+    return {
+        "revision": BUILD_REVISION,
+        "built_at": BUILD_TIME or None,
+        "engine_enabled": os.environ.get("COPY_ENGINE_AUTOSTART", "1") == "1",
+        "data_mode": "live",
+    }
+
+
+@app.get("/api/ready")
+async def ready(response: Response):
+    """Readiness: is this process doing the job, not merely answering HTTP?
+
+    Returns 200 when healthy or degraded and 503 when unhealthy, so a load
+    balancer can act on it while an operator still gets the detail.
+
+    Contains no wallet address, user id, market, query or secret — only names,
+    timestamps, ages and counts. It is reachable without a session.
+    """
+    db = app.state.db
+    checks: dict[str, object] = {}
+
+    database_ok = True
+    try:
+        await db.fetchval("SELECT 1")
+    except Exception as exc:
+        database_ok = False
+        checks["database_error"] = type(exc).__name__
+    checks["database"] = {"ok": database_ok, **db.availability()}
+
+    loops = heartbeats.snapshot()
+    checks["loops"] = loops
+    checks["upstream"] = upstream.snapshot()
+
+    engine = getattr(app.state, "engine", None)
+    checks["copy_worker"] = {
+        "present": engine is not None,
+        # Identity, not identifier: which process owns the engine, without
+        # naming any user it trades for.
+        "instance": WORKER_ID if engine is not None else None,
+    }
+
+    if database_ok:
+        try:
+            checks["uncertain_claims"] = await db.fetchval(
+                "SELECT COUNT(*) FROM copy_open_claims WHERE state='uncertain'") or 0
+            checks["positions_closing"] = await db.fetchval(
+                "SELECT COUNT(*) FROM copy_positions WHERE status='closing'") or 0
+            checks["positions_reconciliation_required"] = await db.fetchval(
+                "SELECT COUNT(*) FROM copy_positions "
+                "WHERE status='reconciliation_required'") or 0
+        except Exception as exc:
+            checks["counts_error"] = type(exc).__name__
+
+    engine_expected = os.environ.get("COPY_ENGINE_AUTOSTART", "1") == "1"
+    critical_stale = engine_expected and any(
+        loops.get(name, {}).get("stale", True) for name in _CRITICAL_LOOPS)
+    any_stale = any(loop.get("stale") for loop in loops.values())
+
+    if not database_ok or (engine_expected and engine is None):
+        # No database, or the engine this deployment is configured to run is
+        # simply not there. Both mean nothing is being copied.
+        status = "unhealthy"
+    elif critical_stale or any_stale:
+        # The API still serves, but a loop has stopped completing passes.
+        status = "degraded"
+    else:
+        status = "healthy"
+    checks["critical_loops_stale"] = critical_stale
+
+    if status == "unhealthy":
+        response.status_code = 503
+    return {"status": status, "revision": BUILD_REVISION, "checks": checks}
 
 
 # Product documentation. Only allowlisted Markdown and dedicated site assets
@@ -361,6 +507,7 @@ if os.path.isfile(_DOCS_INDEX):
         return FileResponse(_DOCS_INDEX)
 
 
-# SPA — mount last so it doesn't shadow /api or /docs.
+# SPA — mount last so it doesn't shadow /api or /docs. /screener/* never
+# reaches this app: Caddy routes it to the trader-screener service.
 if os.path.isdir(_FRONTEND_DIST):
     app.mount("/", StaticFiles(directory=_FRONTEND_DIST, html=True), name="spa")

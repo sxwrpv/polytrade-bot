@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
 
+from backend.api import routes_public_screener
 from backend.core import trader_stats
 from tests.fixtures import trader_activity as activity
 
@@ -97,13 +98,14 @@ class ScreenerMetricContractTests(unittest.TestCase):
                 self.assertTrue(behavior["reason"])
                 self.assertNotEqual(0, behavior["value"])
 
-    def test_null_contract_factually_records_current_unsafe_consumers(self):
+    def test_null_contract_records_public_preservation_and_legacy_tier_behavior(self):
         reason = self.contract()["total_pnl"]["null_behavior"]["reason"].lower()
         self.assertIn("cache", reason)
-        self.assertIn("tradercard", reason)
-        self.assertIn("tier", reason)
-        self.assertIn("zero", reason)
-        self.assertIn("unsafe", reason)
+        self.assertIn("standalone public screener", reason)
+        self.assertIn("preserves unavailable", reason)
+        self.assertIn("legacy tier", reason)
+        self.assertIn("bronze", reason)
+        self.assertNotIn("tradercard", reason)
 
     def test_contract_records_real_fetch_budgets_and_refresh_schedule(self):
         contract = self.contract()
@@ -185,8 +187,16 @@ class ScreenerMetricContractTests(unittest.TestCase):
                 self.assertEqual("/positions" in endpoints, "positions" in risks)
 
     def test_sort_and_filter_safety_matches_the_implemented_whitelists(self):
-        sortable = set(trader_stats._SORT_COLS.values())
-        filterable = set(trader_stats._FILTERABLE_COLUMNS)
+        sortable = {
+            f"{stem}_{window}"
+            for stem in routes_public_screener.SORTS
+            for window in routes_public_screener.PERIODS
+        }
+        filterable = {
+            f"{stem}_{window}"
+            for stem in routes_public_screener.FILTERS - {"history_days"}
+            for window in routes_public_screener.PERIODS
+        } | {"history_days"}
         for metric, metadata in self.contract().items():
             with self.subTest(metric=metric):
                 self.assertEqual(metric in sortable, metadata["safe_for_sorting"])
@@ -242,16 +252,17 @@ class ScreenerMetricContractTests(unittest.TestCase):
         self.assertIn("inclusive", text)
         self.assertIn("91", text)
 
-    def test_human_docs_record_current_consumer_limitations_and_exact_boundaries(self):
+    def test_human_docs_record_current_consumer_behavior_and_exact_boundaries(self):
         docs = (Path(__file__).parents[1] / "docs/screener-metric-contract.md").read_text().lower()
         for fact in (
-            "tradercard", "tier", "unsafe", "no explicit row limit", "first returned row",
+            "standalone public screener", "unavailable", "tier", "no explicit row limit", "first returned row",
             "min(sell size, held shares)", "known cost", "size > 0.01",
             "cur_price >= 0.5", "shares > 0.01", "cost > 0.005",
             "positions list is not truncated", "91 utc date labels",
         ):
             with self.subTest(fact=fact):
                 self.assertIn(fact, docs)
+        self.assertNotIn("tradercard", docs)
 
     def test_human_docs_truthfully_describe_fallback_failure_and_cached_provenance(self):
         docs = (Path(__file__).parents[1] / "docs/screener-metric-contract.md").read_text().lower()

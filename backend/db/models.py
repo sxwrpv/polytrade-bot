@@ -1,12 +1,13 @@
 """SQLite schema as SQL strings — run at startup (idempotent, IF NOT EXISTS).
 
-Deltas from the original spec (see BUILD_PLAN.md §4):
+Schema notes:
   - users.id           = the deposit/funder wallet address (the proxyWallet that
                          appears in positions), NOT the signer EOA.
   - users.signer_address = the EOA derived from the encrypted signer key.
   - users.private_key_enc = AES-256-GCM(signer key, ENCRYPTION_SECRET) — at rest;
                          the engine must decrypt autonomously, so it is NOT a
-                         passphrase. Passphrase is an export-only second factor.
+                         passphrase. /export-key requires a fresh Telegram
+                         step-up instead.
   - collateral is pUSD, not USDC (notional_usd / amount_usd / volume_usd are pUSD).
   - trader_cache.open_positions surfaces "N open positions" so the UI/ranking can
     avoid flat market-makers (phase-2 product insight).
@@ -188,6 +189,19 @@ CREATE TABLE IF NOT EXISTS trader_cache (
     --   within the window, and green/(green+red) (NULL when the denominator is zero).
     -- fills_Xd/exits_Xd/fill_exit_ratio_Xd: BUY count, SELL count, and exits/fills*100 (%) within the
     --   window (ratio NULL with no BUY rows) — how much they SELL relative to BUY activity.
+    -- refresh health (2026-09-02). A wallet upstream answers 500 for used to
+    -- retry on every pass forever: refresh_all ordered by
+    -- "stats_refreshed_at IS NULL DESC", and a wallet that never succeeds
+    -- never gets that column set, so it sorted FIRST in every batch for
+    -- eternity. Two addresses produced 381 of 388 refresh failures over 3.4
+    -- days that way. next_retry_at is the cooldown gate; the cached stats
+    -- stay readable and are simply labelled stale.
+    last_refresh_attempt_at TEXT,
+    last_refresh_success_at TEXT,
+    refresh_failure_count   INTEGER NOT NULL DEFAULT 0,
+    next_retry_at           TEXT,
+    last_refresh_error      TEXT,
+    data_completeness       TEXT,
     winrate_7d              REAL,
     winrate_30d             REAL,
     winrate_90d             REAL,
@@ -247,6 +261,14 @@ TABLES = ("users", "user_consents", "funding_acknowledgements",
 # EXISTS won't add columns to an existing table). Applied at startup; "duplicate
 # column" errors are ignored.
 MIGRATIONS = (
+    # refresh health / backoff state (2026-09-02)
+    "ALTER TABLE trader_cache ADD COLUMN last_refresh_attempt_at TEXT",
+    "ALTER TABLE trader_cache ADD COLUMN last_refresh_success_at TEXT",
+    "ALTER TABLE trader_cache ADD COLUMN refresh_failure_count INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE trader_cache ADD COLUMN next_retry_at TEXT",
+    "ALTER TABLE trader_cache ADD COLUMN last_refresh_error TEXT",
+    "ALTER TABLE trader_cache ADD COLUMN data_completeness TEXT",
+
     "ALTER TABLE users ADD COLUMN paused INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE users ADD COLUMN risk_revision INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE users ADD COLUMN max_slippage_pct REAL",
@@ -306,7 +328,7 @@ MIGRATIONS = (
     "ALTER TABLE trader_cache ADD COLUMN exits_90d INTEGER",
     "ALTER TABLE trader_cache ADD COLUMN fill_exit_ratio_90d REAL",
     # token auth + Telegram Mini App login (tokens are backfilled at startup
-    # by auth.ensure_api_tokens for rows that predate these columns). The
+    # at session issue; legacy plaintext values are destroyed at boot). The
     # indexes live here, not in SCHEMA_SQL, because on a pre-existing DB the
     # columns only exist after the ALTERs above have run.
     "ALTER TABLE users ADD COLUMN api_token TEXT",
@@ -520,6 +542,12 @@ CREATE TABLE IF NOT EXISTS trader_cache (
     volume_usd        DOUBLE PRECISION,
     unrealized_pnl    DOUBLE PRECISION,
     pnl_quality       DOUBLE PRECISION,
+    last_refresh_attempt_at TEXT,
+    last_refresh_success_at TEXT,
+    refresh_failure_count   INTEGER NOT NULL DEFAULT 0,
+    next_retry_at           TEXT,
+    last_refresh_error      TEXT,
+    data_completeness       TEXT,
     winrate_7d              DOUBLE PRECISION,
     winrate_30d             DOUBLE PRECISION,
     winrate_90d             DOUBLE PRECISION,
@@ -583,6 +611,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_users_telegram
 CREATE INDEX IF NOT EXISTS idx_trader_cache_stats_refreshed ON trader_cache(stats_refreshed_at);
 
 -- Forward upgrades for databases created before newer risk controls / claim protocol.
+ALTER TABLE trader_cache ADD COLUMN IF NOT EXISTS last_refresh_attempt_at TEXT;
+ALTER TABLE trader_cache ADD COLUMN IF NOT EXISTS last_refresh_success_at TEXT;
+ALTER TABLE trader_cache ADD COLUMN IF NOT EXISTS refresh_failure_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE trader_cache ADD COLUMN IF NOT EXISTS next_retry_at TEXT;
+ALTER TABLE trader_cache ADD COLUMN IF NOT EXISTS last_refresh_error TEXT;
+ALTER TABLE trader_cache ADD COLUMN IF NOT EXISTS data_completeness TEXT;
+CREATE INDEX IF NOT EXISTS idx_trader_cache_next_retry ON trader_cache(next_retry_at);
 ALTER TABLE users ADD COLUMN IF NOT EXISTS risk_revision INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE copy_open_claims ADD COLUMN IF NOT EXISTS claim_id TEXT;
 ALTER TABLE copy_open_claims ADD COLUMN IF NOT EXISTS action TEXT NOT NULL DEFAULT 'open';

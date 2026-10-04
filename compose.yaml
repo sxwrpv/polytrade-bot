@@ -11,8 +11,6 @@ services:
     env_file:
       - .env
     environment:
-      HOST: 0.0.0.0
-      PORT: "8080"
       DB_PATH: /app/data/copybot.db
       ENFORCE_FRONTEND_GEOBLOCK: "0"
       # Safe default: a fresh or unconfigured deploy must NOT start trading.
@@ -41,12 +39,53 @@ services:
       timeout: 5s
       start_period: 30s
       retries: 3
+    networks:
+      - backend
+
+  trader-screener:
+    build:
+      context: ./trader-screener
+      dockerfile: Dockerfile
+    image: polytrade-trader-screener:local
+    restart: unless-stopped
+    init: true
+    expose:
+      - "4310"
+    environment:
+      SCREENER_DATA_DIR: /app/data
+      # How often the server re-checks the snapshot's mtime. The cron writes
+      # daily; this only decides how soon a fresh file is picked up.
+      SNAPSHOT_RELOAD_SECONDS: "300"
+    volumes:
+      # The cohort snapshot is refreshed by a cron on the host (see
+      # scripts/refresh-screener-data.sh) and re-read in place, so it no
+      # longer goes stale two days after every build. read_only above still
+      # applies to the rest of the filesystem; a mounted volume stays
+      # writable, which is what the first-start seed needs.
+      - ./screener-data:/app/data
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4310/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    networks:
+      - screener
 
   caddy:
     image: caddy:2.10.2-alpine
     restart: unless-stopped
     depends_on:
       app:
+        condition: service_healthy
+      trader-screener:
         condition: service_healthy
     ports:
       - "80:80"
@@ -56,9 +95,24 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
+      # Access logging is on now, so the log needs somewhere durable to live
+      # and Caddy's own roll_size/roll_keep bound it (32MiB x 5, 14 days).
+      # The 2026-08 incident where an unrotated server.log reached 1.5 GB is
+      # the reason this is stated rather than left to a default.
+      - caddy_logs:/var/log/caddy
     security_opt:
       - no-new-privileges:true
+    networks:
+      - edge
+      - backend
+      - screener
 
 volumes:
   caddy_data:
   caddy_config:
+  caddy_logs:
+
+networks:
+  edge:
+  backend:
+  screener:

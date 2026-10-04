@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from backend.config import CREATE_WALLET_RATE_LIMIT, ENCRYPTION_SECRET, TELEGRAM_BOT_TOKEN
+from backend.core.client_identity import client_identity
 from backend.core import auth, equity as equity_mod, pnl as pnl_mod, wallet
 from backend.api.deps import get_current_user, get_db, get_pm, get_user_client
 from backend.db.database import now_iso
@@ -37,17 +38,14 @@ def _create_rate_limited(ip: str) -> bool:
 
 
 def _client_ip(request: Request) -> str:
-    """Real client IP for rate limiting. Behind the tunnel (Tailscale Funnel /
-    localhost.run) every request reaches uvicorn from loopback, so keying on
-    request.client.host put ALL users in one shared bucket; the tunnel's
-    X-Forwarded-For carries the real address. Only trusted from loopback —
-    a direct remote caller can't spoof its way into someone else's bucket."""
-    host = request.client.host if request.client else "unknown"
-    if host in ("127.0.0.1", "::1"):
-        forwarded = request.headers.get("x-forwarded-for", "")
-        if forwarded:
-            return forwarded.split(",")[0].strip()
-    return host
+    """Real client IP for rate limiting — see backend.core.client_identity.
+
+    This used to trust X-Forwarded-For only from loopback, which was right for
+    the retired tunnel and wrong for the Docker/Caddy topology that replaced
+    it: Caddy has a 172.x address, so the branch never fired and every caller
+    shared one bucket.
+    """
+    return client_identity(request)
 
 # Bridge response keys verified live against bridge.polymarket.com/deposit
 # (2026-07-01) — one address per chain family; whatever arrives is converted
@@ -138,17 +136,26 @@ async def create_wallet(body: CreateWallet, request: Request, response: Response
         raise HTTPException(500, "ENCRYPTION_SECRET not configured")
 
     telegram_user_id = int(tg_user["id"])
-    existing = await db.fetchone(
-        "SELECT * FROM users WHERE telegram_user_id = ?", (telegram_user_id,))
-    if existing:
+
+    async def restore_existing_wallet(existing_user: dict) -> dict:
+        """Record current consent and restore the existing wallet session."""
         await db.execute(
             "INSERT INTO user_consents(user_id,terms_version,telegram_user_id,accepted_at) "
             "VALUES(?,?,?,?) ON CONFLICT(user_id,terms_version) DO NOTHING",
-            (existing["id"], CURRENT_TERMS_VERSION, telegram_user_id, now_iso()))
-        raw = await auth.issue_session(db, existing["id"])
+            (existing_user["id"], CURRENT_TERMS_VERSION, telegram_user_id, now_iso()))
+        raw = await auth.issue_session(db, existing_user["id"])
         auth.set_session_cookie(response, raw)
-        return {"address": existing["id"], "signer_address": existing["signer_address"],
-                "gasless": existing["id"] != existing["signer_address"], "created": False}
+        return {
+            "address": existing_user["id"],
+            "signer_address": existing_user["signer_address"],
+            "gasless": existing_user["id"] != existing_user["signer_address"],
+            "created": False,
+        }
+
+    existing = await db.fetchone(
+        "SELECT * FROM users WHERE telegram_user_id = ?", (telegram_user_id,))
+    if existing:
+        return await restore_existing_wallet(existing)
 
     ip = _client_ip(request)
     if _create_rate_limited(ip):
@@ -171,14 +178,7 @@ async def create_wallet(body: CreateWallet, request: Request, response: Response
         existing = await db.fetchone(
             "SELECT * FROM users WHERE telegram_user_id = ?", (telegram_user_id,))
         if existing:
-            await db.execute(
-                "INSERT INTO user_consents(user_id,terms_version,telegram_user_id,accepted_at) "
-                "VALUES(?,?,?,?) ON CONFLICT(user_id,terms_version) DO NOTHING",
-                (existing["id"], CURRENT_TERMS_VERSION, telegram_user_id, now_iso()))
-            raw = await auth.issue_session(db, existing["id"])
-            auth.set_session_cookie(response, raw)
-            return {"address": existing["id"], "signer_address": existing["signer_address"],
-                    "gasless": existing["id"] != existing["signer_address"], "created": False}
+            return await restore_existing_wallet(existing)
         raise HTTPException(409, "wallet creation or reconciliation is already in progress")
 
     try:
@@ -338,7 +338,9 @@ async def me(request: Request, balance: bool = False,
         except Exception:
             bal = None
         try:
-            positions = await pmc.get_positions(user["id"], size_threshold=0)
+            positions, complete = await pmc.get_all_positions(user["id"], size_threshold=0)
+            if not complete:
+                raise ValueError("account positions incomplete")
             positions_val = round(sum(p.current_value for p in positions
                                       if p.size > 0 and not p.redeemable), 2)
             claimable = round(sum(p.current_value for p in positions
@@ -380,9 +382,9 @@ async def deposit_address(user=Depends(get_current_user), db=Depends(get_db),
                           pmc=Depends(get_pm)):
     """Bridge deposit addresses so the user can fund their wallet from any
     supported chain in USDC/USDT/etc — arrives as pUSD automatically. This is
-    Polymarket's own bridge, not something we run; see BUILD_PLAN §wallet model
-    for why the one-time allowance approval (separate from funding) still
-    needs a little MATIC on this EOA wallet model."""
+    Polymarket's own bridge, not something we run. Funding is separate from
+    the one-time trading approvals, which are gasless on a deposit wallet but
+    need a little MATIC in the EOA fallback (see wallet.py)."""
     accepted = await db.fetchone(
         "SELECT accepted_at FROM funding_acknowledgements WHERE user_id=? AND version=?",
         (user["id"], CURRENT_FUNDING_ACK_VERSION),
@@ -419,7 +421,8 @@ async def activity(limit: int = 30, user=Depends(get_current_user), db=Depends(g
         "p.entry_price, p.exit_price, c.display_name AS trader_name "
         "FROM trade_events e JOIN copy_positions p ON p.id = e.position_id "
         "LEFT JOIN trader_cache c ON c.address = p.trader_address "
-        "WHERE e.user_id = ? AND e.event_type != 'resolve' AND e.ts >= ? "
+        "WHERE e.user_id = ? AND p.status != 'reconciled_invalid' "
+        "AND e.event_type != 'resolve' AND e.ts >= ? "
         "ORDER BY e.ts DESC LIMIT ?",
         (user["id"], cutoff, limit))
 
@@ -475,7 +478,6 @@ async def update_settings(body: SettingsBody, request: Request,
             async with lock:
                 await apply_update()
     if updates:
-        import asyncio
         for _ in range(50):
             pending = await db.fetchval(
                 "SELECT COUNT(*) FROM copy_open_claims WHERE user_id=? AND state='submitting'",
