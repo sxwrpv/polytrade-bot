@@ -170,7 +170,10 @@ Never roll code back across an incompatible migration while orders are being sub
 (`trader-screener/`, its own container in `compose.yaml`). Caddy strips the
 `/screener` prefix and proxies to `trader-screener:4310`, so the FastAPI app
 never sees those requests. The service sits on its own Docker network and has
-no route to the app or its database.
+no route to the app or its database. There is no React screener entry in the
+app bundle and no FastAPI screener route: keep this as the only research UI,
+rather than adding a fallback that could shadow the service. A future dedicated
+hostname should proxy this same service, not revive a separate frontend build.
 
 `/api/public/screener/*` on the main app is a separate, anonymous, read-only
 and rate-limited API. It reads only precomputed `trader_cache` columns, so a

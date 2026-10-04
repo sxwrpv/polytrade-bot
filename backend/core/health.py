@@ -128,4 +128,3 @@ class UpstreamCounters:
 # constructor would only obscure that.
 heartbeats = Heartbeats()
 upstream = UpstreamCounters()
-

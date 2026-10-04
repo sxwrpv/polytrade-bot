@@ -336,7 +336,8 @@ class WireContractTests(PublicScreenerTestBase):
         builder = source[source.index("export function toPolytradeQuery"):]
         builder = builder[:builder.index("\n}\n")]
         emitted = set(re.findall(r"\bq\.([a-z_]+)\s*=", builder))
-        emitted |= {"period", "sort", "limit"}  # set in the object literal
+        # Include literal keys (and shorthand), not only q.key assignments.
+        emitted |= set(re.findall(r"^\s{4}([a-z_]+)\s*[:,]", builder, re.M))
         accepted = set(inspect.signature(routes_public_screener.public_wallets).parameters)
 
         self.assertTrue(emitted - {"period", "sort", "limit"},

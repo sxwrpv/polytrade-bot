@@ -252,3 +252,21 @@ test('--faint never sets text: it cannot reach AA on paper', async () => {
   assert.ok(contrast(faint[1].trim(), '#eef2ef') < 4.5)
   assert.doesNotMatch(css, /color:\s*var\(--faint\)/)
 })
+
+test('muted text stays above AA over the green row wash', async () => {
+  // Preserve the shared-token contrast contract after retiring the React screener.
+  const tokens = await read('src/styles/brutalism.css')
+  const wash = tokens.match(/--green-wash:\s*rgba\(([^)]+)\)/)
+  assert.ok(wash, 'missing --green-wash')
+  const [r, g, b, a] = wash[1].split(',').map((n) => Number(n.trim()))
+  const paper = [0xee, 0xf2, 0xef]
+  const blended = [r, g, b]
+    .map((channel, index) => Math.round(paper[index] + (channel - paper[index]) * a))
+    .map((n) => n.toString(16).padStart(2, '0'))
+    .join('')
+  const muted = tokens.match(/--muted:\s*([^;]+);/)[1].trim()
+  assert.ok(
+    contrast(muted, `#${blended}`) >= 4.5,
+    `muted on the row wash is ${contrast(muted, `#${blended}`).toFixed(2)}:1`,
+  )
+})
