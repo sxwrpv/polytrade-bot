@@ -20,6 +20,8 @@ from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
+from backend.config import CORS_ALLOW_ORIGINS, DB_PATH, DEV_PREVIEW, ENCRYPTION_SECRET, TELEGRAM_BOT_TOKEN
+from backend.core import auth, dev_preview, equity, runtime_security, telemetry, trader_stats, wallet
 from backend.config import CORS_ALLOW_ORIGINS, DB_PATH, ENCRYPTION_SECRET, TELEGRAM_BOT_TOKEN
 from backend.core import auth, equity, runtime_security, telemetry, trader_stats, wallet
 from backend.core.health import heartbeats, upstream
@@ -217,6 +219,13 @@ async def lifespan(app: FastAPI):
     n = await auth.invalidate_legacy_sessions(db)
     if n:
         log.info("invalidated %d legacy (plaintext/non-expiring) sessions", n)
+    if DEV_PREVIEW:
+        try:
+            uid = await dev_preview.ensure_dev_preview_user(db)
+            if uid:
+                log.info("dev preview wallet ready at %s", uid)
+        except Exception:
+            log.exception("dev preview seed failed (continuing)")
     pm = PolymarketClient()
     app.state.db = db
     app.state.pm = pm
