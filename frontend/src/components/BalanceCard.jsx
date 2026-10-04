@@ -7,10 +7,10 @@ import { api } from '../api'
  * account opens the app to see what it is worth — so the cash / positions /
  * claimable breakdown lives on the User tab rather than competing here.
  *
- * The chart is hand-drawn SVG rather than the Chart.js instance the User tab
- * uses. Axes, gridlines and tick labels are most of that component's height,
- * and none of them earn their space at a glance: the figure above the chart
- * already states the current value, and hovering states any other point.
+ * The chart is hand-drawn SVG rather than a charting library. Axes, gridlines
+ * and tick labels would be most of its height, and none of them earn their
+ * space at a glance: the figure above the chart already states the current
+ * value, and hovering states any other point.
  */
 
 const UP = '#0b9e63'

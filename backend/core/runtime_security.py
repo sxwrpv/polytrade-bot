@@ -38,9 +38,11 @@ def secure_process_umask() -> None:
     os.umask(0o077)
 
 
-# launchd owns the log file (StandardOutPath), so a Python RotatingFileHandler
-# cannot rotate it — the process only ever appends to a descriptor launchd
-# opened. Trimming in place at boot is the one lever we do have.
+# For a host deployment under launchd, launchd owns the log file
+# (StandardOutPath), so a Python RotatingFileHandler cannot rotate it — the
+# process only ever appends to a descriptor launchd opened. Trimming in place
+# at boot is the one lever we do have. In the Docker image the app logs to
+# stdout and there is no logs/ directory, so this is a no-op there.
 LOG_MAX_BYTES = 64 * 1024 * 1024      # trim above this…
 LOG_KEEP_BYTES = 8 * 1024 * 1024      # …down to this much recent history
 

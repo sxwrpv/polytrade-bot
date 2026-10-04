@@ -243,7 +243,6 @@ test('--faint never sets text: it cannot reach AA on paper', async () => {
   const sheets = await Promise.all([
     read('src/styles/brutalism.css'),
     read('src/styles/public-landing.css'),
-    read('src/styles/screener.css'),
   ])
   const css = sheets.join('\n')
 
@@ -254,13 +253,9 @@ test('--faint never sets text: it cannot reach AA on paper', async () => {
   assert.doesNotMatch(css, /color:\s*var\(--faint\)/)
 })
 
-test('the selected screener row keeps its text above AA', async () => {
-  const [tokens, screener] = await Promise.all([
-    read('src/styles/brutalism.css'),
-    read('src/styles/screener.css'),
-  ])
-
-  // Composite the row wash over paper and check the muted text on top of it.
+test('muted text stays above AA over the green row wash', async () => {
+  // Preserve the shared-token contrast contract after retiring the React screener.
+  const tokens = await read('src/styles/brutalism.css')
   const wash = tokens.match(/--green-wash:\s*rgba\(([^)]+)\)/)
   assert.ok(wash, 'missing --green-wash')
   const [r, g, b, a] = wash[1].split(',').map((n) => Number(n.trim()))
@@ -272,8 +267,6 @@ test('the selected screener row keeps its text above AA', async () => {
   const muted = tokens.match(/--muted:\s*([^;]+);/)[1].trim()
   assert.ok(
     contrast(muted, `#${blended}`) >= 4.5,
-    `muted on the selected row is ${contrast(muted, `#${blended}`).toFixed(2)}:1`,
+    `muted on the row wash is ${contrast(muted, `#${blended}`).toFixed(2)}:1`,
   )
-  // Selection is not signalled by the tint alone.
-  assert.match(screener, /tr\.selected > th[^}]*box-shadow/)
 })

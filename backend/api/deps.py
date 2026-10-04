@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import time
 
-from fastapi import Header, HTTPException, Request
+from fastapi import HTTPException, Request
 
 from backend.config import ENCRYPTION_SECRET
 from backend.core import auth, wallet
@@ -22,18 +22,16 @@ def get_pm(request: Request):
     return request.app.state.pm
 
 
-async def get_current_user(request: Request,
-                           authorization: str = Header(default=None),
-                           x_api_token: str = Header(default=None)):
+async def get_current_user(request: Request):
     """Authenticate from the HttpOnly session cookie only.
 
     The raw cookie value never touches the database — we look the session up by
     its SHA-256 digest, so a database/backup leak yields no usable credential.
     Sessions expire (auth.SESSION_TTL_SECONDS), so a captured cookie has a
-    bounded lifetime. The `authorization` / `x_api_token` parameters remain in
-    the signature only so callers and tests keep working; header credentials are
-    deliberately NOT accepted — accepting them would reintroduce the
-    XSS-readable, never-expiring token this replaced.
+    bounded lifetime. Header credentials are deliberately NOT accepted, nor
+    declared: accepting them would reintroduce the XSS-readable, never-expiring
+    token this replaced, and declaring them advertised Authorization and
+    X-API-Token headers on every authenticated operation in the OpenAPI schema.
     """
     raw = request.cookies.get(auth.SESSION_COOKIE)
     if not raw:

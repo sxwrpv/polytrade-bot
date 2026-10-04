@@ -31,5 +31,18 @@ class MigrationVersionTests(unittest.TestCase):
         )
 
 
+class SqliteToPostgresCopyTests(unittest.TestCase):
+    def test_cutover_copies_every_schema_table(self):
+        """A table left out of the cutover is silently empty afterwards. For
+        copy_open_claims that meant losing the BUY fences."""
+        from backend.db.models import SCHEMA_SQL
+        from scripts.migrate_sqlite_to_supabase import _TABLES
+
+        schema = set(re.findall(r"CREATE TABLE IF NOT EXISTS (\w+)", SCHEMA_SQL))
+        copied = {table for table, _ in _TABLES}
+        self.assertEqual(schema - copied, set(), "tables the cutover would drop")
+        self.assertEqual(copied - schema, set(), "tables the cutover names but the schema lacks")
+
+
 if __name__ == "__main__":
     unittest.main()

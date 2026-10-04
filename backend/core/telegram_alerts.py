@@ -67,6 +67,16 @@ def format_position_alert(event: dict) -> str:
     return text
 
 
+class TelegramAPIError(RuntimeError):
+    """A failed sendMessage, described WITHOUT the request URL.
+
+    The Bot API URL embeds the bot token (/bot<TOKEN>/sendMessage), and httpx
+    puts that URL in HTTPStatusError's message. The engine logs notifier
+    failures with a traceback, so re-raising the httpx error wrote the token
+    into the logs on every Telegram 4xx/5xx.
+    """
+
+
 class TelegramPositionNotifier:
     def __init__(self, db, bot_token: str, *, http=None) -> None:
         self.db = db
@@ -82,16 +92,23 @@ class TelegramPositionNotifier:
         chat_id = user.get("telegram_user_id") if user else None
         if not chat_id:
             return
-        response = await self.http.post(
-            f"https://api.telegram.org/bot{self.bot_token}/sendMessage",
-            json={
-                "chat_id": int(chat_id),
-                "text": format_position_alert(event),
-                "parse_mode": "HTML",
-                "disable_web_page_preview": True,
-            },
-        )
-        response.raise_for_status()
+        try:
+            response = await self.http.post(
+                f"https://api.telegram.org/bot{self.bot_token}/sendMessage",
+                json={
+                    "chat_id": int(chat_id),
+                    "text": format_position_alert(event),
+                    "parse_mode": "HTML",
+                    "disable_web_page_preview": True,
+                },
+            )
+        except httpx.HTTPError as exc:
+            # `from None`: a chained cause would print the URL in the traceback.
+            raise TelegramAPIError(
+                f"Telegram sendMessage failed: {type(exc).__name__}") from None
+        if not 200 <= response.status_code < 300:   # raise_for_status() parity
+            raise TelegramAPIError(
+                f"Telegram sendMessage returned HTTP {response.status_code}")
 
     async def aclose(self) -> None:
         if self._owns_http:

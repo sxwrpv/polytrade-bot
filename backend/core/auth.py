@@ -1,19 +1,13 @@
 """Short-lived, server-stored session hashes + Telegram Mini App authentication.
 
-The cookie model IS the live one, and has been since the session rework:
 ``api.deps.get_current_user`` accepts the HttpOnly ``polytrade_session``
-cookie and nothing else — Bearer and ``X-API-Token`` headers are explicitly
-refused — ``users.api_token_expires_at`` exists in both schemas, and only the
-SHA-256 digest of a session value is ever stored, so a database leak yields no
-usable credential.
+cookie and nothing else — Bearer and ``X-API-Token`` headers are refused.
+Sessions expire (``users.api_token_expires_at``), and only the SHA-256 digest
+of a session value is ever stored, so a database leak yields no usable
+credential.
 
 ``invalidate_legacy_sessions`` runs once at boot and destroys any surviving
-plaintext or non-expiring token from before that cutover.
-
-(This docstring previously described the migration as in progress and claimed
-the plaintext path was still live. All of it was false, and it was the most
-misleading text in the codebase: it told a reader that the deployed
-authentication model was the opposite of what it is.)
+plaintext or non-expiring token from before the cookie cutover.
 """
 from __future__ import annotations
 
@@ -34,14 +28,6 @@ _HASH_PREFIX = "sha256:"
 
 def _utcnow() -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc)
-
-
-# ``new_api_token`` / ``ensure_api_tokens`` lived here and were removed. Both
-# were dead: nothing called ensure_api_tokens (its own docstring insisted the
-# service could not boot without it, which was untrue), and it minted PLAINTEXT
-# tokens into users.api_token — a column that now holds only sha256: digests,
-# so the values it wrote could never have authenticated anything. Session
-# issuing goes through new_session/issue_session below.
 
 
 def hash_session_token(token: str) -> str:

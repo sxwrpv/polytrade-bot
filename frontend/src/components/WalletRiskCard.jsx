@@ -72,8 +72,8 @@ export default function WalletRiskCard({ w, onChange }) {
   // doesn't fire a request on every tick
   function set(k, v) {
     setS((p) => ({ ...p, [k]: v }))
-    if (v === '' || Number.isNaN(Number(v))) return
     clearTimeout(timers.current[k])
+    if (v === '' || !Number.isFinite(Number(v))) return
     timers.current[k] = setTimeout(() => {
       let num = Number(v)
       const val = ZERO_IS_NULL.has(k) && num === 0 ? null : num

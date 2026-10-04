@@ -21,6 +21,10 @@ import sqlite3
 
 # Parent → child order so foreign keys resolve. equity_snapshots.id is an
 # IDENTITY column in Postgres, so it's excluded and re-generated on insert.
+# Every table in the schema must appear here (tests/test_migration_versions.py
+# enforces it): copy_open_claims was once missing, and a cutover without it
+# drops the durable BUY fences, letting the engine re-buy a token whose
+# earlier order may already have filled.
 _TABLES = [
     ("users", None),
     ("user_consents", None),
@@ -28,9 +32,11 @@ _TABLES = [
     ("wallet_creation_claims", None),
     ("trader_cache", None),
     ("followed_traders", None),
+    ("copy_open_claims", None),
     ("copy_positions", None),
     ("trade_events", None),
     ("equity_snapshots", {"id"}),   # skip the auto-identity PK
+    ("product_events", None),
 ]
 
 
@@ -42,12 +48,11 @@ async def migrate(sqlite_path: str, dsn: str) -> None:
     pool = await asyncpg.create_pool(dsn, min_size=1, max_size=4, statement_cache_size=0)
     try:
         for table, skip in _TABLES:
-            skip = skip or set()
             rows = src.execute(f"SELECT * FROM {table}").fetchall()
             if not rows:
                 print(f"{table:18} 0 rows")
                 continue
-            cols = [c for c in rows[0].keys() if c not in skip]
+            cols = [c for c in rows[0].keys() if c not in (skip or ())]
             ph = ",".join(f"${i + 1}" for i in range(len(cols)))
             sql = (f"INSERT INTO {table} ({','.join(cols)}) VALUES ({ph}) "
                    f"ON CONFLICT DO NOTHING")

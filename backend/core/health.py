@@ -64,7 +64,7 @@ class Heartbeats:
             for name in sorted(names):
                 last = self._marks.get(name, 0.0)
                 interval = self._intervals.get(name, 0.0)
-                budget = max(MIN_STALENESS_SECONDS, interval * STALENESS_FACTOR)
+                budget = self.budget(name)
                 out[name] = {
                     "registered": name in self._intervals,
                     "interval_seconds": round(interval, 3) if interval else None,
@@ -128,9 +128,3 @@ class UpstreamCounters:
 # constructor would only obscure that.
 heartbeats = Heartbeats()
 upstream = UpstreamCounters()
-
-
-def reset_for_tests() -> None:
-    global heartbeats, upstream
-    heartbeats = Heartbeats()
-    upstream = UpstreamCounters()

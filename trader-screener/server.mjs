@@ -307,7 +307,7 @@ if (RELOAD_SECONDS > 0) {
               RELOAD_SECONDS * 1000).unref();
 }
 server.listen(PORT, () => {
-  console.log(`\n  Polycopy screener clone`);
+  console.log(`\n  PolyTrade trader screener`);
   console.log(`  http://localhost:${PORT}`);
   console.log(`  snapshot ${dataset.meta.generatedAt}  ·  ${dataset.traders.length.toLocaleString()} traders`);
   console.log(`  data dir ${DATA_DIR}  ·  reload every ${RELOAD_SECONDS}s`);
