@@ -11,6 +11,8 @@ import datetime as dt
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 from backend.core import equity as equity_mod
 from backend.db.database import Database, now_iso
@@ -145,6 +147,29 @@ class EquityCompactionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_an_empty_table_is_a_no_op(self):
         self.assertEqual(0, await equity_mod.compact_snapshots(self.db, now=NOW))
+
+    # --- what gets written --------------------------------------------------
+
+    async def test_failed_positions_read_stores_no_snapshot(self):
+        """Cash alone is not equity. Storing it when the positions read failed
+        drew a crash to the cash balance on the chart, then a recovery."""
+        client = SimpleNamespace(get_balance_allowance=AsyncMock(
+            return_value=SimpleNamespace(balance=50_000_000)))
+        pm = SimpleNamespace(get_all_positions=AsyncMock(side_effect=RuntimeError("503")))
+        with self.assertLogs("equity", level="ERROR"):
+            snap = await equity_mod.take_snapshot(self.db, USER, client, pm)
+        self.assertIsNone(snap)
+        self.assertEqual(0, await self.count())
+
+    async def test_snapshot_counts_cash_and_held_positions(self):
+        client = SimpleNamespace(get_balance_allowance=AsyncMock(
+            return_value=SimpleNamespace(balance=50_000_000)))
+        held = SimpleNamespace(size=10.0, current_value=30.0, cash_pnl=5.0,
+                               redeemable=False)
+        pm = SimpleNamespace(get_all_positions=AsyncMock(return_value=([held], True)))
+        snap = await equity_mod.take_snapshot(self.db, USER, client, pm)
+        self.assertEqual(snap["equity"], 80.0)
+        self.assertEqual(1, await self.count())
 
     # --- the relationship the design depends on -----------------------------
 

@@ -338,7 +338,9 @@ async def me(request: Request, balance: bool = False,
         except Exception:
             bal = None
         try:
-            positions = await pmc.get_positions(user["id"], size_threshold=0)
+            positions, complete = await pmc.get_all_positions(user["id"], size_threshold=0)
+            if not complete:
+                raise ValueError("account positions incomplete")
             positions_val = round(sum(p.current_value for p in positions
                                       if p.size > 0 and not p.redeemable), 2)
             claimable = round(sum(p.current_value for p in positions
@@ -380,9 +382,9 @@ async def deposit_address(user=Depends(get_current_user), db=Depends(get_db),
                           pmc=Depends(get_pm)):
     """Bridge deposit addresses so the user can fund their wallet from any
     supported chain in USDC/USDT/etc — arrives as pUSD automatically. This is
-    Polymarket's own bridge, not something we run; see BUILD_PLAN §wallet model
-    for why the one-time allowance approval (separate from funding) still
-    needs a little MATIC on this EOA wallet model."""
+    Polymarket's own bridge, not something we run. Funding is separate from
+    the one-time trading approvals, which are gasless on a deposit wallet but
+    need a little MATIC in the EOA fallback (see wallet.py)."""
     accepted = await db.fetchone(
         "SELECT accepted_at FROM funding_acknowledgements WHERE user_id=? AND version=?",
         (user["id"], CURRENT_FUNDING_ACK_VERSION),
@@ -419,7 +421,8 @@ async def activity(limit: int = 30, user=Depends(get_current_user), db=Depends(g
         "p.entry_price, p.exit_price, c.display_name AS trader_name "
         "FROM trade_events e JOIN copy_positions p ON p.id = e.position_id "
         "LEFT JOIN trader_cache c ON c.address = p.trader_address "
-        "WHERE e.user_id = ? AND e.event_type != 'resolve' AND e.ts >= ? "
+        "WHERE e.user_id = ? AND p.status != 'reconciled_invalid' "
+        "AND e.event_type != 'resolve' AND e.ts >= ? "
         "ORDER BY e.ts DESC LIMIT ?",
         (user["id"], cutoff, limit))
 
@@ -475,7 +478,6 @@ async def update_settings(body: SettingsBody, request: Request,
             async with lock:
                 await apply_update()
     if updates:
-        import asyncio
         for _ in range(50):
             pending = await db.fetchval(
                 "SELECT COUNT(*) FROM copy_open_claims WHERE user_id=? AND state='submitting'",

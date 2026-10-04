@@ -32,7 +32,7 @@ class FollowBody(BaseModel):
 class FollowSettings(BaseModel):
     paused: bool | None = None
     copy_ratio_pct: float | None = Field(None, ge=0, le=20)
-    max_position_usd: float | None = Field(None, ge=0, le=500)
+    max_position_usd: float | None = Field(None, ge=1, le=500)   # same bounds as FollowBody and the UI
     min_leader_usd: float | None = Field(None, ge=0, le=10000)
     ignore_below_usd: float | None = Field(None, ge=0, le=50)
     max_open_positions: int | None = Field(None, ge=0, le=50)

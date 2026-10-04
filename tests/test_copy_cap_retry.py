@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import time
 import unittest
-from dataclasses import replace
 from unittest.mock import AsyncMock
 
 from backend.core import copy_engine as ce
@@ -209,27 +208,12 @@ class NoBackfillTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("predates copying", src)
 
 
-class AdoptUntrackedTests(unittest.TestCase):
-    """A BUY reported as failed that actually filled leaves shares with no row,
-    no claim and no alert — invisible, and never managed or exited."""
+class AdoptUntrackedTests(unittest.IsolatedAsyncioTestCase):
+    """A volatile intent cannot establish a fill or ownership of inventory."""
 
-    def test_adoption_is_scoped_to_what_we_can_prove_we_submitted(self):
-        """The scope is the safety property: without it, adoption would sweep
-        up the user's own manual trades."""
-        import inspect
-        src = inspect.getsource(ce.CopyEngine._adopt_untracked_submissions)
-        self.assertIn("_submitted_basis", src,
-                      "adoption must require proof this engine submitted for the token")
-        self.assertIn("copy_open_claims", src,
-                      "a token with a live claim belongs to the uncertain path")
-
-    def test_it_notifies_and_records_an_event(self):
-        import inspect
-        src = inspect.getsource(ce.CopyEngine._adopt_untracked_submissions)
-        self.assertIn("_notify_position", src, "a rescued position must alert the user")
-        self.assertIn("_event", src, "a rescued position must appear in trade history")
-
-    def test_the_reconciler_runs_it(self):
-        import inspect
-        src = inspect.getsource(ce.CopyEngine._sync_user)
-        self.assertIn("_adopt_untracked_submissions", src)
+    async def test_legacy_adoption_is_disabled_without_touching_dependencies(self):
+        e = _Engine()
+        e._note_submitted("u", "tok", 15)
+        # No database is attached: this path must not even attempt a write.
+        self.assertEqual(0, await e._adopt_untracked_submissions("u", "leader", [], []))
+        self.assertEqual(15, e._submitted_basis("u", "tok"))

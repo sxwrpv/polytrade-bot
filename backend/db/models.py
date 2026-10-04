@@ -1,12 +1,13 @@
 """SQLite schema as SQL strings — run at startup (idempotent, IF NOT EXISTS).
 
-Deltas from the original spec (see BUILD_PLAN.md §4):
+Schema notes:
   - users.id           = the deposit/funder wallet address (the proxyWallet that
                          appears in positions), NOT the signer EOA.
   - users.signer_address = the EOA derived from the encrypted signer key.
   - users.private_key_enc = AES-256-GCM(signer key, ENCRYPTION_SECRET) — at rest;
                          the engine must decrypt autonomously, so it is NOT a
-                         passphrase. Passphrase is an export-only second factor.
+                         passphrase. /export-key requires a fresh Telegram
+                         step-up instead.
   - collateral is pUSD, not USDC (notional_usd / amount_usd / volume_usd are pUSD).
   - trader_cache.open_positions surfaces "N open positions" so the UI/ranking can
     avoid flat market-makers (phase-2 product insight).

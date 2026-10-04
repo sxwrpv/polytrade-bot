@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
-import os
 import stat as stat_mod
 import tempfile
 import unittest
@@ -64,12 +63,12 @@ class UncertainClaimReleaseTests(unittest.TestCase):
         run(eng._settle_uncertain_claim("0xu", self._claim(60), None))
         self.assertEqual(eng.released, [], "released before the window elapsed")
 
-    def test_an_aged_claim_the_wallet_cannot_explain_is_released(self):
+    def test_an_aged_claim_the_wallet_cannot_explain_is_retained(self):
         eng = self._engine()
         age = ce.UNCERTAIN_CLAIM_RELEASE_SECONDS + 60
         run(eng._settle_uncertain_claim("0xu", self._claim(age), None))
-        self.assertEqual(eng.released, [("0xu", "tok", "c1")],
-                         "token stayed fenced past the release window")
+        self.assertEqual(eng.released, [],
+                         "elapsed time and indexer absence cannot prove non-fill")
 
     def test_a_visible_holding_is_still_adopted_not_released(self):
         """Release is for provable non-fills only. Shares present must still
@@ -89,7 +88,6 @@ class UncertainClaimReleaseTests(unittest.TestCase):
         self.assertEqual(eng.released, [])
 
     def test_claim_age_survives_a_naive_timestamp(self):
-        eng = self._engine()
         naive = dt.datetime.now() - dt.timedelta(seconds=120)
         age = CopyEngine._claim_age_seconds({"claimed_at": naive.isoformat()})
         self.assertIsNotNone(age)

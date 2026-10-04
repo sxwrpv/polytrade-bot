@@ -2,10 +2,11 @@
 
 No paper mode, no simulation — every code path here places real orders. Safety
 comes from real preconditions checked *before* submission, not from a fake mode:
-  1. geoblock check (region permitted?)
-  2. liquidity check (can the book fully fill it locally, per our own quote?)
-  3. slippage guard (avg fill vs reference price within MAX_COPY_SLIPPAGE_PCT)
-Only if both pass do we submit. Balance/allowance is NOT pre-checked separately —
+  1. liquidity check (can the book fully fill it locally, per our own quote?)
+  2. price band + slippage guard (avg fill vs reference price within
+     MAX_COPY_SLIPPAGE_PCT), also signed into the order as a price cap/floor
+Only if these pass do we submit. The frontend geoblock probe is advisory unless
+ENFORCE_FRONTEND_GEOBLOCK=1. Balance/allowance is NOT pre-checked separately —
 the SDK's own RejectedOrder(code='not_enough_balance') covers that cleanly, so a
 doomed order just gets a clean rejection instead of costing an extra API call.
 
@@ -16,15 +17,9 @@ asyncio.to_thread needed, unlike the old py-clob-client(-v2)-based version.
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass, field
 from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
-
-from polymarket.errors import (
-    InsufficientAllowanceError,
-    RateLimitError,
-    RequestRejectedError,
-    UserInputError,
-)
 
 from backend.config import (
     ENFORCE_FRONTEND_GEOBLOCK, MAX_COPY_SLIPPAGE_PCT, POLYMARKET_BUILDER_CODE,
@@ -117,7 +112,6 @@ class OrderResult:
 def round_to_tick(price: float, tick: float, mode: str) -> float:
     if tick <= 0:
         return price
-    import math
     steps = price / tick
     if mode == "floor":
         return round(math.floor(steps) * tick, 6)
@@ -199,36 +193,6 @@ def _finalize(res: "OrderResult", resp, side: str) -> None:
         res.avg_price = 0.0
         log.warning("accepted order %s carried no fills — treating as killed: %s",
                     res.order_id, res.raw["order"])
-
-
-def _to_units(v) -> float:
-    """Polymarket balances come as integers in 1e6 base units (pUSD/CTF both
-    have 6 decimals)."""
-    try:
-        return float(v) / 1e6
-    except (TypeError, ValueError):
-        return 0.0
-
-
-def _definitive_rejection(e: Exception) -> bool:
-    """True when the SDK error PROVES no order is live and no fill happened, so
-    the caller's reservation is safe to release instead of freezing behind
-    submission_uncertain. Definitive: a CLOB 4xx rejection ("not enough
-    balance / allowance", "FOK ... fully filled or killed", ...), a rate-limited
-    request, or SDK-side validation that failed before anything was sent. A 5xx
-    or transport failure stays ambiguous — the exchange may have accepted the
-    order before the failure. (Seen live 2026-07-11: six definitive FOK-kill /
-    balance rejections were misfiled as uncertain and permanently froze their
-    tokens behind unreconciled claims.)"""
-    if isinstance(e, (RateLimitError, UserInputError, InsufficientAllowanceError)):
-        return True
-    if isinstance(e, RequestRejectedError):
-        status = getattr(e, "status", None)
-        try:
-            return status is not None and 400 <= int(status) < 500
-        except (TypeError, ValueError):
-            return False
-    return False
 
 
 # ---------------------------------------------------------------------------
@@ -392,6 +356,9 @@ async def place_capped_order(
     # price-capped FAK strictly bounds every share at leader*(1+slippage%) and
     # partial-fills, vs the market path's skip-or-fill-at-quote semantics.
     # No tests reference it as of 2026-08-21 — re-add coverage before reverting.
+    # Its failure classification follows place_market_order's (every exception
+    # at the submission boundary is uncertain) so a revert cannot bring back
+    # the 4xx-means-no-fill assumption that b14d900 removed.
     """Price-capped order anchored to the leader's fill price, via the SDK's
     native max_price/min_price (server-side enforced, not just a local check).
 
@@ -453,11 +420,11 @@ async def place_capped_order(
                 min_price=limit_price, order_type=order_type,
                 builder_code=_BUILDER_CODE)
     except Exception as e:
+        # Same classification as place_market_order: a 4xx label has proved
+        # untrustworthy (shares arrived anyway), so every exception here is
+        # ambiguous and the engine must reconcile before any retry.
         res.reason = f"api_error: {e}"
-        # Same classification as place_market_order: only ambiguous failures
-        # (5xx, transport) require reconciliation; definitive rejections don't.
-        if not _definitive_rejection(e):
-            res.submission_uncertain = True
+        res.submission_uncertain = True
         return res
 
     _finalize(res, resp, side)

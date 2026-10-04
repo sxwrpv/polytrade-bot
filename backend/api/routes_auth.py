@@ -4,6 +4,7 @@ from __future__ import annotations
 import datetime as dt
 import secrets
 
+import aiosqlite
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 
@@ -11,8 +12,6 @@ from backend.config import TELEGRAM_BOT_TOKEN
 from backend.core import auth
 from backend.api.deps import get_current_user, get_db
 from backend.db.database import now_iso
-
-import aiosqlite
 
 router = APIRouter()
 
@@ -134,7 +133,7 @@ async def telegram_login(body: TelegramAuth, response: Response, db=Depends(get_
     linked yet, respond with address=null and the frontend runs onboarding
     (create-wallet links the account via the same init_data)."""
     if not TELEGRAM_BOT_TOKEN:
-        raise HTTPException(501, "Telegram login is not configured on this server")
+        raise HTTPException(503, "Telegram login is not configured on this server")
     tg_user = auth.validate_init_data(body.init_data, TELEGRAM_BOT_TOKEN)
     if not tg_user:
         raise HTTPException(401, "invalid or expired Telegram init data")

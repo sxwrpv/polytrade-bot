@@ -5,18 +5,15 @@ the private key encrypted at rest, and signs orders on the user's behalf.
 
 Encryption: AES-256-GCM with a key derived from the server ``ENCRYPTION_SECRET``
 via HKDF. The copy engine must decrypt autonomously to sign orders, so this is
-not passphrase-gated — onboarding is create-only and ``/export-key`` is gated
-only by wallet auth (see BUILD_PLAN.md for that tradeoff). ``encrypt_for_export``/
-``decrypt_export`` (scrypt-based, passphrase-keyed) below are unused by the
-current API but kept — harmless, generically useful if a passphrase layer is
-reintroduced later.
+not passphrase-gated. ``/export-key`` is instead gated by a fresh Telegram
+step-up (see routes_user.export_key).
 
 Signing model: uses ``polymarket-client``'s ``AsyncSecureClient`` — NOT
 py-clob-client or py-clob-client-v2, both of which have real, currently-open,
-upstream-unfixed bugs for anything beyond plain EOA (see BUILD_PLAN.md
-§wallet model: py-clob-client is archived and signs a rejected order format;
-py-clob-client-v2's L1 auth always binds the API key to the EOA regardless of
-signature_type/funder, breaking POLY_1271/deposit-wallet order placement).
+upstream-unfixed bugs for anything beyond plain EOA: py-clob-client is archived
+and signs a rejected order format; py-clob-client-v2's L1 auth always binds the
+API key to the EOA regardless of signature_type/funder, breaking
+POLY_1271/deposit-wallet order placement (see requirements.txt).
 
 With a Builder API key configured (``POLYMARKET_BUILDER_API_KEY`` etc., from
 polymarket.com/settings?tab=builder), ``make_clob_client(funder=None)`` derives
@@ -48,7 +45,6 @@ import os
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 from eth_account import Account
 
 from backend.config import (
@@ -58,9 +54,7 @@ from backend.config import (
 )
 
 _NONCE = 12
-_SALT = 16
 _SCHEME_AT_REST = b"\x01"
-_SCHEME_EXPORT = b"\x02"
 
 
 # ---------------------------------------------------------------------------
@@ -87,10 +81,10 @@ def address_for_key(private_key_hex: str) -> str:
 # Encryption — at rest (HKDF over high-entropy server secret)
 # ---------------------------------------------------------------------------
 
-def _aesgcm_encrypt(plaintext: str, key: bytes, scheme: bytes, salt: bytes = b"") -> str:
+def _aesgcm_encrypt(plaintext: str, key: bytes, scheme: bytes) -> str:
     nonce = os.urandom(_NONCE)
     ct = AESGCM(key).encrypt(nonce, plaintext.encode(), None)
-    return base64.b64encode(scheme + salt + nonce + ct).decode()
+    return base64.b64encode(scheme + nonce + ct).decode()
 
 
 def encrypt_private_key(private_key_hex: str, secret: str) -> str:
@@ -110,33 +104,6 @@ def decrypt_private_key(blob: str, secret: str) -> str:
     key = HKDF(algorithm=hashes.SHA256(), length=32, salt=None,
                info=b"copybot-at-rest").derive(secret.encode())
     return AESGCM(key).decrypt(nonce, ct, None).decode()
-
-
-# ---------------------------------------------------------------------------
-# Encryption — export (scrypt over user passphrase, salt embedded)
-# ---------------------------------------------------------------------------
-
-def _scrypt_key(passphrase: str, salt: bytes) -> bytes:
-    return Scrypt(salt=salt, length=32, n=2 ** 14, r=8, p=1).derive(passphrase.encode())
-
-
-def encrypt_for_export(private_key_hex: str, passphrase: str) -> str:
-    """Re-encrypt under a user passphrase for /export-key (second factor)."""
-    if not passphrase:
-        raise ValueError("passphrase required")
-    salt = os.urandom(_SALT)
-    return _aesgcm_encrypt(private_key_hex, _scrypt_key(passphrase, salt),
-                           _SCHEME_EXPORT, salt)
-
-
-def decrypt_export(blob: str, passphrase: str) -> str:
-    raw = base64.b64decode(blob)
-    if raw[:1] != _SCHEME_EXPORT:
-        raise ValueError("not an export ciphertext")
-    salt = raw[1:1 + _SALT]
-    nonce = raw[1 + _SALT:1 + _SALT + _NONCE]
-    ct = raw[1 + _SALT + _NONCE:]
-    return AESGCM(_scrypt_key(passphrase, salt)).decrypt(nonce, ct, None).decode()
 
 
 # ---------------------------------------------------------------------------

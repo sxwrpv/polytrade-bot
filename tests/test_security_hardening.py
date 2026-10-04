@@ -10,52 +10,21 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+import httpx
 from fastapi import HTTPException
 
 from backend.api.deps import get_current_user
+from backend.api.routes_user import ExportKeyBody, export_key
 from backend.core import auth
 from backend.core.runtime_security import harden_runtime_files
+from backend.core.telegram_alerts import TelegramAPIError, TelegramPositionNotifier
 
-# This module SPECIFIES the target hardening (hashed + expiring cookie sessions,
-# Telegram step-up on key export, no Bearer token in the frontend). Several
-# pieces of that target do not exist yet, so the imports are guarded: a raw
-# ImportError here stops the whole suite from collecting and hides every other
-# test. Cases whose dependencies are missing skip; the rest still run. Drop the
-# guard once routes_user exposes ExportKeyBody and telegram_alerts raises
-# TelegramAPIError.
-try:
-    from backend.api.routes_user import ExportKeyBody, export_key
-    _EXPORT_READY = True
-except ImportError:                                  # pragma: no cover
-    ExportKeyBody = export_key = None
-    _EXPORT_READY = False
-
-try:
-    from backend.core.telegram_alerts import TelegramAPIError, TelegramPositionNotifier
-    _ALERTS_READY = True
-except ImportError:                                  # pragma: no cover
-    TelegramAPIError = TelegramPositionNotifier = None
-    _ALERTS_READY = False
-
-_PENDING = "target hardening not wired up yet"
-
-# Gate each concern on ITS OWN dependency, not on one shared flag — the export
-# step-up landed before the cookie-session migration, and a coarse guard would
-# have silently reported the unfinished half as passing.
-import inspect as _inspect                            # noqa: E402
-from backend.api import deps as _deps                 # noqa: E402
-
-_COOKIE_AUTH_READY = "SESSION_COOKIE" in _inspect.getsource(_deps.get_current_user)
-_FRONTEND_MIGRATED = "Authorization" not in (
-    Path(__file__).parents[1] / "frontend/src/api.js").read_text()
+# This module specifies the hardening target: hashed + expiring cookie
+# sessions, Telegram step-up on key export, redacted Telegram errors, and no
+# Bearer token in the frontend. All of it has landed, so nothing here is behind
+# a skip guard any more: a regression must fail the suite, not quietly skip.
 
 
-@unittest.skipUnless(_EXPORT_READY, _PENDING)
-class _RequiresTargetAuth(unittest.IsolatedAsyncioTestCase):
-    """Base for cases that need the landed step-up export auth."""
-
-
-@unittest.skipUnless(_COOKIE_AUTH_READY, 'cookie-session migration not wired up yet')
 class SessionSecurityTests(unittest.IsolatedAsyncioTestCase):
     async def test_session_is_hashed_expiring_and_cookie_authenticated(self):
         raw, stored, expires_at = auth.new_session()
@@ -73,7 +42,7 @@ class SessionSecurityTests(unittest.IsolatedAsyncioTestCase):
             cookies={auth.SESSION_COOKIE: raw},
             app=SimpleNamespace(state=SimpleNamespace(db=db)),
         )
-        user = await get_current_user(request, authorization=None, x_api_token=None)
+        user = await get_current_user(request)
         self.assertEqual(user["id"], "wallet")
         query_token = db.fetchone.await_args.args[1][0]
         self.assertEqual(query_token, stored)
@@ -92,7 +61,7 @@ class SessionSecurityTests(unittest.IsolatedAsyncioTestCase):
             app=SimpleNamespace(state=SimpleNamespace(db=db)),
         )
         with self.assertRaises(HTTPException) as ctx:
-            await get_current_user(request, authorization=None, x_api_token=None)
+            await get_current_user(request)
         self.assertEqual(ctx.exception.status_code, 401)
 
     async def test_legacy_plaintext_tokens_are_invalidated_not_backfilled(self):
@@ -105,7 +74,7 @@ class SessionSecurityTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("sha256:", sql)
 
 
-class ExportStepUpTests(_RequiresTargetAuth):
+class ExportStepUpTests(unittest.IsolatedAsyncioTestCase):
     async def test_export_requires_fresh_matching_telegram_identity(self):
         user = {
             "telegram_user_id": 123,
@@ -130,7 +99,6 @@ class ExportStepUpTests(_RequiresTargetAuth):
         self.assertEqual(validate.call_args.kwargs["max_age"], 300)
 
 
-@unittest.skipUnless(_ALERTS_READY, _PENDING)
 class TelegramRedactionTests(unittest.IsolatedAsyncioTestCase):
     async def test_notifier_error_never_contains_bot_token_or_request_url(self):
         token = "123456:super-secret-token"
@@ -147,6 +115,35 @@ class TelegramRedactionTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(token, text)
         self.assertNotIn("api.telegram.org", text)
         self.assertIn("500", text)
+
+    async def test_logged_traceback_never_contains_bot_token(self):
+        """What the engine actually writes: log.exception prints the full
+        traceback, chained causes included, for both an HTTP error status and
+        a transport failure from a real httpx client."""
+        token = "123456:super-secret-token"
+        db = AsyncMock()
+        db.fetchone.return_value = {"telegram_user_id": 12345}
+
+        def unauthorized(request):
+            return httpx.Response(401, request=request)
+
+        def unreachable(request):
+            raise httpx.ConnectError(f"cannot reach {request.url}", request=request)
+
+        for handler in (unauthorized, unreachable):
+            with self.subTest(handler=handler.__name__):
+                http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+                notifier = TelegramPositionNotifier(db, token, http=http)
+                logger = logging.getLogger("test.telegram_redaction")
+                with self.assertLogs(logger, level="ERROR") as logs:
+                    try:
+                        await notifier({"event": "opened", "user_id": "wallet"})
+                    except TelegramAPIError:
+                        logger.exception("position alert failed")
+                await http.aclose()
+                logged = "\n".join(logs.output)
+                self.assertIn("TelegramAPIError", logged)
+                self.assertNotIn(token, logged)
 
 
 class RuntimePermissionTests(unittest.TestCase):
@@ -167,7 +164,6 @@ class RuntimePermissionTests(unittest.TestCase):
             self.assertEqual(stat.S_IMODE((root / "logs").stat().st_mode), 0o700)
 
 
-@unittest.skipUnless(_FRONTEND_MIGRATED, 'frontend still sends the Bearer token')
 class FrontendStorageTests(unittest.TestCase):
     def test_frontend_never_stores_or_sends_bearer_token(self):
         source = (Path(__file__).parents[1] / "frontend/src/api.js").read_text()

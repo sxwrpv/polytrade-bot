@@ -3,10 +3,11 @@
 A Polymarket wallet screener in the PolyTrade surface: rank wallets by what
 survives being copied, not by bankroll. Two data layers behind one board —
 
-* **the board** reads a cached snapshot of a ranked cohort (3,766 wallets) for
-  the derived signals that need a full-chain indexer: Copy Score, the
-  market-maker / arbitrage / frequency classifiers, weekly sparklines, and the
-  235 per-slice "angle" boards;
+* **the board** ranks rows from Polymarket's live leaderboard by default, and
+  overlays a cached snapshot of a ranked cohort (3,766 wallets) for the derived
+  signals that need a full-chain indexer: Copy Score, the market-maker /
+  arbitrage / frequency classifiers, weekly sparklines, and the 235 per-slice
+  "angle" boards;
 * **every wallet page** is computed at request time from Polymarket's own
   public read APIs — no key, no session, read only.
 
@@ -159,19 +160,16 @@ They render as unavailable rather than being estimated from fills.
 
 ## PolyTrade integration
 
-Built to be lifted into `polytrade/frontend/src/screener` rather than ported.
-
-**Design.** `public/tokens.css` is a copy of `brutalism.css`'s token layer —
-same paper, same three greens, same three type roles. Keep them identical; if
-`brutalism.css` moves, move this, do not fork the palette. The shell reuses
-polytrade's own class names (`.screener-shell`, `.screener-sidebar`,
-`.screener-table`, `.chip`, `.control-label`, `.coverage`, …). Additions are
-prefixed so they are easy to find: `.band-*`, `.cchip`, `.angle-*`,
-`.index-*`, `.event-*`, `.trend-*`.
+**Design.** `public/tokens.css` is a copy of the main app's
+`frontend/src/styles/brutalism.css` token layer — same paper, same three
+greens, same three type roles. Keep them identical; if `brutalism.css` moves,
+move this, do not fork the palette. Copy-board additions are prefixed so they
+are easy to find: `.band-*`, `.cchip`, `.angle-*`, `.index-*`, `.event-*`,
+`.trend-*`.
 
 **Model split.** `public/lib/screenerModel.js` is pure — no DOM, no browser
-globals — matching the existing `screenerModel.js` convention, so every rule is
-testable without a browser. `public/board.js` only turns rows into DOM.
+globals — so every rule is testable without a browser. `public/board.js` only
+turns rows into DOM.
 
 **The API contract already matches.** `lib/publicScreener.mjs` serves
 `/api/public/screener/{wallets,wallets/:address,provenance}` with the same
@@ -184,7 +182,7 @@ surface by design.
 
 ```html
 <script>
-  window.__SCREENER_SOURCE__ = 'polytrade';   // 'snapshot' (default) | 'polytrade'
+  window.__SCREENER_SOURCE__ = 'polytrade';   // 'live' (default) | 'snapshot' | 'polytrade'
   window.__API_BASE__ = '/api';               // or https://polytradebot.live/api
 </script>
 ```
@@ -201,28 +199,6 @@ would produce a link that silently drops the wallet. The button title tells the
 reader to bring the address with them, and there is a Copy address button next
 to it. Flip the flag when the bot learns to resolve one; the link is already
 the right shape. A test pins this so it cannot drift by accident.
-
-### What to do to actually merge it
-
-1. Move `public/lib/screenerModel.js` additions into the existing model, or keep
-   it beside as `copyBoardModel.js`; the two do not overlap. The filter half
-   already uses polytrade's own vocabulary (`pnlMin`, `volumeMin`, `winrateMin`,
-   blank-stays-blank via `finiteFilter`), and the sidebar's slider is a direct
-   port of `RangeFilter.jsx` including its off-end contract — so those two
-   pieces should collapse into the existing ones rather than sit beside them.
-2. Port `public/board.js` to JSX — the render is already a pure function of
-   `(rows, state)`, so it is a mechanical translation.
-3. Fold `screener.css`'s prefixed additions into `styles/screener.css` and drop
-   `tokens.css` in favour of the real `brutalism.css`. `public/lib/chart.js` and
-   `public/lib/savedUi.js` are framework-free and return plain nodes, so they
-   drop in behind a thin `useEffect` wrapper without being rewritten. Decide
-   deliberately whether `glass.css` comes with them — it is a considered
-   exception to the token layer's no-glass rule, not an oversight, and the call
-   belongs to whoever owns the design system.
-4. Decide where Copy Score comes from. It needs a full-chain indexer; until
-   PolyTrade has one, either keep reading the cached cohort or leave the column
-   out. Publishing a score computed from a truncated 5,500-row tape would be the
-   one dishonest move available here.
 
 ---
 

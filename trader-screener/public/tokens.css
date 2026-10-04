@@ -1,8 +1,8 @@
 /* PolyTrade design tokens.
  *
- * Copied from polytrade/frontend/src/styles/brutalism.css so this surface can
- * be lifted into that app without a palette fork. Keep the values identical —
- * if brutalism.css changes, change this file, do not diverge.
+ * Copied from frontend/src/styles/brutalism.css so this surface and the main
+ * app share one palette. Keep the values identical — if brutalism.css
+ * changes, change this file, do not diverge.
  *
  * Type roles, applied identically on every surface:
  *   Instrument Serif — editorial display headings only.
