@@ -93,6 +93,26 @@ def slippage_ok(side: str, avg_price: float, reference: float, max_pct: float) -
 # Result
 # ---------------------------------------------------------------------------
 
+class PreflightError(Exception):
+    """A failure BEFORE the SDK submission boundary: provably nothing reached
+    the exchange, so the caller may release its fence and retry later.
+
+    Every exception from the order call itself is ambiguous (see
+    place_market_order), but an order-book read that fails happens before any
+    order exists. It used to escape as a bare exception, which the BUY path
+    classifies as uncertain: a durable claim that no reconciliation can ever
+    settle, because the wallet will never show shares for an order that was
+    never sent. One 429 or timeout on /book froze that token for that user
+    permanently.
+    """
+
+    def __init__(self, stage: str, cause: BaseException) -> None:
+        response = getattr(cause, "response", None)
+        self.stage = stage
+        self.status_code = getattr(response, "status_code", None)
+        super().__init__(f"{stage}: {type(cause).__name__}: {cause}")
+
+
 @dataclass
 class OrderResult:
     ok: bool
@@ -253,7 +273,10 @@ async def place_market_order(
     if check_geoblock and await _check_frontend_geoblock(pm, res):
         return res
 
-    book = await pm.get_orderbook(token_id)
+    try:
+        book = await pm.get_orderbook(token_id)
+    except Exception as exc:
+        raise PreflightError("orderbook", exc) from exc
     if side == "BUY":
         fill = quote_buy(book.asks, amount)
         ref = reference_price if reference_price else (book.best_ask.price if book.best_ask else 0)
@@ -375,7 +398,10 @@ async def place_capped_order(
     if check_geoblock and await _check_frontend_geoblock(pm, res):
         return res
 
-    book = await pm.get_orderbook(token_id)
+    try:
+        book = await pm.get_orderbook(token_id)
+    except Exception as exc:
+        raise PreflightError("orderbook", exc) from exc
     tick = book.tick_size or 0.01
 
     if side == "BUY":

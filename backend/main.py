@@ -22,10 +22,9 @@ from fastapi.staticfiles import StaticFiles
 
 from backend.config import CORS_ALLOW_ORIGINS, DB_PATH, DEV_PREVIEW, ENCRYPTION_SECRET, TELEGRAM_BOT_TOKEN
 from backend.core import auth, dev_preview, equity, runtime_security, telemetry, trader_stats, wallet
-from backend.config import CORS_ALLOW_ORIGINS, DB_PATH, ENCRYPTION_SECRET, TELEGRAM_BOT_TOKEN
-from backend.core import auth, equity, runtime_security, telemetry, trader_stats, wallet
 from backend.core.health import heartbeats, upstream
 from backend.core.copy_engine import CopyEngine
+from backend.core.locks import KeyedLocks
 from backend.core.polymarket import PolymarketClient
 from backend.core.telegram_alerts import TelegramPositionNotifier
 from backend.db.database import Database
@@ -162,6 +161,9 @@ async def _equity_snapshot_loop(app, stop: asyncio.Event) -> None:
     per-user CLOB client cache (app.state.clients) so it doesn't rebuild creds.
     Runs once on boot so a fresh chart has a first point quickly."""
     interval = float(os.environ.get("EQUITY_SNAPSHOT_SECONDS", "300"))
+    # Users snapshotted at once. Sequential, a pass costs two upstream round
+    # trips per user and stops fitting inside the interval at a few hundred.
+    concurrency = int(os.environ.get("EQUITY_SNAPSHOT_CONCURRENCY", "4"))
     heartbeats.register("equity_snapshot", interval)
     db, pm = app.state.db, app.state.pm
 
@@ -175,7 +177,7 @@ async def _equity_snapshot_loop(app, stop: asyncio.Event) -> None:
 
     while not stop.is_set():
         try:
-            n = await equity.snapshot_all(db, pm, client_for)
+            n = await equity.snapshot_all(db, pm, client_for, concurrency=concurrency)
             heartbeats.mark("equity_snapshot")
             log.info("equity snapshot: recorded %d users", n)
         except Exception:
@@ -224,14 +226,24 @@ async def lifespan(app: FastAPI):
             uid = await dev_preview.ensure_dev_preview_user(db)
             if uid:
                 log.info("dev preview wallet ready at %s", uid)
+            else:
+                log.warning("DEV_PREVIEW is set, but this database holds real wallets "
+                            "or is Postgres — dev login stays disabled")
         except Exception:
             log.exception("dev preview seed failed (continuing)")
     pm = PolymarketClient()
     app.state.db = db
     app.state.pm = pm
-    app.state.clients = {}            # user_id -> cached CLOB client
-    app.state.copy_risk_lock = asyncio.Lock()  # shared by BUYs and settings writes
-    app.state.position_notifier = TelegramPositionNotifier(db, TELEGRAM_BOT_TOKEN)
+    # user_id -> cached CLOB client, shared by the API, equity snapshots and
+    # the copy engine: one authenticated client per user per process.
+    app.state.clients = {}
+    # Per USER: a user's BUYs and that user's risk-settings writes serialize;
+    # other users are never blocked by them.
+    app.state.copy_risk_lock = KeyedLocks()
+    # Background delivery: an alert never holds up an order, and a burst of
+    # fills is paced under Telegram's send limits instead of failing with 429.
+    app.state.position_notifier = TelegramPositionNotifier(
+        db, TELEGRAM_BOT_TOKEN, background=True)
 
     if os.environ.get("SEED_ON_START", "1") == "1":
         try:
@@ -255,7 +267,8 @@ async def lifespan(app: FastAPI):
                 log.exception("on-chain detector init failed; falling back to activity poll")
         engine = CopyEngine(db, pm, detector=detector,
                             risk_lock=app.state.copy_risk_lock,
-                            position_notifier=app.state.position_notifier)
+                            position_notifier=app.state.position_notifier,
+                            clients=app.state.clients)
         app.state.engine = engine
         tasks.append(asyncio.create_task(engine.run(stop)))
 

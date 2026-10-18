@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 from backend.core.copy_engine import CopyEngine, Action
+from backend.core.locks import KeyedLocks
 
 
 def engine():
@@ -17,6 +18,7 @@ def engine():
     e._submitted = {}
     e._collateral_cache = {}
     e._risk_lock = asyncio.Lock()
+    e._token_locks = KeyedLocks()
     e.pm = None
     e._notify_position = AsyncMock()
     return e

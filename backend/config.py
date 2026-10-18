@@ -129,6 +129,10 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
 # builder key — one abusive IP must not exhaust it for everyone.
 CREATE_WALLET_RATE_LIMIT = os.environ.get("CREATE_WALLET_RATE_LIMIT", "3/3600")
 
+# Active copied wallets per account. Each one costs the engine a positions read
+# per reconcile pass and a trade poll per detection tick, shared by everyone.
+MAX_FOLLOWS_PER_USER = int(os.environ.get("MAX_FOLLOWS_PER_USER", "25"))
+
 # --- Local UI preview (Vite + Mobile Preview extension) ---
 # Enables POST /api/auth/dev-login and seeds a local-only wallet when the DB
 # is empty. Never set in production.

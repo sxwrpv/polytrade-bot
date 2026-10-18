@@ -29,6 +29,11 @@ def _create_rate_limited(ip: str) -> bool:
     limit_s, _, window_s = CREATE_WALLET_RATE_LIMIT.partition("/")
     limit, window = int(limit_s), float(window_s or 3600)
     now = time.time()
+    if len(_create_hits) > 10_000:
+        # Bound memory under a flood of distinct addresses: forget every
+        # client with no hit left inside the window.
+        for key in [k for k, v in _create_hits.items() if not v or now - v[-1] >= window]:
+            del _create_hits[key]
     hits = [t for t in _create_hits.get(ip, []) if now - t < window]
     limited = len(hits) >= limit
     if not limited:
@@ -474,6 +479,10 @@ async def update_settings(body: SettingsBody, request: Request,
                 await tx.execute(f"UPDATE users SET {cols} WHERE id=?", [*updates.values(), user["id"]])
         if lock is None:
             await apply_update()
+        elif hasattr(lock, "hold"):
+            # Per user: a pause waits only for this user's own in-flight BUY.
+            async with lock.hold(user["id"]):
+                await apply_update()
         else:
             async with lock:
                 await apply_update()
@@ -526,4 +535,18 @@ async def export_key(body: ExportKeyBody, user=Depends(get_current_user)):
                                  "the app from Telegram and retry")
     log.info("export-key step-up ok for %s", str(user.get("id"))[:10])
     pk = wallet.decrypt_private_key(user["private_key_enc"], ENCRYPTION_SECRET)
+    expected = str(user.get("signer_address") or "").lower()
+    if expected:
+        try:
+            actual = wallet.address_for_key(pk).lower()
+        except Exception:
+            actual = ""
+        if actual != expected:
+            # The ciphertext is not bound to its row, so a private_key_enc
+            # copied from another user's row decrypts fine. Handing it out
+            # would turn database WRITE access plus any one account into
+            # every user's key; refuse instead.
+            log.critical("export-key refused for %s: ciphertext does not match "
+                         "the stored signer", str(user.get("id"))[:10])
+            raise HTTPException(409, "wallet key integrity check failed — contact support")
     return {"private_key": pk}

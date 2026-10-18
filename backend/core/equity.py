@@ -17,6 +17,7 @@ resolution only costs disk. See COMPACTION_TIERS.
 """
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import logging
 
@@ -98,19 +99,27 @@ async def take_snapshot(db, user_id: str, client, pm) -> dict | None:
             "unrealized_pnl": unrealized}
 
 
-async def snapshot_all(db, pm, client_for) -> int:
+async def snapshot_all(db, pm, client_for, *, concurrency: int = 1) -> int:
     """Snapshot every user that has a wallet. `client_for(user_row)` returns an
     authenticated CLOB client (cached upstream). Best-effort per user — one
-    failure never blocks the rest."""
+    failure never blocks the rest. Up to `concurrency` users at once: each
+    snapshot is two upstream round trips, so a sequential pass stops fitting
+    inside the snapshot interval once there are a few hundred users."""
     users = await db.fetchall("SELECT * FROM users")
+    gate = asyncio.Semaphore(max(1, int(concurrency)))
     done = 0
-    for user in users:
-        try:
-            client = await client_for(user)
-            if await take_snapshot(db, user["id"], client, pm) is not None:
-                done += 1
-        except Exception:
-            log.exception("snapshot failed for %s", user["id"][:10])
+
+    async def one(user) -> None:
+        nonlocal done
+        async with gate:
+            try:
+                client = await client_for(user)
+                if await take_snapshot(db, user["id"], client, pm) is not None:
+                    done += 1
+            except Exception:
+                log.exception("snapshot failed for %s", user["id"][:10])
+
+    await asyncio.gather(*(one(user) for user in users))
     return done
 
 

@@ -48,7 +48,14 @@ async def open_positions(user=Depends(get_current_user), db=Depends(get_db), pmc
         (user["id"],))
     # Enrich with the wallet snapshot, then overlay every active BUY fencing
     # claim.  A claim is visible even before shares appear on-chain/indexer.
-    live = {p.asset: p for p in await pmc.get_positions(user["id"], size_threshold=0)}
+    # A failed snapshot degrades to the tracked rows without live prices
+    # (every consumer below already handles a missing holding) instead of
+    # failing the whole dashboard on one data-api hiccup.
+    try:
+        live = {p.asset: p for p in await pmc.get_positions(user["id"], size_threshold=0)}
+    except Exception:
+        log.exception("live wallet positions unavailable for open view")
+        live = {}
     by_token = {r["token_id"]: r for r in rows}
     for r in rows:
         p = live.get(r["token_id"])
@@ -232,11 +239,14 @@ async def close_external_position(body: CloseExternalBody, request: Request,
         result = await execution.place_market_order(
             client, pmc, body.token_id, "SELL", p.size, reference_price=p.cur_price,
             max_slippage_pct=body.acceptable_slippage_pct)
-    except Exception:
+    except Exception as exc:
         # A raised exception happened outside execution's submission boundary;
         # execution converts transport ambiguity into submission_uncertain.
         await db.execute("DELETE FROM copy_positions WHERE id=? AND status='closing'",
                          (position_id,))
+        if isinstance(exc, execution.PreflightError):
+            raise HTTPException(
+                503, "market data is unavailable right now — nothing was sent; try again") from exc
         raise
     if result.ok:
         pnl = (result.avg_price - p.avg_price) * result.filled_shares
@@ -302,10 +312,13 @@ async def close_position(position_id: str, request: Request, body: CloseBody | N
         result = await execution.place_market_order(
             client, pmc, row["token_id"], "SELL", row["shares"],
             reference_price=reference, max_slippage_pct=slippage)
-    except Exception:
+    except Exception as exc:
         # execution reports transport ambiguity as a result; a raised exception
         # is therefore pre-submission and safe to release for retry.
         await db.try_transition(row["id"], "closing", "open")
+        if isinstance(exc, execution.PreflightError):
+            raise HTTPException(
+                503, "market data is unavailable right now — nothing was sent; try again") from exc
         raise
     if result.ok:
         pnl = (result.avg_price - row["entry_price"]) * result.filled_shares
