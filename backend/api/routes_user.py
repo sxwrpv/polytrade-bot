@@ -277,14 +277,22 @@ async def create_wallet(body: CreateWallet, request: Request, response: Response
         await finish_failed_attempt("read_funder", exc)
         raise HTTPException(
             503, "an external wallet operation may have started; retry will resume the same wallet identity")
+    # The wallet exists from here on, so a setup failure must not fail creation.
+    # The failed stage (exception type only) stays on the completed claim
+    # instead: a wallet without exchange approvals must be findable to re-run
+    # them, and a log line alone is easy to miss.
+    setup_error = None
     try:
+        stage = "wait_wallet_ready"
         try:
             await wallet.wait_wallet_ready(client)
+            stage = "ensure_allowances"
             await wallet.ensure_allowances(client)
         except Exception as setup_exc:
-            log.error("wallet setup (readiness/approvals) failed for %s (%s) — "
-                      "wallet exists but may need funding/approval retried later",
-                      funder, type(setup_exc).__name__)
+            setup_error = f"{stage}: {type(setup_exc).__name__}"
+            log.error("wallet setup incomplete for %s: %s raised %s — exchange approvals "
+                      "may be missing; recorded on the wallet creation claim",
+                      funder, stage, type(setup_exc).__name__)
     finally:
         await close_client_safely(client, f"for {funder}")
 
@@ -304,9 +312,9 @@ async def create_wallet(body: CreateWallet, request: Request, response: Response
                 (funder, CURRENT_TERMS_VERSION, telegram_user_id, created_at))
             completed = await tx.execute(
                 "UPDATE wallet_creation_claims SET state='complete',updated_at=?,"
-                "private_key_enc=NULL,lease_owner=NULL,lease_expires_at=NULL,last_error=NULL "
+                "private_key_enc=NULL,lease_owner=NULL,lease_expires_at=NULL,last_error=? "
                 "WHERE telegram_user_id=? AND lease_owner=? AND state='side_effect_started'",
-                (created_at, telegram_user_id, claim_token))
+                (created_at, setup_error, telegram_user_id, claim_token))
             if completed != 1:
                 raise aiosqlite.IntegrityError("wallet creation claim completion failed")
     except Exception as exc:

@@ -99,8 +99,8 @@ CORS_ALLOW_ORIGINS = tuple(
 # backend/core/wallet.py — py-clob-client and py-clob-client-v2 both have
 # real, unfixed upstream bugs for anything beyond plain EOA reads). Builder API
 # credentials (from polymarket.com/settings?tab=builder) enable gasless deposit-wallet
-# trading: wallet creation/deployment, and — via ensure_allowances' individual
-# per-operator approval calls — trading approvals, all with no MATIC needed.
+# trading: wallet creation/deployment, and — via ensure_allowances' one relayer
+# batch of per-operator approvals — trading approvals, all with no MATIC needed.
 # Without these set, wallet.py falls back to plain EOA mode (needs a little
 # MATIC for the one-time allowance; real order placement is unverified there).
 POLYMARKET_BUILDER_API_KEY = os.environ.get("POLYMARKET_BUILDER_API_KEY", "").strip()

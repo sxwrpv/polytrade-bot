@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
 from fastapi import HTTPException, Response
+from polymarket.errors import TransactionFailedError
 
 from backend.api.deps import get_current_user
 from backend.api.routes_auth import LinkTelegram, link_telegram
@@ -691,6 +692,64 @@ class WalletCreationClaimTests(SQLiteDBTest):
             "SELECT state,lease_owner FROM wallet_creation_claims WHERE telegram_user_id=?", (8107,))
         self.assertEqual("side_effect_started", claim["state"])
         self.assertIsNotNone(claim["lease_owner"])
+
+    async def create_with_setup(self, telegram_id: int, *, wait_ready, ensure):
+        """Run create_wallet with the post-creation setup steps replaced."""
+        client = AsyncMock()
+        client.wallet = f"0xsetup-funder-{telegram_id}"
+        with patch("backend.api.routes_user.TELEGRAM_BOT_TOKEN", "bot-token"), patch(
+            "backend.api.routes_user.auth.validate_init_data", return_value={"id": telegram_id}
+        ), patch(
+            "backend.api.routes_user.wallet.create_signer",
+            return_value={"address": f"0xsetup-signer-{telegram_id}", "private_key": "setup-key"},
+        ), patch("backend.api.routes_user.wallet.make_clob_client", return_value=client), patch(
+            "backend.api.routes_user.wallet.wait_wallet_ready", wait_ready
+        ), patch("backend.api.routes_user.wallet.ensure_allowances", ensure), patch(
+            "backend.api.routes_user.wallet.encrypt_private_key", return_value="setup-ciphertext"
+        ), patch("backend.api.routes_user._create_rate_limited", return_value=False):
+            result = await create_wallet(self.wallet_body(), self.request(), Response(), db=self.db)
+        client.close.assert_awaited_once()
+        claim = await self.db.fetchone(
+            "SELECT state,last_error,private_key_enc,lease_owner FROM wallet_creation_claims "
+            "WHERE telegram_user_id=?", (telegram_id,))
+        user = await self.db.fetchone("SELECT id FROM users WHERE telegram_user_id=?", (telegram_id,))
+        return result, claim, user
+
+    async def test_failed_approvals_still_complete_the_wallet_and_mark_the_claim(self):
+        ensure = AsyncMock(side_effect=TransactionFailedError("SUPER-SECRET relayer detail"))
+        with self.assertLogs("routes_user", level="ERROR") as logs:
+            result, claim, user = await self.create_with_setup(
+                8201, wait_ready=AsyncMock(), ensure=ensure)
+        ensure.assert_awaited_once()
+        # The wallet exists, so creation completes exactly as on success ...
+        self.assertTrue(result["created"])
+        self.assertEqual(result["address"], user["id"])
+        self.assertEqual("complete", claim["state"])
+        self.assertIsNone(claim["lease_owner"])
+        self.assertIsNone(claim["private_key_enc"])
+        # ... but the claim keeps the failed stage, so the wallet can be found
+        # and its approvals re-run. Only the exception type, never its text.
+        self.assertEqual("ensure_allowances: TransactionFailedError", claim["last_error"])
+        self.assertIn("ensure_allowances", " ".join(logs.output))
+        self.assertNotIn("SUPER-SECRET", " ".join(logs.output))
+
+    async def test_unready_wallet_skips_approvals_and_marks_the_claim(self):
+        ensure = AsyncMock()
+        with self.assertLogs("routes_user", level="ERROR"):
+            result, claim, _ = await self.create_with_setup(
+                8202, wait_ready=AsyncMock(side_effect=RuntimeError("not indexed")), ensure=ensure)
+        ensure.assert_not_awaited()
+        self.assertTrue(result["created"])
+        self.assertEqual("complete", claim["state"])
+        self.assertEqual("wait_wallet_ready: RuntimeError", claim["last_error"])
+
+    async def test_completed_setup_leaves_no_error_on_the_claim(self):
+        ensure = AsyncMock()
+        result, claim, _ = await self.create_with_setup(8203, wait_ready=AsyncMock(), ensure=ensure)
+        ensure.assert_awaited_once()
+        self.assertTrue(result["created"])
+        self.assertEqual("complete", claim["state"])
+        self.assertIsNone(claim["last_error"])
 
 
 class BlockerSchemaTests(unittest.TestCase):

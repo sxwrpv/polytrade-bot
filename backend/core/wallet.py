@@ -22,7 +22,7 @@ calls this internally). Without one, it falls back to plain EOA mode (the
 signer's own address holds funds; needs a little MATIC for the one-time
 allowance — and real order placement is unverified in that mode).
 
-``ensure_allowances`` approves the exchange operators individually rather than
+``ensure_allowances`` batches its own exchange-operator approvals rather than
 calling the SDK's bundled ``setup_trading_approvals()`` — that bundle also
 tries to approve the auto-redeem operator, which our Builder key's relayer
 currently rejects ("operator is not in the allowed list"; confirmed with
@@ -171,23 +171,54 @@ async def wait_wallet_ready(client, *, attempts: int = 8, delay: float = 3.0):
             await asyncio.sleep(delay)
 
 
+def environment_config(environment):
+    """Contract addresses and endpoints of an SDK environment.
+
+    polymarket-client 0.6.0 exposes these only through this internal helper.
+    ``client.environment`` is the bare ``Environment`` (a ``name`` and a private
+    ``_config``), so ``environment.collateral_token`` raises AttributeError.
+    """
+    from polymarket._internal.environment import get_environment_config
+    return get_environment_config(environment)
+
+
 # Exchange operators that actually gate order placement (matches what
 # get_balance_allowance tracks) — deliberately excludes auto_redeem_operator;
 # see module docstring.
-def _core_operators(env) -> tuple[str, str, str]:
-    return (env.standard_exchange, env.neg_risk_exchange, env.neg_risk_adapter)
+def _core_operators(cfg) -> tuple[str, str, str]:
+    return (cfg.standard_exchange, cfg.neg_risk_exchange, cfg.neg_risk_adapter)
+
+
+def _approval_calls(cfg) -> list:
+    """pUSD approve and CTF setApprovalForAll for each core operator."""
+    from eth_utils import to_checksum_address
+    from polymarket.calls import (
+        MAX_UINT256,
+        erc20_approval_call,
+        erc1155_set_approval_for_all_call,
+    )
+    collateral = to_checksum_address(cfg.collateral_token)
+    conditional = to_checksum_address(cfg.conditional_tokens)
+    calls = []
+    for operator in map(to_checksum_address, _core_operators(cfg)):
+        calls.append(erc20_approval_call(
+            token_address=collateral, spender=operator, amount=MAX_UINT256))
+        calls.append(erc1155_set_approval_for_all_call(
+            token_address=conditional, operator=operator, approved=True))
+    return calls
 
 
 async def ensure_allowances(client) -> None:
-    """Approve the exchange operators individually — see module docstring for
-    why this doesn't use the SDK's bundled setup_trading_approvals(). Submits
-    all approval calls first, then waits for confirmations concurrently."""
-    env = client.environment
-    collateral, conditional = env.collateral_token, env.conditional_tokens
-    handles = []
-    for operator in _core_operators(env):
-        handles.append(await client.approve_erc20(
-            token_address=collateral, spender_address=operator, amount="max"))
-        handles.append(await client.approve_erc1155_for_all(
-            token_address=conditional, operator_address=operator, approved=True))
-    await asyncio.gather(*(h.wait() for h in handles))
+    """Approve the core exchange operators — see module docstring for why this
+    doesn't use the SDK's bundled setup_trading_approvals().
+
+    All six approvals go in one relayer transaction. The relayer runs one action
+    per wallet at a time ("wallet has in-flight action"), so six separate
+    submissions would queue behind each other inside the SDK's ~20 s submit
+    retry and could stop part-way, leaving a partly approved wallet. One batch
+    has one nonce and lands all-or-nothing. Raises if the relayer rejects it,
+    the transaction fails, or confirmation times out."""
+    calls = _approval_calls(environment_config(client.environment))
+    handle = await client.execute_transaction(
+        calls=calls, metadata="Trading approvals: exchanges and neg-risk adapter")
+    await handle.wait()
