@@ -257,15 +257,23 @@ async def lifespan(app: FastAPI):
     tasks.append(asyncio.create_task(_telemetry_retention_loop(db, stop)))
     if os.environ.get("COPY_ENGINE_AUTOSTART", "1") == "1":
         from backend.config import POLYGON_RPC_URL
-        from backend.core import detection
+        from backend.core import ctf, detection
         detector = None
+        ctf_reader = None
         if POLYGON_RPC_URL:
             try:
                 detector = detection.OnChainDetector(POLYGON_RPC_URL)
                 log.info("using on-chain OrderFilled detector")
             except Exception:
                 log.exception("on-chain detector init failed; falling back to activity poll")
-        engine = CopyEngine(db, pm, detector=detector,
+            try:
+                # No network here: the reader verifies the chain on first use.
+                ctf_reader = ctf.CtfReader(POLYGON_RPC_URL)
+                log.info("uncertain BUY claims settle from on-chain balances")
+            except Exception as exc:
+                log.error("on-chain claim evidence unavailable (%s); uncertain claims "
+                          "will only be adopted or retained", type(exc).__name__)
+        engine = CopyEngine(db, pm, detector=detector, ctf=ctf_reader,
                             risk_lock=app.state.copy_risk_lock,
                             position_notifier=app.state.position_notifier,
                             clients=app.state.clients)

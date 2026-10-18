@@ -394,6 +394,12 @@ class Database:
         The user row is the Postgres worker lock; SQLite's BEGIN IMMEDIATE is the
         cross-connection equivalent.  The active BUY-claim check and
         open->closing transition therefore cannot pass a resize reservation.
+
+        Only an in-flight BUY ('reserved', 'submitting') blocks the SELL. An
+        'uncertain' one does not: this sells the tracked row's shares, which
+        exist whatever that BUY did, and the claim keeps fencing further BUYs.
+        Blocking here left an exit, the engine's or the user's Close, refused
+        until an operator cleared the claim (review E3).
         """
         async with self.transaction(write=True) as tx:
             user_sql = "SELECT id FROM users WHERE id=?" + (
@@ -402,7 +408,7 @@ class Database:
                 return False
             active_buy = await tx.fetchone(
                 "SELECT token_id FROM copy_open_claims WHERE user_id=? AND token_id=? "
-                "AND state IN ('reserved','submitting','uncertain')",
+                "AND state IN ('reserved','submitting')",
                 (user_id, token_id))
             if active_buy:
                 return False

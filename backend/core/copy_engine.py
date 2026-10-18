@@ -44,6 +44,7 @@ from backend.config import (
     validate_slippage_pct,
 )
 from backend.core import detection, execution, wallet
+from backend.core.ctf import ChainBalance, ChainHead, CtfError
 from backend.core.health import heartbeats
 from backend.core.locks import KeyedLocks
 from backend.core.polymarket import Position
@@ -67,15 +68,36 @@ UNCERTAIN_CLAIM_MIN_AGE_SECONDS = 180.0
 CLOSING_STUCK_MIN_AGE_SECONDS = 600.0
 # NOT a release timer. A 24h auto-release once lived here and was removed by
 # 44a5b7d ("retain uncertain execution fences"): elapsed time plus indexer
-# absence is not proof that nothing filled, so _settle_uncertain_claim only
-# ever ADOPTS or RETAINS. An uncertain claim therefore blocks BUYs and SELLs of
-# that token for that user until an operator clears it. The constant survives
-# only as the age the tests use to prove nothing is released early or late.
+# absence is not proof that nothing filled. Only the chain can show that
+# (UNCERTAIN_CLAIM_EVIDENCE_SECONDS below); without it an uncertain claim is
+# only ever ADOPTED or RETAINED, and it blocks BUYs of that token for that user
+# until the operator clears it (python -m backend.core.fences). It no longer
+# blocks SELLs of the tracked shares: an exit adds no exposure, and blocking
+# it left users unable to leave a position (review E3, 2026-10-18). The
+# constant survives only as the age the tests use to prove nothing is released
+# early or late.
 #
-# That makes misclassification expensive, which is why failures that provably
-# happen BEFORE submission (execution.PreflightError) are no longer uncertain.
+# Misclassification is still expensive, which is why failures that provably
+# happen BEFORE submission (execution.PreflightError) are not uncertain.
 UNCERTAIN_CLAIM_RELEASE_SECONDS = float(
     os.environ.get("UNCERTAIN_CLAIM_RELEASE_SECONDS", str(24 * 3600)))
+# On-chain settlement of uncertain BUY claims (review E3). With POLYGON_RPC_URL
+# set, a claim whose last change (the claim, or any of the user's rows for the
+# token opening, closing or closed) is at least this old is weighed against
+# the deposit wallet's own ConditionalTokens balance (core/ctf.py), read at a
+# block mined at least this long after that change:
+#   - no more on-chain than the tracked shares, and the indexer agrees
+#                                                    -> RELEASE, loudly
+#   - more on-chain than tracked, the indexer agrees on the size, and its cost
+#     fits the reserved budget                       -> ADOPT
+#   - anything else (row mid-close, the sources disagree, a failed read)
+#                                                    -> RETAIN
+# The chain is the evidence; the indexer can only veto, never prove. The wait
+# covers late on-chain settlement of an order the exchange reported as failed.
+UNCERTAIN_CLAIM_EVIDENCE_SECONDS = float(
+    os.environ.get("UNCERTAIN_CLAIM_EVIDENCE_SECONDS", "900"))
+# Below this many shares a holding is dust (every wallet scan here uses it).
+SHARE_DUST = 0.01
 # How long a submitted BUY keeps counting against this token's cap even when
 # the exchange reported failure and the indexer has not shown the shares yet.
 #
@@ -302,6 +324,82 @@ def plan_actions(
 
 
 # ---------------------------------------------------------------------------
+# Uncertain-claim evidence (pure, plus the reads it needs). Shared with the
+# operator's fence tool (core/fences.py) so the two can never disagree.
+# ---------------------------------------------------------------------------
+
+RELEASE, ADOPT, RETAIN = "release", "adopt", "retain"
+
+
+def parse_utc(raw) -> dt.datetime | None:
+    """An aware UTC datetime from a stored ISO timestamp, or None."""
+    if not raw:
+        return None
+    try:
+        ts = dt.datetime.fromisoformat(str(raw))
+    except (TypeError, ValueError):
+        return None
+    return ts if ts.tzinfo is not None else ts.replace(tzinfo=dt.timezone.utc)
+
+
+async def live_token_rows(store, user_id: str, token_id: str) -> list[dict]:
+    """The user's tracked rows still holding (or settling) this token."""
+    return await store.fetchall(
+        "SELECT * FROM copy_positions WHERE user_id=? AND token_id=? "
+        "AND status IN ('open','closing','reconciliation_required') ORDER BY id",
+        (user_id, token_id))
+
+
+async def token_last_change(store, user_id: str, token_id: str) -> dt.datetime | None:
+    """When any of the user's rows for this token last opened, started closing
+    or closed: the last moment the tracked share count could have moved."""
+    rows = await store.fetchall(
+        "SELECT opened_at, closing_at, closed_at FROM copy_positions "
+        "WHERE user_id=? AND token_id=?", (user_id, token_id))
+    stamps = [parse_utc(r.get(k)) for r in rows
+              for k in ("opened_at", "closing_at", "closed_at")]
+    stamps = [s for s in stamps if s is not None]
+    return max(stamps) if stamps else None
+
+
+def chain_verdict(*, rows: list[dict], last_change: dt.datetime | None,
+                  onchain: ChainBalance, indexed: float) -> tuple[str, str]:
+    """What the deposit wallet's on-chain balance says about one uncertain BUY
+    claim: (RELEASE | ADOPT | RETAIN, reason). See
+    UNCERTAIN_CLAIM_EVIDENCE_SECONDS.
+
+    rows         the user's live rows for the token (live_token_rows)
+    last_change  latest of the claim's updated_at and token_last_change
+    indexed      shares the data-api shows for the token (0 when it shows none
+                 on a complete scan)
+    """
+    if len(rows) > 1:
+        return RETAIN, f"{len(rows)} tracked rows for one token: reconcile by hand"
+    row = rows[0] if rows else None
+    if row is not None and row.get("status") != "open":
+        return RETAIN, f"tracked row is {row.get('status')}; settle after it does"
+    if last_change is None:
+        return RETAIN, "time of the last change is unknown"
+    waited = onchain.head.timestamp - last_change.timestamp()
+    if waited < UNCERTAIN_CLAIM_EVIDENCE_SECONDS:
+        return RETAIN, (f"block {onchain.head.number} is {waited:.0f}s past the last change, "
+                        f"needs {UNCERTAIN_CLAIM_EVIDENCE_SECONDS:.0f}s")
+    tracked = float(row["shares"]) if row is not None else 0.0
+    held = float(onchain.shares)
+    if held <= tracked + SHARE_DUST:
+        if indexed > tracked + SHARE_DUST:
+            return RETAIN, (f"indexer shows {indexed:.4f} shares but the chain holds "
+                            f"{held:.4f} (tracked {tracked:.4f}): sources disagree")
+        return RELEASE, (f"wallet holds {held:.4f} shares on-chain at block "
+                         f"{onchain.head.number} against {tracked:.4f} tracked: "
+                         "no fill is held")
+    if abs(indexed - held) > SHARE_DUST:
+        return RETAIN, (f"chain holds {held:.4f} shares, indexer {indexed:.4f}: "
+                        "waiting for them to agree before pricing the fill")
+    return ADOPT, f"chain holds {held - tracked:.4f} shares beyond the {tracked:.4f} tracked"
+
+
+# ---------------------------------------------------------------------------
 # Engine
 # ---------------------------------------------------------------------------
 
@@ -314,9 +412,14 @@ class CopyEngine:
                  position_notifier=None,
                  clients: dict | None = None,
                  user_concurrency: int | None = None,
-                 detect_concurrency: int | None = None) -> None:
+                 detect_concurrency: int | None = None,
+                 ctf=None) -> None:
         self.db = db
         self.pm = pm
+        # On-chain evidence for settling uncertain BUY claims (core/ctf.py,
+        # UNCERTAIN_CLAIM_EVIDENCE_SECONDS). None, e.g. without
+        # POLYGON_RPC_URL, means uncertain claims only adopt or retain.
+        self._ctf = ctf
         self.poll_interval = poll_interval or COPY_ENGINE_POLL_SECONDS
         self.detection_interval = detection_interval or DETECTION_POLL_SECONDS
         self.detector = detector or detection.ActivityPollDetector(pm)
@@ -405,10 +508,12 @@ class CopyEngine:
     # --- uncertain-claim / stuck-closing reconciliation ---------------------
     async def _reconcile_uncertain_claims(self) -> None:
         """Settle BUY claims parked in 'uncertain' (submission outcome unknown).
-        A wallet holding may prove a bounded fill and be adopted. Absence is not
-        proof of non-fill, and an aggregate larger than the reserved claim is
-        quarantined. This intentionally prefers a stuck token requiring manual
-        review over another BUY that can breach the configured cap."""
+        A wallet holding may prove a bounded fill and be adopted. Indexer
+        absence is not proof of non-fill; only the wallet's on-chain balance
+        can release a claim (UNCERTAIN_CLAIM_EVIDENCE_SECONDS), and an
+        aggregate larger than the reserved claim is quarantined. This
+        intentionally prefers a stuck token requiring manual review over
+        another BUY that can breach the configured cap."""
         cutoff = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(
             seconds=UNCERTAIN_CLAIM_MIN_AGE_SECONDS)).isoformat()
         claims = await self.db.fetchall(
@@ -417,6 +522,9 @@ class CopyEngine:
         by_user: dict[str, list[dict]] = defaultdict(list)
         for c in claims:
             by_user[c["user_id"]].append(c)
+        ctf = getattr(self, "_ctf", None)
+        head: ChainHead | None = None
+        head_failed = False
         for user_id, user_claims in by_user.items():
             try:
                 positions, complete = await self.pm.get_all_positions(
@@ -425,21 +533,52 @@ class CopyEngine:
                 log.exception("uncertain reconciliation: position read failed for %s",
                               user_id[:10])
                 continue
-            held = {p.asset: p for p in positions if p.size > 0.01}
+            held = {p.asset: p for p in positions if p.size > SHARE_DUST}
             for claim in user_claims:
                 # Absence from a truncated wallet page proves nothing. Releasing
                 # this claim would permit another BUY while the first may already
-                # be held beyond the page boundary.
+                # be held beyond the page boundary. (On-chain evidence does not
+                # lift this: a release also needs the indexer not to object.)
                 if claim["token_id"] not in held and not complete:
                     log.warning("uncertain claim retained: wallet scan incomplete for %s %s",
                                 user_id[:10], claim["token_id"])
                     continue
+                onchain = None
+                if ctf is not None and self._evidence_due(claim):
+                    if head is None and not head_failed:
+                        try:     # one block per pass, every balance read at it
+                            head = await ctf.head()
+                        except CtfError as exc:
+                            head_failed = True
+                            log.warning("on-chain claim evidence unavailable this pass: %s", exc)
+                        except Exception:
+                            head_failed = True
+                            log.exception("on-chain claim evidence unavailable this pass")
+                    if head is not None:
+                        try:
+                            onchain = await ctf.balance(user_id, claim["token_id"], head)
+                        except CtfError as exc:
+                            log.warning("on-chain balance unavailable for %s %s: %s",
+                                        user_id[:10], claim["token_id"], exc)
+                        except Exception:
+                            log.exception("on-chain balance unavailable for %s %s",
+                                          user_id[:10], claim["token_id"])
                 try:
                     await self._settle_uncertain_claim(
-                        user_id, claim, held.get(claim["token_id"]))
+                        user_id, claim, held.get(claim["token_id"]), onchain)
                 except Exception:
                     log.exception("uncertain claim settlement failed: %s %s",
                                   user_id[:10], claim["token_id"])
+
+    @staticmethod
+    def _evidence_due(claim: dict) -> bool:
+        """Old enough that on-chain evidence could settle it. Cheap gate only:
+        chain_verdict re-checks the wait against the block actually read."""
+        changed = parse_utc(claim.get("updated_at"))
+        if changed is None:
+            return False
+        age = (dt.datetime.now(dt.timezone.utc) - changed).total_seconds()
+        return age >= UNCERTAIN_CLAIM_EVIDENCE_SECONDS
 
     @staticmethod
     def _claim_age_seconds(claim: dict) -> float | None:
@@ -457,19 +596,24 @@ class CopyEngine:
             return (dt.datetime.now(dt.timezone.utc) - ts).total_seconds()
         return None
 
-    async def _settle_uncertain_claim(self, user_id: str, claim: dict, p) -> None:
+    async def _settle_uncertain_claim(self, user_id: str, claim: dict, p,
+                                      onchain: ChainBalance | None = None) -> None:
         token = claim["token_id"]
         row = await self.db.fetchone(
             "SELECT * FROM copy_positions WHERE user_id=? AND token_id=? "
             "AND status IN ('open','closing','reconciliation_required')",
             (user_id, token))
+        if claim.get("action") == "open" and row is not None:
+            # a tracked row accounts for the shares — nothing left to adopt
+            log.warning("uncertain OPEN claim released (tracked row exists): %s %s",
+                        user_id[:10], token)
+            await self._release_buy_claim(user_id, token, claim["claim_id"])
+            return
+        if onchain is not None:
+            await self._settle_on_chain(user_id, claim, p, onchain)
+            return
         if claim.get("action") == "open":
-            if row is not None:
-                # a tracked row accounts for the shares — nothing left to adopt
-                log.warning("uncertain OPEN claim released (tracked row exists): %s %s",
-                            user_id[:10], token)
-                await self._release_buy_claim(user_id, token, claim["claim_id"])
-            elif p is None:
+            if p is None:
                 # Neither elapsed time nor indexer absence proves non-fill.
                 # Retain the durable fence until authoritative reconciliation.
                 log.warning("uncertain OPEN claim retained (no authoritative fill status): %s %s",
@@ -479,48 +623,130 @@ class CopyEngine:
             return
         # resize-increase: realign the row only when a bounded extra holding is
         # visible. Any inconclusive or oversized result retains the fence.
+        # SELLs of the tracked shares no longer wait for this claim (E3), so the
+        # row may have shrunk or closed since; a holding the indexer shows is
+        # only weighed against a row it has had time to see.
+        if p is not None and await self._changed_within(
+                user_id, token, UNCERTAIN_CLAIM_MIN_AGE_SECONDS):
+            log.warning("uncertain RESIZE claim retained (tracked row changed recently): %s %s",
+                        user_id[:10], token)
+            return
+        if row is None and p is not None:
+            # The row closed while the claim waited. No tracked row explains
+            # what the wallet still holds, so it settles like an OPEN claim.
+            await self._adopt_uncertain_fill(user_id, claim, p)
+            return
         if row is None or p is None:
             log.warning("uncertain RESIZE claim retained (row/holding inconclusive): %s %s",
                         user_id[:10], token)
             return
-        extra = float(p.size) - float(row["shares"])
-        if row["status"] == "open" and extra > 0.01:
-            spent = round(extra * float(p.avg_price or 0), 2)
-            reserved = float(claim.get("reserved_usd") or 0)
-            tolerance = max(0.25, reserved * 0.02)
-            if spent > reserved + tolerance:
-                log.critical("uncertain RESIZE quarantined: observed $%.2f exceeds $%.2f claim for %s %s",
-                             spent, reserved, user_id[:10], token)
-                return
-            async with self.db.transaction(write=True) as tx:
-                deleted = await tx.execute(
-                    "DELETE FROM copy_open_claims WHERE user_id=? AND token_id=? "
-                    "AND claim_id=? AND state='uncertain'",
-                    (user_id, token, claim["claim_id"]))
-                if deleted != 1:
-                    return   # settled elsewhere
-                changed = await tx.execute(
-                    "UPDATE copy_positions SET shares=?,entry_price=?,notional_usd=? "
-                    "WHERE id=? AND status='open'",
-                    (float(p.size), float(p.avg_price),
-                     round(float(p.size) * float(p.avg_price), 2), row["id"]))
-                if changed != 1:
-                    raise RuntimeError("uncertain resize adoption lost position race")
-                await self._event(user_id, row["id"], "partial", spent, None, store=tx)
-            log.warning("uncertain RESIZE adopted from wallet: %s %s +%.2f shares",
-                        user_id[:10], token, extra)
-            await self._notify_position({
-                "event": "increased", "user_id": user_id, "position_id": row["id"],
-                "market_title": row.get("market_title", ""),
-                "market_slug": row.get("market_slug", ""),
-                "outcome": row.get("outcome", ""),
-                "shares": extra, "entry_price": float(p.avg_price),
-                "notional_usd": spent, "total_shares": float(p.size),
-                "trader_address": row.get("trader_address"),
-            })
-        else:
+        if row["status"] != "open":
             log.warning("uncertain RESIZE claim retained (no authoritative non-fill): %s %s",
                         user_id[:10], token)
+            return
+        await self._adopt_uncertain_resize(user_id, claim, row, p)
+
+    async def _changed_within(self, user_id: str, token_id: str, seconds: float) -> bool:
+        last = await token_last_change(self.db, user_id, token_id)
+        return last is not None and (
+            dt.datetime.now(dt.timezone.utc) - last).total_seconds() < seconds
+
+    async def _settle_on_chain(self, user_id: str, claim: dict, p,
+                               onchain: ChainBalance) -> None:
+        """Settle from the deposit wallet's on-chain balance (chain_verdict)."""
+        token = claim["token_id"]
+        rows = await live_token_rows(self.db, user_id, token)
+        stamps = [t for t in (parse_utc(claim.get("updated_at")),
+                              await token_last_change(self.db, user_id, token))
+                  if t is not None]
+        verdict, reason = chain_verdict(
+            rows=rows, last_change=max(stamps) if stamps else None, onchain=onchain,
+            indexed=float(p.size) if p is not None else 0.0)
+        kind = str(claim.get("action") or "").upper()
+        if verdict == RELEASE:
+            if await self._release_on_evidence(user_id, claim, rows):
+                log.warning("uncertain %s claim RELEASED on on-chain evidence: %s %s: %s "
+                            "(reserved $%.2f, last error: %s)", kind, user_id[:10], token,
+                            reason, float(claim.get("reserved_usd") or 0),
+                            claim.get("last_error"))
+            else:
+                log.warning("uncertain %s claim retained: tracked rows changed while "
+                            "settling %s %s", kind, user_id[:10], token)
+        elif verdict == ADOPT:
+            if rows:
+                await self._adopt_uncertain_resize(user_id, claim, rows[0], p)
+            else:
+                await self._adopt_uncertain_fill(user_id, claim, p)
+        else:
+            log.warning("uncertain %s claim retained: %s %s: %s",
+                        kind, user_id[:10], token, reason)
+
+    async def _release_on_evidence(self, user_id: str, claim: dict,
+                                   rows: list[dict]) -> bool:
+        """Delete the claim only while the tracked rows the evidence was
+        weighed against still stand. Database.claim_managed_sell flips a row to
+        closing under the same user lock, so no SELL can start in between."""
+        def shape(rs):
+            return [(r["id"], r["status"], round(float(r["shares"]), 9)) for r in rs]
+
+        async with self.db.transaction(write=True) as tx:
+            user_sql = "SELECT id FROM users WHERE id=?" + (
+                " FOR UPDATE" if self.db.is_pg else "")
+            await tx.fetchone(user_sql, (user_id,))
+            if shape(await live_token_rows(tx, user_id, claim["token_id"])) != shape(rows):
+                return False
+            deleted = await tx.execute(
+                "DELETE FROM copy_open_claims WHERE user_id=? AND token_id=? "
+                "AND claim_id=? AND state='uncertain'",
+                (user_id, claim["token_id"], claim["claim_id"]))
+            return deleted == 1
+
+    async def _adopt_uncertain_resize(self, user_id: str, claim: dict, row: dict, p) -> None:
+        """The top-up behind an uncertain claim demonstrably filled (the wallet
+        holds more than the tracked row): realign the row to the wallet within
+        the reserved budget and clear the claim atomically."""
+        token = claim["token_id"]
+        extra = float(p.size) - float(row["shares"])
+        if extra <= SHARE_DUST:
+            log.warning("uncertain RESIZE claim retained (no authoritative non-fill): %s %s",
+                        user_id[:10], token)
+            return
+        spent = round(extra * float(p.avg_price or 0), 2)
+        reserved = float(claim.get("reserved_usd") or 0)
+        tolerance = max(0.25, reserved * 0.02)
+        if spent > reserved + tolerance:
+            log.critical("uncertain RESIZE quarantined: observed $%.2f exceeds $%.2f claim for %s %s",
+                         spent, reserved, user_id[:10], token)
+            return
+        async with self.db.transaction(write=True) as tx:
+            deleted = await tx.execute(
+                "DELETE FROM copy_open_claims WHERE user_id=? AND token_id=? "
+                "AND claim_id=? AND state='uncertain'",
+                (user_id, token, claim["claim_id"]))
+            if deleted != 1:
+                return   # settled elsewhere
+            # Only the row the wallet was compared with: a partial SELL may
+            # have changed it since.
+            changed = await tx.execute(
+                "UPDATE copy_positions SET shares=?,entry_price=?,notional_usd=? "
+                "WHERE id=? AND status='open' AND ABS(shares - ?) < 1e-9",
+                (float(p.size), float(p.avg_price),
+                 round(float(p.size) * float(p.avg_price), 2), row["id"],
+                 float(row["shares"])))
+            if changed != 1:
+                raise RuntimeError("uncertain resize adoption lost position race")
+            await self._event(user_id, row["id"], "partial", spent, None, store=tx)
+        log.warning("uncertain RESIZE adopted from wallet: %s %s +%.2f shares",
+                    user_id[:10], token, extra)
+        await self._notify_position({
+            "event": "increased", "user_id": user_id, "position_id": row["id"],
+            "market_title": row.get("market_title", ""),
+            "market_slug": row.get("market_slug", ""),
+            "outcome": row.get("outcome", ""),
+            "shares": extra, "entry_price": float(p.avg_price),
+            "notional_usd": spent, "total_shares": float(p.size),
+            "trader_address": row.get("trader_address"),
+        })
 
     async def _adopt_uncertain_fill(self, user_id: str, claim: dict, p) -> None:
         """The BUY behind an uncertain claim demonstrably filled (the wallet
@@ -541,6 +767,8 @@ class CopyEngine:
             user_sql = "SELECT id FROM users WHERE id=?" + (
                 " FOR UPDATE" if self.db.is_pg else "")
             await tx.fetchone(user_sql, (user_id,))
+            if await live_token_rows(tx, user_id, claim["token_id"]):
+                return   # a tracked row explains the holding after all
             deleted = await tx.execute(
                 "DELETE FROM copy_open_claims WHERE user_id=? AND token_id=? "
                 "AND claim_id=? AND state='uncertain'",
@@ -669,6 +897,12 @@ class CopyEngine:
                 pass
         self._clients.clear()
         self._collateral_cache.clear()
+        ctf = getattr(self, "_ctf", None)
+        if ctf is not None:
+            try:
+                await ctf.aclose()
+            except Exception:
+                pass
 
     async def _loop(self, fn, interval: float, stop_event: asyncio.Event) -> None:
         name = getattr(fn, "__name__", str(fn)).strip("_")

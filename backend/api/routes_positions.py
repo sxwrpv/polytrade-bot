@@ -68,6 +68,21 @@ async def open_positions(user=Depends(get_current_user), db=Depends(get_db), pmc
         token = claim["token_id"]
         p = live.get(token)
         r = by_token.get(token)
+        if (r is not None and r.get("status") == "open"
+                and claim["state"] == "uncertain"):
+            # An uncertain BUY no longer blocks the exit
+            # (Database.claim_managed_sell), so the row stays closable. Close
+            # sells the TRACKED shares: keep those as `shares`, and show the
+            # wallet's count, which may include the unconfirmed BUY, beside it.
+            r.update({
+                "live_shares": p.size if p is not None else None,
+                "claim_id": claim["claim_id"],
+                "claim_state": claim["state"],
+                "claim_action": claim["action"],
+                "claim_error": claim.get("last_error"),
+                "reserved_usd": claim["reserved_usd"],
+            })
+            continue
         if r is None:
             r = {
                 "id": None, "external": False, "origin": "pending_buy",

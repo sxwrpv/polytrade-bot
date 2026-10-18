@@ -25,13 +25,15 @@ Compare source fill time/price, PolyTrade detection time, order-book depth, slip
 
 ## Position is uncertain
 
+An uncertain buy claim fences new buys of that token for that account. It does not block exits: the copy engine and **Close** still sell the tracked shares.
+
 - Pause new buys if scope is unclear.
 - Check actual holdings on Polymarket.
-- Inspect claim and event state.
-- Let reconciliation run.
+- Inspect claim and event state: `docker compose exec app python -m backend.core.fences list --evidence`.
+- Let reconciliation run. With `POLYGON_RPC_URL` set, the engine settles a claim from the wallet's on-chain share balance once it is 15 minutes past its last change. It releases the claim when the chain holds nothing beyond the tracked shares and the indexer agrees, and adopts a fill the chain shows within the reserved budget.
 - Escalate if unchanged across multiple full cycles.
 
-Do not delete the claim; it is the duplicate-order fence.
+Do not delete the claim with SQL; it is the duplicate-order fence. To clear one by hand, use `python -m backend.core.fences clear <claim_id>` (a dry run until `--yes`), which refuses while the chain shows untracked shares.
 
 ## Manual close failed
 
