@@ -31,6 +31,11 @@ required for placing/filling orders, only for automatic claim-on-resolution).
 The three operators we do approve are exactly the ones ``get_balance_allowance``
 tracks, i.e. the ones that actually gate order placement.
 
+Redeeming resolved winnings needs two more ERC-1155 operators, the CTF
+collateral adapters, which order placement does not. ``backend/core/redeem.py``
+grants them, in the same relayer batch as a wallet's first redeem, and only
+when the operator has turned that job on (REDEEM_AUTOSTART=1).
+
 A freshly created/deployed wallet takes a few seconds to be indexed by
 Polymarket's backend — ``wait_wallet_ready`` retries the balance read past that
 window; every code path that just created a wallet must call it before relying
