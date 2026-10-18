@@ -6,6 +6,8 @@ Env toggles (useful for tests/dev):
   STATS_REFRESH_AUTOSTART=0    don't start the windowed wallet-screener stats refresh loop
   TRADER_STATS_REFRESH_SECONDS interval between refresh passes (default 900 = 15min)
   TRADER_STATS_REFRESH_LIMIT   how many cached traders to refresh per pass (default 200)
+  REDEEM_AUTOSTART=1           start the opt-in loop that redeems resolved winnings
+                               into pUSD (default off; see backend/core/redeem.py)
 """
 from __future__ import annotations
 
@@ -20,8 +22,13 @@ from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
-from backend.config import CORS_ALLOW_ORIGINS, DB_PATH, DEV_PREVIEW, ENCRYPTION_SECRET, TELEGRAM_BOT_TOKEN
-from backend.core import auth, dev_preview, equity, runtime_security, telemetry, trader_stats, wallet
+from backend.config import (
+    CORS_ALLOW_ORIGINS, DB_PATH, DEV_PREVIEW, ENCRYPTION_SECRET, POLYMARKET_BUILDER_API_KEY,
+    POLYMARKET_BUILDER_PASSPHRASE, POLYMARKET_BUILDER_SECRET, TELEGRAM_BOT_TOKEN,
+)
+from backend.core import (
+    auth, dev_preview, equity, redeem, runtime_security, telemetry, trader_stats, wallet,
+)
 from backend.core.health import heartbeats, upstream
 from backend.core.copy_engine import CopyEngine
 from backend.core.locks import KeyedLocks
@@ -155,6 +162,21 @@ async def _telemetry_retention_loop(db, stop: asyncio.Event) -> None:
             log.exception("equity snapshot compaction failed (continuing)")
 
 
+def _shared_client_factory(app):
+    """client_for(user_row) over app.state.clients, the per-user CLOB client
+    cache the API, the background loops and the copy engine share, so a loop
+    doesn't rebuild creds for a user someone else already authenticated."""
+    async def client_for(user):
+        cache = app.state.clients
+        cid = user["id"]
+        if cid not in cache:
+            pk = wallet.decrypt_private_key(user["private_key_enc"], ENCRYPTION_SECRET)
+            cache[cid] = await wallet.make_clob_client(pk, funder=cid)
+        return cache[cid]
+
+    return client_for
+
+
 async def _equity_snapshot_loop(app, stop: asyncio.Event) -> None:
     """Snapshot every user's equity on a fixed cadence (default 5 min) so the
     Performance chart has a dense, market-moving time series. Reuses the API's
@@ -166,14 +188,7 @@ async def _equity_snapshot_loop(app, stop: asyncio.Event) -> None:
     concurrency = int(os.environ.get("EQUITY_SNAPSHOT_CONCURRENCY", "4"))
     heartbeats.register("equity_snapshot", interval)
     db, pm = app.state.db, app.state.pm
-
-    async def client_for(user):
-        cache = app.state.clients
-        cid = user["id"]
-        if cid not in cache:
-            pk = wallet.decrypt_private_key(user["private_key_enc"], ENCRYPTION_SECRET)
-            cache[cid] = await wallet.make_clob_client(pk, funder=cid)
-        return cache[cid]
+    client_for = _shared_client_factory(app)
 
     while not stop.is_set():
         try:
@@ -186,6 +201,47 @@ async def _equity_snapshot_loop(app, stop: asyncio.Event) -> None:
             await asyncio.wait_for(stop.wait(), timeout=interval)
         except asyncio.TimeoutError:
             pass
+
+
+def _gasless_configured() -> bool:
+    """Builder credentials present: the relayer, and so redeeming, needs them."""
+    return bool(POLYMARKET_BUILDER_API_KEY and POLYMARKET_BUILDER_SECRET
+                and POLYMARKET_BUILDER_PASSPHRASE)
+
+
+async def _redeem_loop(app, stop: asyncio.Event) -> None:
+    """Redeem resolved winnings back into spendable pUSD on a fixed cadence
+    (default 30 min). Opt-in with REDEEM_AUTOSTART=1; what it will and will not
+    touch is in backend/core/redeem.py. Same shape as the equity loop: the
+    shared client cache, bounded concurrency, a heartbeat per completed pass.
+    Once the relayer refuses the batch on policy the redeemer halts and stops
+    marking its heartbeat, so /api/ready shows the loop stale instead of it
+    quietly doing nothing."""
+    from backend.config import POLYGON_RPC_URL
+    interval = float(os.environ.get("REDEEM_SECONDS", "1800"))
+    # Users redeemed at once. Each may wait minutes on its relayer transaction.
+    concurrency = int(os.environ.get("REDEEM_CONCURRENCY", "2"))
+    retry_seconds = float(os.environ.get(
+        "REDEEM_RETRY_SECONDS", str(redeem.DEFAULT_RETRY_SECONDS)))
+    heartbeats.register("redeem", interval)
+    chain = redeem.ChainReader(POLYGON_RPC_URL or redeem.default_rpc_url())
+    redeemer = redeem.Redeemer(app.state.db, app.state.pm, _shared_client_factory(app),
+                               chain, retry_seconds=retry_seconds)
+    try:
+        while not stop.is_set():
+            try:
+                summary = await redeemer.run_pass(concurrency=concurrency, stop=stop)
+                if redeemer.halted is None:
+                    heartbeats.mark("redeem")
+                log.info("redeem pass: %s", summary.describe())
+            except Exception:
+                log.exception("redeem pass failed (continuing)")
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=interval)
+            except asyncio.TimeoutError:
+                pass
+    finally:
+        await chain.aclose()
 
 
 @asynccontextmanager
@@ -285,6 +341,15 @@ async def lifespan(app: FastAPI):
 
     if os.environ.get("EQUITY_SNAPSHOT_AUTOSTART", "1") == "1":
         tasks.append(asyncio.create_task(_equity_snapshot_loop(app, stop)))
+
+    # Off unless asked for: it moves real tokens. Enable it on the single
+    # production worker only, like the copy engine.
+    if os.environ.get("REDEEM_AUTOSTART", "0") == "1":
+        if _gasless_configured():
+            tasks.append(asyncio.create_task(_redeem_loop(app, stop)))
+        else:
+            log.warning("REDEEM_AUTOSTART=1 but no builder credentials are set; "
+                        "redeeming needs the gasless relayer, so the loop is not started")
 
     try:
         yield
