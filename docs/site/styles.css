@@ -112,6 +112,7 @@ kbd { min-width: 22px; padding: 1px 5px; border: 1px solid var(--border-strong);
 .toc-title { margin-bottom: 10px; font-family: var(--mono); color: var(--muted); font-size: 9px; font-weight: 500; text-transform: uppercase; letter-spacing: .16em; }
 .toc a { display: block; padding: 5px 0 5px 12px; border-left: 1px solid var(--border); color: var(--muted); font-size: 12px; line-height: 1.4; text-decoration: none; }
 .toc a:hover, .toc a.active { border-left-color: var(--blue); color: var(--blue); }
+.toc a.toc-sub { padding-left: 22px; }
 .toc .toc-api { margin-top: 20px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); font-weight: 650; }
 .toc-api span { float: right; color: var(--faint); }
 

@@ -16,13 +16,94 @@ polytradebot.live, www.polytradebot.live {
 		# Telegram only opens Mini Apps over HTTPS; make downgrades impossible.
 		# No `preload` on purpose — preloading is effectively irreversible.
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"
-		# Telegram Web and Desktop render Mini Apps INSIDE AN IFRAME, so the
-		# previous `X-Frame-Options: DENY` would have shown a blank frame with
-		# no obvious cause once the bot button pointed here. frame-ancestors
-		# does what XFO was meant to do while allowing exactly Telegram —
-		# everyone else is still refused. (XFO is intentionally absent: it has
-		# no multi-origin form, and browsers prefer frame-ancestors anyway.)
-		Content-Security-Policy "frame-ancestors 'self' https://web.telegram.org https://*.telegram.org"
+	}
+
+	# --- Content-Security-Policy -------------------------------------------
+	# The session cookie is HttpOnly and SameSite=Strict, and neither does
+	# anything against script running ON this origin: injected script calls
+	# /api with the viewer's cookie and can follow wallets, change risk limits
+	# or close positions. The Mini App and the screener both render
+	# third-party Polymarket data (usernames, market titles), and the screener
+	# shares this origin, so this policy is what keeps one escaping bug from
+	# becoming account takeover.
+	#
+	# One policy per surface, never stacked: the four matchers below are
+	# mutually exclusive. Each policy allows only what its pages load
+	# (inventoried from frontend/index.html, docs/site/,
+	# trader-screener/public/ and the /api/docs and /api/redoc shells in
+	# backend/main.py), and tests/test_docker_deployment.py fails when a page
+	# loads something its policy refuses. `defer` sets the header as the
+	# response is written, after the upstream's headers are in, so Caddy's
+	# policy replaces any the app sends instead of stacking a second one.
+	#
+	# Common to all four:
+	#   frame-ancestors  Telegram Web and Desktop render Mini Apps INSIDE AN
+	#                    IFRAME, so `X-Frame-Options: DENY` would show a blank
+	#                    frame with no obvious cause. frame-ancestors allows
+	#                    exactly Telegram and refuses everyone else. (XFO is
+	#                    intentionally absent: it has no multi-origin form,
+	#                    and browsers prefer frame-ancestors anyway.)
+	#   object-src 'none' and base-uri 'none'  no plugins, no <base> rewrite.
+	#   fonts            stylesheets from fonts.googleapis.com, font files
+	#                    from fonts.gstatic.com, the same families everywhere.
+	#   style-src        no 'unsafe-inline' outside ReDoc, so injected markup
+	#                    cannot restyle itself into a fake control. The one
+	#                    casualty is the scrollbar CSS web.telegram.org pushes
+	#                    into the Mini App iframe (the SDK's set_custom_style):
+	#                    refused, and purely cosmetic.
+	@csp_app not path /api/docs /api/redoc /screener /screener/*
+	@csp_swagger path /api/docs
+	@csp_redoc path /api/redoc
+	@csp_screener path /screener /screener/*
+
+	# The Mini App, landing page, /docs and the JSON API. Scripts are our own
+	# bundle plus the Telegram Mini App SDK, pinned to its one file rather
+	# than all of telegram.org. The SDK loads nothing further: it talks to
+	# Telegram through postMessage and the native bridge, not the network.
+	header @csp_app {
+		Content-Security-Policy "default-src 'self'; script-src 'self' https://telegram.org/js/telegram-web-app.js; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'self' https://web.telegram.org https://*.telegram.org"
+		defer
+	}
+
+	# FastAPI's Swagger UI shell. jsDelivr serves any npm package, so it is
+	# allowed on this page only, and only for the two Swagger files; on the
+	# rest of the origin an allowlisted jsDelivr would be a ready-made way
+	# around the policy. The hash is FastAPI's inline SwaggerUIBundle({...})
+	# bootstrap: a FastAPI upgrade that changes it fails
+	# tests/test_docker_deployment.py instead of blanking this page.
+	header @csp_swagger {
+		Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-LWEObRpoIY0KVsFUCWtm1nukxJWE7dt6S4GyO+Wlo60=' https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js; style-src 'self' https://fonts.googleapis.com https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css; font-src https://fonts.gstatic.com; img-src 'self' data: https://fastapi.tiangolo.com/img/favicon.png; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'self' https://web.telegram.org https://*.telegram.org"
+		defer
+	}
+
+	# FastAPI's ReDoc shell. ReDoc styles itself by injecting <style>
+	# elements at runtime and builds its search index in a blob: worker, so
+	# this page alone gets style 'unsafe-inline' and blob: workers; without
+	# either, the browser refuses it (checked). Its menu footer shows
+	# Redocly's logo from cdn.redoc.ly.
+	header @csp_redoc {
+		Content-Security-Policy "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net/npm/redoc@2/bundles/redoc.standalone.js; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: https://fastapi.tiangolo.com/img/favicon.png https://cdn.redoc.ly/redoc/logo-mini.svg; connect-src 'self'; worker-src blob:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'self' https://web.telegram.org https://*.telegram.org"
+		defer
+	}
+
+	# The Trader Screener: its own modules and nothing else. It reads
+	# /screener/api/* and builds every row with createElement/textContent.
+	# Trader avatars and market icons are Polymarket uploads served from its
+	# S3 bucket; an image from any other host falls back to initials or is
+	# dropped (the onerror handlers in lib/render.js and wallet.js).
+	header @csp_screener {
+		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' https://polymarket-upload.s3.us-east-2.amazonaws.com; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'self' https://web.telegram.org https://*.telegram.org"
+		defer
+	}
+
+	# --- Request bodies ----------------------------------------------------
+	# Nothing bounded a request body, so one client could stream as much as
+	# it liked into uvicorn. Every /api write is a small JSON object; the
+	# largest is signed Telegram initData, a few KB. 64KB is an order of
+	# magnitude of headroom, and anything bigger is refused with a 413.
+	@api path /api/*
+	request_body @api {
+		max_size 64KB
 	}
 
 	# Cache policy. Nothing set one before, so browsers fell back to HEURISTIC
@@ -101,12 +182,26 @@ polytradebot.live, www.polytradebot.live {
 
 # Plain-HTTP access by IP, kept so health checks and monitoring don't depend on
 # DNS or a certificate. No TLS here (a public CA will not issue for a bare IP).
+#
+# Health endpoints ONLY. This block used to proxy the whole site, so the Mini
+# App, Telegram login and every authenticated /api call also worked in
+# cleartext here. What it answers now is exactly what scripts/deploy.sh and
+# scripts/refresh-screener-data.sh read through it; everything else is a 404,
+# for the same reason as @hidden above.
 http://52.51.200.58 {
-	redir /screener /screener/ 308
-	handle_path /screener/* {
+	@health path /api/health /api/ready /api/version
+	handle @health {
+		reverse_proxy app:8080
+	}
+
+	# The screener's own route is /api/health; strip the prefix the same way
+	# handle_path does for /screener/* on the domain.
+	handle /screener/api/health {
+		uri strip_prefix /screener
 		reverse_proxy trader-screener:4310
 	}
+
 	handle {
-		reverse_proxy app:8080
+		respond 404
 	}
 }

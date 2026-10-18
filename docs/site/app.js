@@ -181,7 +181,7 @@ function renderToc() {
   const headings = [...document.querySelectorAll('.prose h2, .prose h3')]
     .filter(heading => heading.offsetParent !== null || !heading.className);
   const nav = document.getElementById('toc-nav');
-  nav.innerHTML = headings.map(h => `<a href="#${h.id}" data-id="${h.id}"${h.tagName === 'H3' ? ' style="padding-left:22px"' : ''}>${h.textContent}</a>`).join('');
+  nav.innerHTML = headings.map(h => `<a href="#${h.id}" data-id="${h.id}"${h.tagName === 'H3' ? ' class="toc-sub"' : ''}>${h.textContent}</a>`).join('');
   if (!headings.length) document.querySelector('.toc').style.display = 'none';
 
   const observer = new IntersectionObserver(entries => {
