@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -66,6 +67,11 @@ RETRYABLE_TRANSPORT = (
 # (two addresses produced 381 of 388 failures over 3.4 days), so retrying it
 # just multiplies load — trader_stats quarantines those instead.
 RETRYABLE_STATUS = (502, 503, 504)
+
+# Frontend geoblock probe (see PolymarketClient.get_geoblock).
+GEOBLOCK_CACHE_SECONDS = 600.0
+GEOBLOCK_FAILURE_CACHE_SECONDS = 60.0
+GEOBLOCK_TIMEOUT_SECONDS = 3.0
 
 
 def _retry_after_seconds(response: httpx.Response) -> float | None:
@@ -441,8 +447,31 @@ class PolymarketClient:
     # --- geoblock ----------------------------------------------------------
     async def get_geoblock(self) -> dict:
         """Geo-restriction check for the caller's IP (call before placing orders).
-        Returns {blocked: bool, ip, country, region}."""
-        return await self._get("https://polymarket.com/api/geoblock")
+        Returns {blocked: bool, ip, country, region}.
+
+        Cached: it was fetched before EVERY order, an extra round trip in the
+        latency path of every copy, with the full read-retry policy (up to
+        four attempts with backoff and a 15s timeout each) for an answer that
+        only describes this server's egress IP and is advisory by default
+        (execution._check_frontend_geoblock). One quick attempt; a failure is
+        remembered briefly so a dead probe does not stall each order in turn.
+        """
+        now = time.monotonic()
+        cached = getattr(self, "_geoblock_cache", None)
+        if cached is not None and cached[0] > now:
+            if isinstance(cached[1], Exception):
+                raise cached[1]
+            return cached[1]
+        try:
+            r = await self._client.get("https://polymarket.com/api/geoblock",
+                                       timeout=GEOBLOCK_TIMEOUT_SECONDS)
+            r.raise_for_status()
+            value = r.json()
+        except Exception as exc:
+            self._geoblock_cache = (now + GEOBLOCK_FAILURE_CACHE_SECONDS, exc)
+            raise
+        self._geoblock_cache = (now + GEOBLOCK_CACHE_SECONDS, value)
+        return value
 
     # --- bridge deposit ------------------------------------------------------
     async def create_bridge_address(self, wallet_address: str) -> dict:

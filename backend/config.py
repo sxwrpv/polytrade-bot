@@ -99,8 +99,8 @@ CORS_ALLOW_ORIGINS = tuple(
 # backend/core/wallet.py — py-clob-client and py-clob-client-v2 both have
 # real, unfixed upstream bugs for anything beyond plain EOA reads). Builder API
 # credentials (from polymarket.com/settings?tab=builder) enable gasless deposit-wallet
-# trading: wallet creation/deployment, and — via ensure_allowances' individual
-# per-operator approval calls — trading approvals, all with no MATIC needed.
+# trading: wallet creation/deployment, and — via ensure_allowances' one relayer
+# batch of per-operator approvals — trading approvals, all with no MATIC needed.
 # Without these set, wallet.py falls back to plain EOA mode (needs a little
 # MATIC for the one-time allowance; real order placement is unverified there).
 POLYMARKET_BUILDER_API_KEY = os.environ.get("POLYMARKET_BUILDER_API_KEY", "").strip()
@@ -128,6 +128,10 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
 # calls Polymarket's shared relayer (deploy + approvals), which rate-limits by
 # builder key — one abusive IP must not exhaust it for everyone.
 CREATE_WALLET_RATE_LIMIT = os.environ.get("CREATE_WALLET_RATE_LIMIT", "3/3600")
+
+# Active copied wallets per account. Each one costs the engine a positions read
+# per reconcile pass and a trade poll per detection tick, shared by everyone.
+MAX_FOLLOWS_PER_USER = int(os.environ.get("MAX_FOLLOWS_PER_USER", "25"))
 
 # --- Local UI preview (Vite + Mobile Preview extension) ---
 # Enables POST /api/auth/dev-login and seeds a local-only wallet when the DB

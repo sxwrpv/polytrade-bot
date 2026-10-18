@@ -29,6 +29,11 @@ def _create_rate_limited(ip: str) -> bool:
     limit_s, _, window_s = CREATE_WALLET_RATE_LIMIT.partition("/")
     limit, window = int(limit_s), float(window_s or 3600)
     now = time.time()
+    if len(_create_hits) > 10_000:
+        # Bound memory under a flood of distinct addresses: forget every
+        # client with no hit left inside the window.
+        for key in [k for k, v in _create_hits.items() if not v or now - v[-1] >= window]:
+            del _create_hits[key]
     hits = [t for t in _create_hits.get(ip, []) if now - t < window]
     limited = len(hits) >= limit
     if not limited:
@@ -272,14 +277,22 @@ async def create_wallet(body: CreateWallet, request: Request, response: Response
         await finish_failed_attempt("read_funder", exc)
         raise HTTPException(
             503, "an external wallet operation may have started; retry will resume the same wallet identity")
+    # The wallet exists from here on, so a setup failure must not fail creation.
+    # The failed stage (exception type only) stays on the completed claim
+    # instead: a wallet without exchange approvals must be findable to re-run
+    # them, and a log line alone is easy to miss.
+    setup_error = None
     try:
+        stage = "wait_wallet_ready"
         try:
             await wallet.wait_wallet_ready(client)
+            stage = "ensure_allowances"
             await wallet.ensure_allowances(client)
         except Exception as setup_exc:
-            log.error("wallet setup (readiness/approvals) failed for %s (%s) — "
-                      "wallet exists but may need funding/approval retried later",
-                      funder, type(setup_exc).__name__)
+            setup_error = f"{stage}: {type(setup_exc).__name__}"
+            log.error("wallet setup incomplete for %s: %s raised %s — exchange approvals "
+                      "may be missing; recorded on the wallet creation claim",
+                      funder, stage, type(setup_exc).__name__)
     finally:
         await close_client_safely(client, f"for {funder}")
 
@@ -299,9 +312,9 @@ async def create_wallet(body: CreateWallet, request: Request, response: Response
                 (funder, CURRENT_TERMS_VERSION, telegram_user_id, created_at))
             completed = await tx.execute(
                 "UPDATE wallet_creation_claims SET state='complete',updated_at=?,"
-                "private_key_enc=NULL,lease_owner=NULL,lease_expires_at=NULL,last_error=NULL "
+                "private_key_enc=NULL,lease_owner=NULL,lease_expires_at=NULL,last_error=? "
                 "WHERE telegram_user_id=? AND lease_owner=? AND state='side_effect_started'",
-                (created_at, telegram_user_id, claim_token))
+                (created_at, setup_error, telegram_user_id, claim_token))
             if completed != 1:
                 raise aiosqlite.IntegrityError("wallet creation claim completion failed")
     except Exception as exc:
@@ -474,6 +487,10 @@ async def update_settings(body: SettingsBody, request: Request,
                 await tx.execute(f"UPDATE users SET {cols} WHERE id=?", [*updates.values(), user["id"]])
         if lock is None:
             await apply_update()
+        elif hasattr(lock, "hold"):
+            # Per user: a pause waits only for this user's own in-flight BUY.
+            async with lock.hold(user["id"]):
+                await apply_update()
         else:
             async with lock:
                 await apply_update()
@@ -526,4 +543,18 @@ async def export_key(body: ExportKeyBody, user=Depends(get_current_user)):
                                  "the app from Telegram and retry")
     log.info("export-key step-up ok for %s", str(user.get("id"))[:10])
     pk = wallet.decrypt_private_key(user["private_key_enc"], ENCRYPTION_SECRET)
+    expected = str(user.get("signer_address") or "").lower()
+    if expected:
+        try:
+            actual = wallet.address_for_key(pk).lower()
+        except Exception:
+            actual = ""
+        if actual != expected:
+            # The ciphertext is not bound to its row, so a private_key_enc
+            # copied from another user's row decrypts fine. Handing it out
+            # would turn database WRITE access plus any one account into
+            # every user's key; refuse instead.
+            log.critical("export-key refused for %s: ciphertext does not match "
+                         "the stored signer", str(user.get("id"))[:10])
+            raise HTTPException(409, "wallet key integrity check failed — contact support")
     return {"private_key": pk}

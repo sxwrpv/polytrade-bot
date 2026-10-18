@@ -36,7 +36,8 @@ Used for Telegram login validation, account linking, export step-up, and alerts.
 
 - `DETECTION_POLL_SECONDS` — fast activity cadence; default `2`.
 - `COPY_ENGINE_POLL_SECONDS` — full reconciliation cadence; default `30`.
-- `POLYGON_RPC_URL` — optional HTTP RPC for on-chain polling.
+- `POLYGON_RPC_URL` — optional HTTP RPC for on-chain polling, and the only evidence that lets the engine release an uncertain buy claim (it reads the wallet's own share balance). Without it, uncertain claims are only adopted or kept.
+- `UNCERTAIN_CLAIM_EVIDENCE_SECONDS` — how long after its last change an uncertain claim waits before the on-chain balance may settle it; default `900`.
 - `COPY_ENGINE_AUTOSTART` — direct runtime defaults on; base Compose defaults off for safety.
 - `ENFORCE_FRONTEND_GEOBLOCK` — `1` makes website geoblock a hard order veto; default advisory.
 
@@ -74,6 +75,10 @@ Prefer same-origin. Do not use wildcard CORS for credentialed workflows.
 - `DISCOVER_WALLETS_TARGET`
 - `EQUITY_SNAPSHOT_AUTOSTART`
 - `EQUITY_SNAPSHOT_SECONDS` — default five minutes.
+- `REDEEM_AUTOSTART` — default off. `1` redeems resolved winning positions back into pUSD through the gasless relayer, which needs the builder credentials. It moves real tokens, so enable it on the single production worker only.
+- `REDEEM_SECONDS` — default 30 minutes.
+- `REDEEM_CONCURRENCY` — users redeemed at once; default 2.
+- `REDEEM_RETRY_SECONDS` — wait before retrying a failed or unconfirmed redeem; default six hours.
 
 ## Database
 

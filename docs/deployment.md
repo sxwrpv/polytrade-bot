@@ -101,7 +101,9 @@ two days old, so a stalled refresh degrades visibly rather than silently.
 
 ## Caddy and TLS
 
-The Caddyfile serves `polytradebot.live` and `www.polytradebot.live`, obtains and renews certificates, redirects HTTP, proxies internally, permits Telegram framing, and adds HSTS, `nosniff`, and referrer policy.
+The Caddyfile serves `polytradebot.live` and `www.polytradebot.live`, obtains and renews certificates, redirects HTTP, proxies internally, and adds HSTS, `nosniff`, a referrer policy, and one Content-Security-Policy per surface (the app, `/screener`, `/api/docs`, `/api/redoc`), each still permitting Telegram framing. It caps `/api` request bodies at 64 KB. The plain-HTTP IP block answers only `/api/health`, `/api/ready`, `/api/version` and `/screener/api/health`, the paths `scripts/deploy.sh` verifies through, and returns 404 for everything else.
+
+A page that starts loading a script, stylesheet, font or image from a new host needs that source added to its policy, or the browser refuses it without any server-side error. `tests/test_docker_deployment.py` checks the shipped pages against the policies.
 
 Before reload:
 

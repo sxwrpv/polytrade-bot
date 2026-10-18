@@ -89,7 +89,7 @@ These reduce unsafe and duplicate execution. They do not guarantee uptime, execu
 
 ## Browser and data security
 
-Authenticated access is same-origin by design. CORS is off by default and does not allow credentialed cross-origin use. Supabase is backend-only. Caddy limits framing to PolyTrade and Telegram and adds HSTS, `nosniff`, and a referrer policy. The CSP mainly controls `frame-ancestors`, so cross-site scripting remains high impact.
+Authenticated access is same-origin by design. CORS is off by default and does not allow credentialed cross-origin use. Supabase is backend-only. Caddy limits framing to PolyTrade and Telegram and adds HSTS, `nosniff`, and a referrer policy. Its Content-Security-Policy runs only PolyTrade's own scripts and the Telegram Mini App SDK (plus the Swagger UI and ReDoc bundles on the two API reference pages). That blocks injected script, but it does not make an injection bug harmless. Request bodies to `/api` are capped at 64 KB, and the server's plain-HTTP IP address answers health checks only.
 
 ## Operator incident response
 

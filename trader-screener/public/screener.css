@@ -144,6 +144,7 @@
 .rail-notes { display: grid; gap: 12px; }
 .rail-notes li { list-style: none; color: var(--muted); font-size: 11.5px; line-height: 1.62; }
 .rail-notes li b { color: var(--text); font-weight: 600; }
+.rail-notes.rail-notes-spaced { margin-top: 16px; }
 .rail-hint { color: var(--muted); font-size: 11px; line-height: 1.6; margin-top: 12px; }
 .rail-link { color: var(--cyan); font-family: var(--mono); font-size: 11px; text-decoration: none; }
 .rail-link:hover { text-decoration: underline; }
@@ -180,6 +181,7 @@
 
 /* --- section headings ----------------------------------------------------- */
 .sec { margin-top: 42px; }
+.sec.sec-flush { margin-top: 0; }
 .sec-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
 .sec-head h2 {
   font-family: var(--serif); font-weight: 400; font-size: 26px;

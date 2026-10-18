@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from backend.config import (
     DEFAULT_COPY_RATIO_PCT, DEFAULT_MAX_POSITION_USD,
-    DEFAULT_MAX_PRICE, DEFAULT_MIN_PRICE,
+    DEFAULT_MAX_PRICE, DEFAULT_MIN_PRICE, MAX_FOLLOWS_PER_USER,
 )
 from backend.core import trader_stats
 from backend.core.trader_stats import assign_tier
@@ -58,10 +58,16 @@ _FOLLOW_KEYS = (
 
 
 @asynccontextmanager
-async def _risk_write_guard(request: Request):
+async def _risk_write_guard(request: Request, user_id: str):
+    """Serialize with THIS user's in-flight BUYs (per-user KeyedLocks), so a
+    settings change waits for nobody else's orders. A plain lock, if one was
+    injected, still applies globally."""
     lock = getattr(request.app.state, "copy_risk_lock", None)
     if lock is None:
         yield
+    elif hasattr(lock, "hold"):
+        async with lock.hold(user_id):
+            yield
     else:
         async with lock:
             yield
@@ -118,14 +124,30 @@ async def follow(address: str, body: FollowBody, request: Request,
     address = address.lower()
     if not _ADDR_RE.match(address):
         raise HTTPException(400, "invalid wallet address (expected 0x + 40 hex)")
-    async with _risk_write_guard(request):
+    # Copying your own deposit wallet feeds every copy back in as a new
+    # leader trade, ratcheting the position up to MAX/TRADE on its own.
+    own = {str(user["id"]).lower(), str(user.get("signer_address") or "").lower()}
+    if address in own:
+        raise HTTPException(400, "you cannot copy your own wallet")
+    async with _risk_write_guard(request, user["id"]):
         async with db.transaction(write=True) as tx:
             user_sql = "SELECT id FROM users WHERE id=?" + (" FOR UPDATE" if db.is_pg else "")
             await tx.fetchone(user_sql, (user["id"],))
-            await tx.execute("UPDATE users SET risk_revision=risk_revision+1 WHERE id=?", (user["id"],))
             existing = await tx.fetchone(
                 "SELECT id,is_active,paused FROM followed_traders WHERE user_id=? AND trader_address=?",
                 (user["id"], address))
+            if not (existing and existing["is_active"]):
+                # Every active follow costs the engine a positions read per
+                # reconcile pass and a trade poll every detection tick, so one
+                # account following hundreds of wallets slows copying for all.
+                active = await tx.fetchval(
+                    "SELECT COUNT(*) FROM followed_traders WHERE user_id=? AND is_active=1",
+                    (user["id"],))
+                if int(active or 0) >= MAX_FOLLOWS_PER_USER:
+                    raise HTTPException(
+                        409, f"you can copy at most {MAX_FOLLOWS_PER_USER} wallets — "
+                             "stop copying one first")
+            await tx.execute("UPDATE users SET risk_revision=risk_revision+1 WHERE id=?", (user["id"],))
             if existing:
                 paused = 0 if not existing["is_active"] else existing["paused"]
                 await tx.execute(
@@ -160,7 +182,7 @@ async def update_follow_settings(address: str, body: FollowSettings, request: Re
         if updates.get(key) == 0:
             updates[key] = None
 
-    async with _risk_write_guard(request):
+    async with _risk_write_guard(request, user["id"]):
         async with db.transaction(write=True) as tx:
             user_sql = "SELECT id FROM users WHERE id=?" + (" FOR UPDATE" if db.is_pg else "")
             await tx.fetchone(user_sql, (user["id"],))
@@ -191,7 +213,7 @@ async def update_follow_settings(address: str, body: FollowSettings, request: Re
 @router.delete("/{address}/follow")
 async def unfollow(address: str, request: Request,
                    user=Depends(get_current_user), db=Depends(get_db)):
-    async with _risk_write_guard(request):
+    async with _risk_write_guard(request, user["id"]):
         async with db.transaction(write=True) as tx:
             user_sql = "SELECT id FROM users WHERE id=?" + (" FOR UPDATE" if db.is_pg else "")
             await tx.fetchone(user_sql, (user["id"],))

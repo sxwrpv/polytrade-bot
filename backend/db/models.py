@@ -244,6 +244,11 @@ CREATE INDEX IF NOT EXISTS idx_followed_active
     ON followed_traders(is_active);
 CREATE INDEX IF NOT EXISTS idx_trade_events_user_ts
     ON trade_events(user_id, ts);
+-- Per-position PnL (closed history, stats, by-wallet breakdown) looks events
+-- up by position; without this each of those correlated lookups scans the
+-- whole events table.
+CREATE INDEX IF NOT EXISTS idx_trade_events_position
+    ON trade_events(position_id);
 CREATE INDEX IF NOT EXISTS idx_trader_cache_consistency
     ON trader_cache(consistency_score);
 CREATE INDEX IF NOT EXISTS idx_trader_cache_winrate_30d ON trader_cache(winrate_30d);
@@ -599,6 +604,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_active_position_per_token
 CREATE INDEX IF NOT EXISTS idx_copy_positions_user_trader ON copy_positions(user_id, trader_address);
 CREATE INDEX IF NOT EXISTS idx_followed_active ON followed_traders(is_active);
 CREATE INDEX IF NOT EXISTS idx_trade_events_user_ts ON trade_events(user_id, ts);
+CREATE INDEX IF NOT EXISTS idx_trade_events_position ON trade_events(position_id);
 CREATE INDEX IF NOT EXISTS idx_trader_cache_consistency ON trader_cache(consistency_score);
 CREATE INDEX IF NOT EXISTS idx_trader_cache_winrate_30d ON trader_cache(winrate_30d);
 CREATE INDEX IF NOT EXISTS idx_trader_cache_pnl_30d ON trader_cache(pnl_30d);
@@ -647,4 +653,8 @@ ALTER TABLE copy_open_claims ENABLE ROW LEVEL SECURITY;
 ALTER TABLE trade_events     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE trader_cache     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE equity_snapshots ENABLE ROW LEVEL SECURITY;
+-- Missing until 2026-10: a fresh deploy that ran only this boot schema left
+-- product_events readable and writable through the auto-generated API
+-- (migration 0009 covered databases built from migrations).
+ALTER TABLE product_events   ENABLE ROW LEVEL SECURITY;
 """

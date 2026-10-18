@@ -44,7 +44,9 @@ from backend.config import (
     validate_slippage_pct,
 )
 from backend.core import detection, execution, wallet
+from backend.core.ctf import ChainBalance, ChainHead, CtfError
 from backend.core.health import heartbeats
+from backend.core.locks import KeyedLocks
 from backend.core.polymarket import Position
 from backend.db.database import now_iso
 
@@ -64,21 +66,38 @@ MAX_FILL_ATTEMPTS = 3
 # (stuck closings) before the wallet is treated as ground truth.
 UNCERTAIN_CLAIM_MIN_AGE_SECONDS = 180.0
 CLOSING_STUCK_MIN_AGE_SECONDS = 600.0
-# How long an uncertain BUY claim may stay unresolved before a COMPLETE wallet
-# scan showing no holding is finally accepted as proof that nothing filled.
+# NOT a release timer. A 24h auto-release once lived here and was removed by
+# 44a5b7d ("retain uncertain execution fences"): elapsed time plus indexer
+# absence is not proof that nothing filled. Only the chain can show that
+# (UNCERTAIN_CLAIM_EVIDENCE_SECONDS below); without it an uncertain claim is
+# only ever ADOPTED or RETAINED, and it blocks BUYs of that token for that user
+# until the operator clears it (python -m backend.core.fences). It no longer
+# blocks SELLs of the tracked shares: an exit adds no exposure, and blocking
+# it left users unable to leave a position (review E3, 2026-10-18). The
+# constant survives only as the age the tests use to prove nothing is released
+# early or late.
 #
-# Why this exists: every failure at or after the submission boundary is
-# classified uncertain (execution.place_market_order, deliberately -- a 4xx
-# label proved untrustworthy on 2026-08-23 when shares arrived anyway). But
-# _settle_uncertain_claim only ever ADOPTED or RETAINED, so a claim the wallet
-# could not explain was fenced forever: no new BUY of that token for that user,
-# no SELL, no admin route to clear it, only direct SQL. A rate-limit rejection
-# -- routine against these hosts -- was enough to permanently freeze a token.
-#
-# 24h is far past any indexer lag (seconds), so a token still absent from a
-# complete scan after a day did not fill. Released loudly, never silently.
+# Misclassification is still expensive, which is why failures that provably
+# happen BEFORE submission (execution.PreflightError) are not uncertain.
 UNCERTAIN_CLAIM_RELEASE_SECONDS = float(
     os.environ.get("UNCERTAIN_CLAIM_RELEASE_SECONDS", str(24 * 3600)))
+# On-chain settlement of uncertain BUY claims (review E3). With POLYGON_RPC_URL
+# set, a claim whose last change (the claim, or any of the user's rows for the
+# token opening, closing or closed) is at least this old is weighed against
+# the deposit wallet's own ConditionalTokens balance (core/ctf.py), read at a
+# block mined at least this long after that change:
+#   - no more on-chain than the tracked shares, and the indexer agrees
+#                                                    -> RELEASE, loudly
+#   - more on-chain than tracked, the indexer agrees on the size, and its cost
+#     fits the reserved budget                       -> ADOPT
+#   - anything else (row mid-close, the sources disagree, a failed read)
+#                                                    -> RETAIN
+# The chain is the evidence; the indexer can only veto, never prove. The wait
+# covers late on-chain settlement of an order the exchange reported as failed.
+UNCERTAIN_CLAIM_EVIDENCE_SECONDS = float(
+    os.environ.get("UNCERTAIN_CLAIM_EVIDENCE_SECONDS", "900"))
+# Below this many shares a holding is dust (every wallet scan here uses it).
+SHARE_DUST = 0.01
 # How long a submitted BUY keeps counting against this token's cap even when
 # the exchange reported failure and the indexer has not shown the shares yet.
 #
@@ -122,6 +141,19 @@ MAX_LEADER_TRADE_AGE_SECONDS = float(
 COLLATERAL_CACHE_SECONDS = float(
     os.environ.get("COLLATERAL_CACHE_SECONDS", "5"))
 
+# How long one leader-position read is shared by every follower of the same
+# leader trade. N followers used to cost N identical upstream reads, all in
+# the latency path of the copy.
+LEADER_POSITION_CACHE_SECONDS = 3.0
+
+# Users processed concurrently per engine pass. Each user's own actions stay
+# strictly ordered, and orders for one token are serialized across users
+# (CopyEngine._token_locks) so concurrent followers never quote the same book
+# liquidity. 1 restores the old fully sequential behaviour.
+ENGINE_USER_CONCURRENCY = max(1, int(os.environ.get("ENGINE_USER_CONCURRENCY", "4")))
+# Leaders whose new trades are fetched concurrently per detection tick.
+ENGINE_DETECT_CONCURRENCY = max(1, int(os.environ.get("ENGINE_DETECT_CONCURRENCY", "4")))
+
 # Transport failures on a CACHED SDK client. The client keeps one long-lived
 # HTTP/2 connection, and the edge closes it with a clean GOAWAY after 10,000
 # streams (observed 7x in 3.4 days, always `last_stream_id:19999`). The SDK
@@ -154,7 +186,7 @@ CLIENT_TRANSPORT_ERRORS = (
 
 @dataclass
 class Action:
-    kind: str                 # 'open' | 'close' | 'resize' | 'resolve'
+    kind: str                 # 'open' | 'close' | 'resize' | 'resolve' | 'reanchor'
     token_id: str = ""
     condition_id: str = ""
     outcome: str = ""
@@ -233,7 +265,7 @@ def plan_actions(
                 continue
             # OPEN: copy the leader's dollar position, scaled by RATIO %, capped.
             amt = min(leader_notional * ratio_pct / 100.0, max_pos, remaining)
-            if amt >= dust_floor:
+            if amt > 0 and amt >= dust_floor:
                 actions.append(Action(
                     kind="open", token_id=token, condition_id=p.condition_id,
                     outcome=p.outcome.upper(), side="BUY", amount=amt, notional_usd=amt,
@@ -244,16 +276,33 @@ def plan_actions(
             # RESIZE: mirror the trader's own change in share count for THIS market.
             base = row.get("trader_shares") or p.size
             ratio = (p.size / base) if base > 0 else 1.0
-            if ratio > 1 + resize_threshold and not block_opens:
-                delta_shares = row["shares"] * (ratio - 1)
-                headroom = max_pos - row["notional_usd"]
-                amt = min(delta_shares * p.cur_price, remaining, headroom)
-                if amt >= min_notional:
+            if ratio > 1 + resize_threshold:
+                amt = 0.0
+                if not block_opens:
+                    delta_shares = row["shares"] * (ratio - 1)
+                    headroom = max_pos - row["notional_usd"]
+                    amt = min(delta_shares * p.cur_price, remaining, headroom)
+                # Same floor as _prepare_buy and _clamp_to_verified_position
+                # (the per-wallet IGNORE POSITIONS < $ slider). Planning against
+                # the 1.0 fallback emitted top-ups the reservation step was
+                # certain to refuse, on every tick.
+                if amt > 0 and amt >= dust_floor:
                     actions.append(Action(
                         kind="resize", subkind="increase", token_id=token, side="BUY",
                         amount=amt, notional_usd=amt, reference_price=p.cur_price,
                         trader_shares=p.size, row=row, position=p))
                     remaining -= amt
+                else:
+                    # The increase cannot be followed (MAX/TRADE reached, no
+                    # cash, opens blocked). Move the anchor to the leader's new
+                    # size anyway. Left at the entry-time size, every later trim
+                    # was measured from the wrong base: the fast path read a
+                    # one-third trim of a position that had tripled as a FULL
+                    # exit, and this diff saw no trim at all until the leader
+                    # fell below 75% of the entry-time size.
+                    actions.append(Action(
+                        kind="reanchor", token_id=token, trader_shares=p.size,
+                        row=row, position=p))
             elif ratio < 1 - resize_threshold:
                 shares_to_sell = row["shares"] * (1 - ratio)
                 actions.append(Action(
@@ -275,6 +324,82 @@ def plan_actions(
 
 
 # ---------------------------------------------------------------------------
+# Uncertain-claim evidence (pure, plus the reads it needs). Shared with the
+# operator's fence tool (core/fences.py) so the two can never disagree.
+# ---------------------------------------------------------------------------
+
+RELEASE, ADOPT, RETAIN = "release", "adopt", "retain"
+
+
+def parse_utc(raw) -> dt.datetime | None:
+    """An aware UTC datetime from a stored ISO timestamp, or None."""
+    if not raw:
+        return None
+    try:
+        ts = dt.datetime.fromisoformat(str(raw))
+    except (TypeError, ValueError):
+        return None
+    return ts if ts.tzinfo is not None else ts.replace(tzinfo=dt.timezone.utc)
+
+
+async def live_token_rows(store, user_id: str, token_id: str) -> list[dict]:
+    """The user's tracked rows still holding (or settling) this token."""
+    return await store.fetchall(
+        "SELECT * FROM copy_positions WHERE user_id=? AND token_id=? "
+        "AND status IN ('open','closing','reconciliation_required') ORDER BY id",
+        (user_id, token_id))
+
+
+async def token_last_change(store, user_id: str, token_id: str) -> dt.datetime | None:
+    """When any of the user's rows for this token last opened, started closing
+    or closed: the last moment the tracked share count could have moved."""
+    rows = await store.fetchall(
+        "SELECT opened_at, closing_at, closed_at FROM copy_positions "
+        "WHERE user_id=? AND token_id=?", (user_id, token_id))
+    stamps = [parse_utc(r.get(k)) for r in rows
+              for k in ("opened_at", "closing_at", "closed_at")]
+    stamps = [s for s in stamps if s is not None]
+    return max(stamps) if stamps else None
+
+
+def chain_verdict(*, rows: list[dict], last_change: dt.datetime | None,
+                  onchain: ChainBalance, indexed: float) -> tuple[str, str]:
+    """What the deposit wallet's on-chain balance says about one uncertain BUY
+    claim: (RELEASE | ADOPT | RETAIN, reason). See
+    UNCERTAIN_CLAIM_EVIDENCE_SECONDS.
+
+    rows         the user's live rows for the token (live_token_rows)
+    last_change  latest of the claim's updated_at and token_last_change
+    indexed      shares the data-api shows for the token (0 when it shows none
+                 on a complete scan)
+    """
+    if len(rows) > 1:
+        return RETAIN, f"{len(rows)} tracked rows for one token: reconcile by hand"
+    row = rows[0] if rows else None
+    if row is not None and row.get("status") != "open":
+        return RETAIN, f"tracked row is {row.get('status')}; settle after it does"
+    if last_change is None:
+        return RETAIN, "time of the last change is unknown"
+    waited = onchain.head.timestamp - last_change.timestamp()
+    if waited < UNCERTAIN_CLAIM_EVIDENCE_SECONDS:
+        return RETAIN, (f"block {onchain.head.number} is {waited:.0f}s past the last change, "
+                        f"needs {UNCERTAIN_CLAIM_EVIDENCE_SECONDS:.0f}s")
+    tracked = float(row["shares"]) if row is not None else 0.0
+    held = float(onchain.shares)
+    if held <= tracked + SHARE_DUST:
+        if indexed > tracked + SHARE_DUST:
+            return RETAIN, (f"indexer shows {indexed:.4f} shares but the chain holds "
+                            f"{held:.4f} (tracked {tracked:.4f}): sources disagree")
+        return RELEASE, (f"wallet holds {held:.4f} shares on-chain at block "
+                         f"{onchain.head.number} against {tracked:.4f} tracked: "
+                         "no fill is held")
+    if abs(indexed - held) > SHARE_DUST:
+        return RETAIN, (f"chain holds {held:.4f} shares, indexer {indexed:.4f}: "
+                        "waiting for them to agree before pricing the fill")
+    return ADOPT, f"chain holds {held - tracked:.4f} shares beyond the {tracked:.4f} tracked"
+
+
+# ---------------------------------------------------------------------------
 # Engine
 # ---------------------------------------------------------------------------
 
@@ -283,10 +408,18 @@ class CopyEngine:
                  collateral_fn=None, detector=None,
                  poll_interval: float | None = None,
                  detection_interval: float | None = None,
-                 risk_lock: asyncio.Lock | None = None,
-                 position_notifier=None) -> None:
+                 risk_lock: KeyedLocks | asyncio.Lock | None = None,
+                 position_notifier=None,
+                 clients: dict | None = None,
+                 user_concurrency: int | None = None,
+                 detect_concurrency: int | None = None,
+                 ctf=None) -> None:
         self.db = db
         self.pm = pm
+        # On-chain evidence for settling uncertain BUY claims (core/ctf.py,
+        # UNCERTAIN_CLAIM_EVIDENCE_SECONDS). None, e.g. without
+        # POLYGON_RPC_URL, means uncertain claims only adopt or retain.
+        self._ctf = ctf
         self.poll_interval = poll_interval or COPY_ENGINE_POLL_SECONDS
         self.detection_interval = detection_interval or DETECTION_POLL_SECONDS
         self.detector = detector or detection.ActivityPollDetector(pm)
@@ -300,10 +433,26 @@ class CopyEngine:
         self._collateral_fn = collateral_fn or self._default_collateral
         # Shared with risk-setting API writes in the running app. A pause or
         # stricter limit either wins before a BUY, or is acknowledged only after
-        # an already-submitted BUY completes.
-        self._risk_lock = risk_lock or asyncio.Lock()
+        # an already-submitted BUY completes. Per USER (KeyedLocks): one user's
+        # order no longer blocks every other user's orders and pause button.
+        # A plain asyncio.Lock is still accepted and then acts globally.
+        self._risk_lock = risk_lock if risk_lock is not None else KeyedLocks()
+        # Orders for one token are quoted and submitted one at a time across
+        # users, so concurrent followers of one leader trade each quote a book
+        # that reflects the fills before theirs instead of all claiming the
+        # same liquidity and FOK-killing each other.
+        self._token_locks = KeyedLocks()
+        self.user_concurrency = max(1, user_concurrency or ENGINE_USER_CONCURRENCY)
+        self.detect_concurrency = max(1, detect_concurrency or ENGINE_DETECT_CONCURRENCY)
         self._position_notifier = position_notifier
-        self._clients: dict[str, object] = {}
+        # May be the API's own per-user client cache, so a user costs one
+        # authenticated client (and one HTTP/2 connection) per process, not two.
+        self._clients: dict[str, object] = clients if clients is not None else {}
+        # (trader, condition_id, token) -> (monotonic_expiry, Task). See
+        # LEADER_POSITION_CACHE_SECONDS.
+        self._leader_pos_cache: dict[tuple, tuple] = {}
+        # trader -> in-flight get_all_positions, for one reconcile pass only.
+        self._pass_leader_cache: dict | None = None
         # fast-detection cursors / dedupe, per (user_id, trader_address).
         # _seen values are insertion-ordered dicts used as bounded sets.
         self._cursors: dict[tuple, int] = {}
@@ -359,10 +508,12 @@ class CopyEngine:
     # --- uncertain-claim / stuck-closing reconciliation ---------------------
     async def _reconcile_uncertain_claims(self) -> None:
         """Settle BUY claims parked in 'uncertain' (submission outcome unknown).
-        A wallet holding may prove a bounded fill and be adopted. Absence is not
-        proof of non-fill, and an aggregate larger than the reserved claim is
-        quarantined. This intentionally prefers a stuck token requiring manual
-        review over another BUY that can breach the configured cap."""
+        A wallet holding may prove a bounded fill and be adopted. Indexer
+        absence is not proof of non-fill; only the wallet's on-chain balance
+        can release a claim (UNCERTAIN_CLAIM_EVIDENCE_SECONDS), and an
+        aggregate larger than the reserved claim is quarantined. This
+        intentionally prefers a stuck token requiring manual review over
+        another BUY that can breach the configured cap."""
         cutoff = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(
             seconds=UNCERTAIN_CLAIM_MIN_AGE_SECONDS)).isoformat()
         claims = await self.db.fetchall(
@@ -371,6 +522,9 @@ class CopyEngine:
         by_user: dict[str, list[dict]] = defaultdict(list)
         for c in claims:
             by_user[c["user_id"]].append(c)
+        ctf = getattr(self, "_ctf", None)
+        head: ChainHead | None = None
+        head_failed = False
         for user_id, user_claims in by_user.items():
             try:
                 positions, complete = await self.pm.get_all_positions(
@@ -379,21 +533,52 @@ class CopyEngine:
                 log.exception("uncertain reconciliation: position read failed for %s",
                               user_id[:10])
                 continue
-            held = {p.asset: p for p in positions if p.size > 0.01}
+            held = {p.asset: p for p in positions if p.size > SHARE_DUST}
             for claim in user_claims:
                 # Absence from a truncated wallet page proves nothing. Releasing
                 # this claim would permit another BUY while the first may already
-                # be held beyond the page boundary.
+                # be held beyond the page boundary. (On-chain evidence does not
+                # lift this: a release also needs the indexer not to object.)
                 if claim["token_id"] not in held and not complete:
                     log.warning("uncertain claim retained: wallet scan incomplete for %s %s",
                                 user_id[:10], claim["token_id"])
                     continue
+                onchain = None
+                if ctf is not None and self._evidence_due(claim):
+                    if head is None and not head_failed:
+                        try:     # one block per pass, every balance read at it
+                            head = await ctf.head()
+                        except CtfError as exc:
+                            head_failed = True
+                            log.warning("on-chain claim evidence unavailable this pass: %s", exc)
+                        except Exception:
+                            head_failed = True
+                            log.exception("on-chain claim evidence unavailable this pass")
+                    if head is not None:
+                        try:
+                            onchain = await ctf.balance(user_id, claim["token_id"], head)
+                        except CtfError as exc:
+                            log.warning("on-chain balance unavailable for %s %s: %s",
+                                        user_id[:10], claim["token_id"], exc)
+                        except Exception:
+                            log.exception("on-chain balance unavailable for %s %s",
+                                          user_id[:10], claim["token_id"])
                 try:
                     await self._settle_uncertain_claim(
-                        user_id, claim, held.get(claim["token_id"]))
+                        user_id, claim, held.get(claim["token_id"]), onchain)
                 except Exception:
                     log.exception("uncertain claim settlement failed: %s %s",
                                   user_id[:10], claim["token_id"])
+
+    @staticmethod
+    def _evidence_due(claim: dict) -> bool:
+        """Old enough that on-chain evidence could settle it. Cheap gate only:
+        chain_verdict re-checks the wait against the block actually read."""
+        changed = parse_utc(claim.get("updated_at"))
+        if changed is None:
+            return False
+        age = (dt.datetime.now(dt.timezone.utc) - changed).total_seconds()
+        return age >= UNCERTAIN_CLAIM_EVIDENCE_SECONDS
 
     @staticmethod
     def _claim_age_seconds(claim: dict) -> float | None:
@@ -411,19 +596,24 @@ class CopyEngine:
             return (dt.datetime.now(dt.timezone.utc) - ts).total_seconds()
         return None
 
-    async def _settle_uncertain_claim(self, user_id: str, claim: dict, p) -> None:
+    async def _settle_uncertain_claim(self, user_id: str, claim: dict, p,
+                                      onchain: ChainBalance | None = None) -> None:
         token = claim["token_id"]
         row = await self.db.fetchone(
             "SELECT * FROM copy_positions WHERE user_id=? AND token_id=? "
             "AND status IN ('open','closing','reconciliation_required')",
             (user_id, token))
+        if claim.get("action") == "open" and row is not None:
+            # a tracked row accounts for the shares — nothing left to adopt
+            log.warning("uncertain OPEN claim released (tracked row exists): %s %s",
+                        user_id[:10], token)
+            await self._release_buy_claim(user_id, token, claim["claim_id"])
+            return
+        if onchain is not None:
+            await self._settle_on_chain(user_id, claim, p, onchain)
+            return
         if claim.get("action") == "open":
-            if row is not None:
-                # a tracked row accounts for the shares — nothing left to adopt
-                log.warning("uncertain OPEN claim released (tracked row exists): %s %s",
-                            user_id[:10], token)
-                await self._release_buy_claim(user_id, token, claim["claim_id"])
-            elif p is None:
+            if p is None:
                 # Neither elapsed time nor indexer absence proves non-fill.
                 # Retain the durable fence until authoritative reconciliation.
                 log.warning("uncertain OPEN claim retained (no authoritative fill status): %s %s",
@@ -433,48 +623,130 @@ class CopyEngine:
             return
         # resize-increase: realign the row only when a bounded extra holding is
         # visible. Any inconclusive or oversized result retains the fence.
+        # SELLs of the tracked shares no longer wait for this claim (E3), so the
+        # row may have shrunk or closed since; a holding the indexer shows is
+        # only weighed against a row it has had time to see.
+        if p is not None and await self._changed_within(
+                user_id, token, UNCERTAIN_CLAIM_MIN_AGE_SECONDS):
+            log.warning("uncertain RESIZE claim retained (tracked row changed recently): %s %s",
+                        user_id[:10], token)
+            return
+        if row is None and p is not None:
+            # The row closed while the claim waited. No tracked row explains
+            # what the wallet still holds, so it settles like an OPEN claim.
+            await self._adopt_uncertain_fill(user_id, claim, p)
+            return
         if row is None or p is None:
             log.warning("uncertain RESIZE claim retained (row/holding inconclusive): %s %s",
                         user_id[:10], token)
             return
-        extra = float(p.size) - float(row["shares"])
-        if row["status"] == "open" and extra > 0.01:
-            spent = round(extra * float(p.avg_price or 0), 2)
-            reserved = float(claim.get("reserved_usd") or 0)
-            tolerance = max(0.25, reserved * 0.02)
-            if spent > reserved + tolerance:
-                log.critical("uncertain RESIZE quarantined: observed $%.2f exceeds $%.2f claim for %s %s",
-                             spent, reserved, user_id[:10], token)
-                return
-            async with self.db.transaction(write=True) as tx:
-                deleted = await tx.execute(
-                    "DELETE FROM copy_open_claims WHERE user_id=? AND token_id=? "
-                    "AND claim_id=? AND state='uncertain'",
-                    (user_id, token, claim["claim_id"]))
-                if deleted != 1:
-                    return   # settled elsewhere
-                changed = await tx.execute(
-                    "UPDATE copy_positions SET shares=?,entry_price=?,notional_usd=? "
-                    "WHERE id=? AND status='open'",
-                    (float(p.size), float(p.avg_price),
-                     round(float(p.size) * float(p.avg_price), 2), row["id"]))
-                if changed != 1:
-                    raise RuntimeError("uncertain resize adoption lost position race")
-                await self._event(user_id, row["id"], "partial", spent, None, store=tx)
-            log.warning("uncertain RESIZE adopted from wallet: %s %s +%.2f shares",
-                        user_id[:10], token, extra)
-            await self._notify_position({
-                "event": "increased", "user_id": user_id, "position_id": row["id"],
-                "market_title": row.get("market_title", ""),
-                "market_slug": row.get("market_slug", ""),
-                "outcome": row.get("outcome", ""),
-                "shares": extra, "entry_price": float(p.avg_price),
-                "notional_usd": spent, "total_shares": float(p.size),
-                "trader_address": row.get("trader_address"),
-            })
-        else:
+        if row["status"] != "open":
             log.warning("uncertain RESIZE claim retained (no authoritative non-fill): %s %s",
                         user_id[:10], token)
+            return
+        await self._adopt_uncertain_resize(user_id, claim, row, p)
+
+    async def _changed_within(self, user_id: str, token_id: str, seconds: float) -> bool:
+        last = await token_last_change(self.db, user_id, token_id)
+        return last is not None and (
+            dt.datetime.now(dt.timezone.utc) - last).total_seconds() < seconds
+
+    async def _settle_on_chain(self, user_id: str, claim: dict, p,
+                               onchain: ChainBalance) -> None:
+        """Settle from the deposit wallet's on-chain balance (chain_verdict)."""
+        token = claim["token_id"]
+        rows = await live_token_rows(self.db, user_id, token)
+        stamps = [t for t in (parse_utc(claim.get("updated_at")),
+                              await token_last_change(self.db, user_id, token))
+                  if t is not None]
+        verdict, reason = chain_verdict(
+            rows=rows, last_change=max(stamps) if stamps else None, onchain=onchain,
+            indexed=float(p.size) if p is not None else 0.0)
+        kind = str(claim.get("action") or "").upper()
+        if verdict == RELEASE:
+            if await self._release_on_evidence(user_id, claim, rows):
+                log.warning("uncertain %s claim RELEASED on on-chain evidence: %s %s: %s "
+                            "(reserved $%.2f, last error: %s)", kind, user_id[:10], token,
+                            reason, float(claim.get("reserved_usd") or 0),
+                            claim.get("last_error"))
+            else:
+                log.warning("uncertain %s claim retained: tracked rows changed while "
+                            "settling %s %s", kind, user_id[:10], token)
+        elif verdict == ADOPT:
+            if rows:
+                await self._adopt_uncertain_resize(user_id, claim, rows[0], p)
+            else:
+                await self._adopt_uncertain_fill(user_id, claim, p)
+        else:
+            log.warning("uncertain %s claim retained: %s %s: %s",
+                        kind, user_id[:10], token, reason)
+
+    async def _release_on_evidence(self, user_id: str, claim: dict,
+                                   rows: list[dict]) -> bool:
+        """Delete the claim only while the tracked rows the evidence was
+        weighed against still stand. Database.claim_managed_sell flips a row to
+        closing under the same user lock, so no SELL can start in between."""
+        def shape(rs):
+            return [(r["id"], r["status"], round(float(r["shares"]), 9)) for r in rs]
+
+        async with self.db.transaction(write=True) as tx:
+            user_sql = "SELECT id FROM users WHERE id=?" + (
+                " FOR UPDATE" if self.db.is_pg else "")
+            await tx.fetchone(user_sql, (user_id,))
+            if shape(await live_token_rows(tx, user_id, claim["token_id"])) != shape(rows):
+                return False
+            deleted = await tx.execute(
+                "DELETE FROM copy_open_claims WHERE user_id=? AND token_id=? "
+                "AND claim_id=? AND state='uncertain'",
+                (user_id, claim["token_id"], claim["claim_id"]))
+            return deleted == 1
+
+    async def _adopt_uncertain_resize(self, user_id: str, claim: dict, row: dict, p) -> None:
+        """The top-up behind an uncertain claim demonstrably filled (the wallet
+        holds more than the tracked row): realign the row to the wallet within
+        the reserved budget and clear the claim atomically."""
+        token = claim["token_id"]
+        extra = float(p.size) - float(row["shares"])
+        if extra <= SHARE_DUST:
+            log.warning("uncertain RESIZE claim retained (no authoritative non-fill): %s %s",
+                        user_id[:10], token)
+            return
+        spent = round(extra * float(p.avg_price or 0), 2)
+        reserved = float(claim.get("reserved_usd") or 0)
+        tolerance = max(0.25, reserved * 0.02)
+        if spent > reserved + tolerance:
+            log.critical("uncertain RESIZE quarantined: observed $%.2f exceeds $%.2f claim for %s %s",
+                         spent, reserved, user_id[:10], token)
+            return
+        async with self.db.transaction(write=True) as tx:
+            deleted = await tx.execute(
+                "DELETE FROM copy_open_claims WHERE user_id=? AND token_id=? "
+                "AND claim_id=? AND state='uncertain'",
+                (user_id, token, claim["claim_id"]))
+            if deleted != 1:
+                return   # settled elsewhere
+            # Only the row the wallet was compared with: a partial SELL may
+            # have changed it since.
+            changed = await tx.execute(
+                "UPDATE copy_positions SET shares=?,entry_price=?,notional_usd=? "
+                "WHERE id=? AND status='open' AND ABS(shares - ?) < 1e-9",
+                (float(p.size), float(p.avg_price),
+                 round(float(p.size) * float(p.avg_price), 2), row["id"],
+                 float(row["shares"])))
+            if changed != 1:
+                raise RuntimeError("uncertain resize adoption lost position race")
+            await self._event(user_id, row["id"], "partial", spent, None, store=tx)
+        log.warning("uncertain RESIZE adopted from wallet: %s %s +%.2f shares",
+                    user_id[:10], token, extra)
+        await self._notify_position({
+            "event": "increased", "user_id": user_id, "position_id": row["id"],
+            "market_title": row.get("market_title", ""),
+            "market_slug": row.get("market_slug", ""),
+            "outcome": row.get("outcome", ""),
+            "shares": extra, "entry_price": float(p.avg_price),
+            "notional_usd": spent, "total_shares": float(p.size),
+            "trader_address": row.get("trader_address"),
+        })
 
     async def _adopt_uncertain_fill(self, user_id: str, claim: dict, p) -> None:
         """The BUY behind an uncertain claim demonstrably filled (the wallet
@@ -495,6 +767,8 @@ class CopyEngine:
             user_sql = "SELECT id FROM users WHERE id=?" + (
                 " FOR UPDATE" if self.db.is_pg else "")
             await tx.fetchone(user_sql, (user_id,))
+            if await live_token_rows(tx, user_id, claim["token_id"]):
+                return   # a tracked row explains the holding after all
             deleted = await tx.execute(
                 "DELETE FROM copy_open_claims WHERE user_id=? AND token_id=? "
                 "AND claim_id=? AND state='uncertain'",
@@ -623,6 +897,12 @@ class CopyEngine:
                 pass
         self._clients.clear()
         self._collateral_cache.clear()
+        ctf = getattr(self, "_ctf", None)
+        if ctf is not None:
+            try:
+                await ctf.aclose()
+            except Exception:
+                pass
 
     async def _loop(self, fn, interval: float, stop_event: asyncio.Event) -> None:
         name = getattr(fn, "__name__", str(fn)).strip("_")
@@ -654,6 +934,7 @@ class CopyEngine:
         for f in follows:
             by_trader[f["trader_address"]].append(f)
 
+        pending_by_trader: dict[str, list[dict]] = {}
         for trader_address, trader_follows in by_trader.items():
             pending = []
             for f in trader_follows:
@@ -663,50 +944,87 @@ class CopyEngine:
                     self._cursors[key] = int(time.time())
                     continue
                 pending.append(f)
-            if not pending:
-                continue
-            # One detector call per TRADER per tick, regardless of follower count.
-            # Detectors with per-trader server-side cursor state (OnChainDetector's
-            # _last_block) would otherwise have their cursor consumed by whichever
-            # follower's row happened to be processed first, silently starving
-            # every other follower of that trader for the tick. Fan the same
-            # result out to every follower below instead.
+            if pending:
+                pending_by_trader[trader_address] = pending
+
+        # One detector call per TRADER per tick, regardless of follower count.
+        # Detectors with per-trader server-side cursor state (OnChainDetector's
+        # _last_block) would otherwise have their cursor consumed by whichever
+        # follower's row happened to be processed first, silently starving
+        # every other follower of that trader for the tick. Fan the same
+        # result out to every follower below instead.
+        fetch_gate = asyncio.Semaphore(self.detect_concurrency)
+
+        async def fetch(trader_address: str, pending: list[dict]):
             since = min(self._cursors[(f["user_id"], trader_address)] for f in pending)
-            try:
-                trades = sorted(await self.detector.new_trades(trader_address, since),
-                                key=lambda x: x.timestamp)
-            except Exception:
-                log.exception("detect failed for %s", trader_address)
+            async with fetch_gate:
+                try:
+                    found = await self.detector.new_trades(trader_address, since)
+                except Exception:
+                    log.exception("detect failed for %s", trader_address)
+                    return trader_address, []
+            return trader_address, sorted(found, key=lambda x: x.timestamp)
+
+        fetched = await asyncio.gather(
+            *(fetch(t, pending) for t, pending in pending_by_trader.items()))
+
+        # One task per USER: a user's trades stay strictly ordered, and one
+        # user's slow order no longer delays every other follower's copy.
+        per_user: dict[str, list[tuple[dict, list]]] = defaultdict(list)
+        for trader_address, trades in fetched:
+            if not trades:
                 continue
-            for f in pending:
-                key = (f["user_id"], trader_address)
-                cursor = self._cursors[key]
-                seen = self._seen[key]
-                for t in trades:
-                    if t.timestamp < cursor:
-                        continue
-                    # The cursor second is shared. The activity indexer does
-                    # not publish a second's fills together, so a fill that
-                    # surfaces a tick after another fill in the same second
-                    # arrives with timestamp == cursor, and skipping the whole
-                    # second dropped it from the fast path. Only a tx_hash
-                    # tells a repeat from a new fill, so without one the trade
-                    # stays skipped: re-handling a proportional SELL would
-                    # sell twice.
-                    if t.timestamp == cursor and not t.tx_hash:
-                        continue
-                    if t.tx_hash and t.tx_hash in seen:
-                        continue
-                    try:
-                        await self._handle_leader_trade(f, t)
-                    except Exception:
-                        log.exception("handle leader trade failed")
-                    if t.tx_hash:
-                        seen[t.tx_hash] = None
-                        if len(seen) > 2000:      # bound the dedupe window;
-                            for h in list(seen)[:1000]:   # dict = insertion-ordered,
-                                del seen[h]               # so this drops the oldest
-                    self._cursors[key] = max(self._cursors[key], t.timestamp)
+            for f in pending_by_trader[trader_address]:
+                per_user[f["user_id"]].append((f, trades))
+        await self._run_per_user(per_user, self._apply_leader_trades)
+
+    async def _apply_leader_trades(self, user_id: str,
+                                   items: list[tuple[dict, list]]) -> None:
+        for f, trades in items:
+            key = (user_id, f["trader_address"])
+            cursor = self._cursors[key]
+            seen = self._seen[key]
+            for t in trades:
+                if t.timestamp < cursor:
+                    continue
+                # The cursor second is shared. The activity indexer does
+                # not publish a second's fills together, so a fill that
+                # surfaces a tick after another fill in the same second
+                # arrives with timestamp == cursor, and skipping the whole
+                # second dropped it from the fast path. Only a tx_hash
+                # tells a repeat from a new fill, so without one the trade
+                # stays skipped: re-handling a proportional SELL would
+                # sell twice.
+                if t.timestamp == cursor and not t.tx_hash:
+                    continue
+                if t.tx_hash and t.tx_hash in seen:
+                    continue
+                try:
+                    await self._handle_leader_trade(f, t)
+                except Exception:
+                    log.exception("handle leader trade failed")
+                if t.tx_hash:
+                    seen[t.tx_hash] = None
+                    if len(seen) > 2000:      # bound the dedupe window;
+                        for h in list(seen)[:1000]:   # dict = insertion-ordered,
+                            del seen[h]               # so this drops the oldest
+                self._cursors[key] = max(self._cursors[key], t.timestamp)
+
+    async def _run_per_user(self, work: dict, fn) -> None:
+        """Run fn(user_id, items) per user, at most user_concurrency at once.
+
+        A failure is logged for that user and never stops the others.
+        """
+        gate = asyncio.Semaphore(self.user_concurrency)
+
+        async def one(user_id, items):
+            async with gate:
+                try:
+                    await fn(user_id, items)
+                except Exception:
+                    log.exception("engine pass failed for user %s", str(user_id)[:10])
+
+        await asyncio.gather(*(one(u, items) for u, items in work.items()))
 
     async def _handle_leader_trade(self, follow: dict, trade) -> None:
         detected_at = time.time()
@@ -729,6 +1047,16 @@ class CopyEngine:
                 return
             if await self._opens_blocked(user_id, trader, frisk["daily_limit"]):
                 return
+            if leader_age > MAX_LEADER_TRADE_AGE_SECONDS:
+                # Copying this now means entering at a price the leader never
+                # paid, on a decision they made long enough ago that the edge
+                # is gone. Skip rather than chase. Checked before any upstream
+                # read: a stale trade must not cost a positions lookup, a client
+                # build and a balance read only to be discarded.
+                log.info(
+                    "fast-open skipped %s age=%.1fs (>%.0fs) reason=leader_trade_too_old trader=%s",
+                    token, leader_age, MAX_LEADER_TRADE_AGE_SECONDS, trader[:10])
+                return
             # Leader's TOTAL position in this market — needed BOTH to size the
             # copy (ratio-of-leader) and as trader_shares for the resize math
             # (the reconciler resizes off p.size/trader_shares, so recording a
@@ -736,19 +1064,16 @@ class CopyEngine:
             # increase and churn). Falls back to this trade if not yet indexed.
             trader_total = trade.size
             leader_price = float(trade.price or 0)
-            match = None
-            try:
-                if trade.condition_id:   # targeted read — fast and truncation-proof
-                    tpos = await self.pm.get_positions(
-                        trader, size_threshold=0, market=trade.condition_id)
-                else:
-                    tpos = await self.pm.get_positions(trader, size_threshold=0)
-                match = next((p for p in tpos if p.asset == token), None)
-                if match and match.size > 0:
-                    trader_total = match.size
-                    leader_price = match.cur_price or leader_price
-            except Exception:
-                log.exception("trader position lookup failed; using trade size")
+            # Targeted read when the trade names its market (fast and
+            # truncation-proof), shared by every follower of this trade.
+            looked_up, match = await self._leader_position(
+                trader, token, trade.condition_id or "")
+            if not looked_up:
+                log.warning("trader position lookup failed for %s; using trade size",
+                            trader[:10])
+            if match is not None and match.size > 0:
+                trader_total = match.size
+                leader_price = match.cur_price or leader_price
             leader_notional = trader_total * (leader_price or float(trade.price or 0))
             # The on-chain detector's OrderFilled events carry NO market
             # metadata — fill condition/outcome/slug/title from the leader's
@@ -798,14 +1123,6 @@ class CopyEngine:
                     "fast-open skipped %s age=%.1fs notional=%.2f reason=below_dust_floor trader=%s",
                     token, leader_age, notional, trader[:10])
                 return
-            if leader_age > MAX_LEADER_TRADE_AGE_SECONDS:
-                # Copying this now means entering at a price the leader never
-                # paid, on a decision they made long enough ago that the edge
-                # is gone. Skip rather than chase.
-                log.info(
-                    "fast-open skipped %s age=%.1fs (>%.0fs) reason=leader_trade_too_old trader=%s",
-                    token, leader_age, MAX_LEADER_TRADE_AGE_SECONDS, trader[:10])
-                return
             log.info(
                 "fast-open candidate %s age=%.1fs side=%s notional=%.2f ref=%.4f trader=%s",
                 token, leader_age, trade.side.upper(), notional, float(trade.price or 0), trader[:10])
@@ -839,6 +1156,25 @@ class CopyEngine:
             # total we recorded at open/last-resize; ≥95% of it counts as a
             # full exit (avoids dust positions from rounding).
             base = float(existing.get("trader_shares") or 0.0)
+            if base > 0:
+                # A stale anchor turns a trim into an exit: anchored at 1,000
+                # shares, a leader who grew to 3,000 and sold 1,000 reads as
+                # 100%. The reconciler re-anchors when it cannot follow an
+                # increase, but a trim can land before its next pass. If the
+                # leader visibly holds well above the anchor, the proportion
+                # here is not trustworthy — leave this trim to the reconciler,
+                # which sizes it from fresh positions.
+                looked_up, held = await self._leader_position(
+                    trader, token,
+                    getattr(trade, "condition_id", "") or existing.get("condition_id") or "")
+                # A trade covering (almost) everything still visible is an
+                # exit whatever the anchor says, and must not wait.
+                if (looked_up and held is not None
+                        and held.size > base * (1 + RESIZE_THRESHOLD)
+                        and trade.size < 0.95 * held.size):
+                    log.info("fast-sell deferred %s: leader holds %.2f vs anchor %.2f — "
+                             "reconciler will size this trim", token, held.size, base)
+                    return
             fraction = min(1.0, trade.size / base) if base > 0 else 1.0
             client = await self._get_client(user)
             # Claim the row before placing the exit order: if a manual close or
@@ -850,10 +1186,11 @@ class CopyEngine:
             full_exit = fraction >= 0.95
             try:
                 sell_shares = existing["shares"] if full_exit else existing["shares"] * fraction
-                result = await self._place_order(
-                    client, self.pm, token, "SELL", sell_shares,
-                    reference_price=trade.price,
-                    max_slippage_pct=frisk["slippage"])
+                async with self._token_locks.hold(token):
+                    result = await self._place_order(
+                        client, self.pm, token, "SELL", sell_shares,
+                        reference_price=trade.price,
+                        max_slippage_pct=frisk["slippage"])
             except Exception:
                 # Raised failures are before execution's submission boundary.
                 await self.db.try_transition(existing["id"], "closing", "open")
@@ -923,11 +1260,69 @@ class CopyEngine:
         by_user: dict[str, list[dict]] = {}
         for f in follows:
             by_user.setdefault(f["user_id"], []).append(f)
-        for user_id, user_follows in by_user.items():
+        # One positions read per distinct LEADER per pass, shared by every
+        # follower. It used to be one read per (user, leader): a hundred users
+        # copying one whale cost a hundred identical paged reads every pass,
+        # which is the traffic that draws data-api 429s for everyone.
+        # Held on the instance for this pass only: one reconcile loop runs at
+        # a time, and _sync_user keeps its (user_id, follows) signature.
+        self._pass_leader_cache = leader_cache = {}
+        try:
+            await self._run_per_user(by_user, self._sync_user)
+        finally:
+            self._pass_leader_cache = None
+            for task in leader_cache.values():
+                if not task.done():
+                    task.cancel()
+
+    async def _leader_positions(self, trader: str):
+        """(positions, complete) for a leader, read once per reconcile pass.
+
+        Concurrent followers await the same in-flight read. Shielded so one
+        follower's cancellation cannot cancel the read for the others.
+        """
+        cache = getattr(self, "_pass_leader_cache", None)
+        if cache is None:
+            return await self.pm.get_all_positions(trader)
+        task = cache.get(trader)
+        if task is None:
+            task = cache[trader] = asyncio.ensure_future(self.pm.get_all_positions(trader))
+        return await asyncio.shield(task)
+
+    async def _leader_position(self, trader: str, token: str,
+                               condition_id: str = "") -> tuple[bool, object | None]:
+        """(looked_up, position) for one leader token, shared briefly.
+
+        looked_up=False means the read failed and nothing is known; position
+        None with looked_up=True means the leader does not hold the token (or
+        it was outside the single page an untargeted read returns).
+        """
+        cache = self.__dict__.setdefault("_leader_pos_cache", {})
+        key = (trader, condition_id, token)
+        now = time.monotonic()
+        entry = cache.get(key)
+        if entry is None or entry[0] <= now:
+            if len(cache) > 2048:
+                for k in [k for k, v in cache.items() if v[0] <= now]:
+                    cache.pop(k, None)
             try:
-                await self._sync_user(user_id, user_follows)
+                if condition_id:
+                    read = self.pm.get_positions(trader, size_threshold=0, market=condition_id)
+                else:
+                    read = self.pm.get_positions(trader, size_threshold=0)
+                entry = (now + LEADER_POSITION_CACHE_SECONDS, asyncio.ensure_future(read))
             except Exception:
-                log.exception("sync failed for user %s", user_id)
+                log.exception("leader position lookup could not start for %s", trader[:10])
+                return False, None
+            cache[key] = entry
+        task = entry[1]
+        try:
+            positions = await asyncio.shield(task)
+        except Exception:
+            if cache.get(key) is entry:
+                cache.pop(key, None)   # never cache a failure
+            return False, None
+        return True, next((p for p in positions if p.asset == token), None)
 
     # --- per-user ----------------------------------------------------------
     async def _sync_user(self, user_id: str, follows: list[dict]) -> None:
@@ -962,7 +1357,7 @@ class CopyEngine:
             # rows are managed the same way — exit-only.
             if (frisk["paused"] or inactive) and not open_rows:
                 continue
-            positions, complete = await self.pm.get_all_positions(trader)
+            positions, complete = await self._leader_positions(trader)
             # Backfill market metadata for rows opened blind by the on-chain
             # fast path (OrderFilled events carry none): without condition_id
             # a dead-market position can never be matched to its resolution.
@@ -1111,7 +1506,14 @@ class CopyEngine:
     # --- execution + persistence ------------------------------------------
     async def _execute(self, user_id: str, client, action: Action,
                        slippage: float = MAX_COPY_SLIPPAGE_PCT) -> float:
+        if action.kind == "reanchor":
+            await self._reanchor(user_id, action)
+            return 0.0
         if self._fill_budget_exhausted(user_id, action):
+            if action.kind == "resize" and action.subkind == "increase":
+                # We have given up following this increase, so later trims
+                # must be measured from the leader's current size (plan_actions).
+                await self._reanchor(user_id, action)
             return 0.0          # killed; re-arms if the leader's intent changes
         if action.side == "BUY":
             return await self._execute_buy(user_id, client, action)
@@ -1129,17 +1531,27 @@ class CopyEngine:
                 log.info("sell skipped (already claimed): %s", action.row["id"])
                 return 0.0
         try:
-            result = await self._place_order(
-                client, self.pm, action.token_id, action.side, action.amount,
-                reference_price=action.reference_price, max_slippage_pct=slippage)
-        except httpx.HTTPStatusError as e:
-            # A dead order book (404) on a CLOSE means the market resolved
-            # before we could exit — the position redeems instead of selling.
-            if action.kind == "close" and e.response.status_code == 404:
+            async with self._token_locks.hold(action.token_id):
+                result = await self._place_order(
+                    client, self.pm, action.token_id, action.side, action.amount,
+                    reference_price=action.reference_price, max_slippage_pct=slippage)
+        except (httpx.HTTPStatusError, execution.PreflightError) as e:
+            status = (e.response.status_code if isinstance(e, httpx.HTTPStatusError)
+                      else e.status_code)
+            # A dead order book (404) on a CLOSE means the market closed
+            # before we could exit — it resolves (and redeems) instead.
+            if action.kind == "close" and status == 404:
                 await self._resolve_departed(user_id, action.row)
                 return 0.0
             if claimed_sell:
                 await self.db.try_transition(action.row["id"], "closing", "open")
+            if isinstance(e, execution.PreflightError):
+                # Provably never sent. Counted like any other non-fill so a
+                # broken book is not re-read every tick forever, and the rest
+                # of this user's pass carries on.
+                self._record_fill_outcome(user_id, action, filled=False, reason=str(e))
+                log.warning("order not sent (%s %s): %s", action.kind, action.token_id, e)
+                return 0.0
             raise
         except Exception:
             # execution turns exceptions after submission into an uncertain
@@ -1176,7 +1588,7 @@ class CopyEngine:
         adopted positions, anything untracked) can never grow a position past
         the cap. Fails CLOSED: if the wallet can't be read, the copy is
         skipped and the reconciler retries next tick."""
-        async with self._risk_lock:
+        async with self._risk_lock_for(user_id):
             prepared = await self._prepare_buy(user_id, action)
             if prepared is None:
                 return 0.0
@@ -1196,11 +1608,25 @@ class CopyEngine:
             prior_submission = list(prior_submission) if prior_submission else None
             self._note_submitted(user_id, action.token_id, action.amount)
             try:
-                result = await self._place_order(
-                    client, self.pm, action.token_id, "BUY", action.amount,
-                    reference_price=action.reference_price,
-                    max_slippage_pct=risk["slippage"],
-                    min_price=risk["min_price"], max_price=risk["max_price"])
+                async with self._token_locks.hold(action.token_id):
+                    result = await self._place_order(
+                        client, self.pm, action.token_id, "BUY", action.amount,
+                        reference_price=action.reference_price,
+                        max_slippage_pct=risk["slippage"],
+                        min_price=risk["min_price"], max_price=risk["max_price"])
+            except execution.PreflightError as exc:
+                # Failed before the submission boundary: nothing reached the
+                # exchange. Undo exactly what an unsubmitted attempt undoes.
+                # Parking this as uncertain fenced the token forever, because
+                # no wallet will ever show shares for an order never sent.
+                log.warning("buy not sent (%s %s): %s", action.kind, action.token_id, exc)
+                if prior_submission is None:
+                    self._clear_submitted(user_id, action.token_id)
+                else:
+                    self._submitted[(user_id, action.token_id)] = prior_submission
+                self._record_fill_outcome(user_id, action, filled=False, reason=str(exc))
+                await self._release_buy_claim(user_id, action.token_id, action.claim_id)
+                return 0.0
             except Exception as exc:
                 # A parser or collaborator can raise AFTER the SDK submitted.
                 # Without explicit pre-submission evidence, retain the fence.
@@ -1434,6 +1860,28 @@ class CopyEngine:
             "DELETE FROM copy_open_claims WHERE user_id=? AND token_id=? AND claim_id=?",
             (user_id, token_id, claim_id))
 
+    def _risk_lock_for(self, user_id: str):
+        """This user's risk lock, or the single lock a caller injected."""
+        hold = getattr(self._risk_lock, "hold", None)
+        return hold(user_id) if hold is not None else self._risk_lock
+
+    async def _reanchor(self, user_id: str, action: Action) -> None:
+        """Record the leader's current size as the base later trims are
+        measured from, without trading (see plan_actions). Only ever raises the
+        anchor, so a racing partial SELL that lowered it is not undone."""
+        row = action.row or {}
+        new_base = float(action.trader_shares or 0.0)
+        if not row.get("id") or new_base <= 0:
+            return
+        changed = await self.db.execute(
+            "UPDATE copy_positions SET trader_shares=? WHERE id=? AND user_id=? "
+            "AND status='open' AND (trader_shares IS NULL OR trader_shares < ?)",
+            (new_base, row["id"], user_id, new_base))
+        if changed:
+            log.info("re-anchored %s %s: leader %.2f -> %.2f shares (increase not followed)",
+                     user_id[:10], action.token_id[:16],
+                     float(row.get("trader_shares") or 0.0), new_base)
+
     async def _record_open(self, user_id, action, result) -> float:
         p = action.position
         spent = round(result.filled_shares * result.avg_price, 2)
@@ -1576,10 +2024,21 @@ class CopyEngine:
                            if r.get("conditionId") == row["condition_id"])
                 # per-condition only: correct when we held one side; ambiguous
                 # for both-sides copies (the CLOB lookup above covers those)
-                exit_price = 1.0 if paid > 0 else 0.0
+                if paid > 0:
+                    exit_price = 1.0
             except Exception:
-                log.exception("redeem lookup failed for %s — assuming lost", row["id"])
-                exit_price = 0.0
+                log.exception("redeem lookup failed for %s", row["id"])
+        if exit_price is None:
+            # Unknown is not lost. A closed book with no winner flagged yet is
+            # usually the resolution window, and a missing REDEEM proves
+            # nothing: nothing auto-redeems these wallets (wallet.py). Booking
+            # 0 here recorded winners as -100%, and because /closed skips
+            # tokens it already knows, the real winnings never surfaced as
+            # claimable. Keep the closing fence; stuck-closing recovery books
+            # it from the wallet's resolved position or the winner flags.
+            log.warning("position %s: market closed but resolution unknown — "
+                        "left closing for later reconciliation", row["id"])
+            return
         await self._close_row(user_id, row, exit_price, row["shares"],
                               event_type="resolve", status="resolved")
         log.warning("position %s finalized post-resolution at %.0f (market died "
@@ -1659,7 +2118,9 @@ class CopyEngine:
             "max_per_trade": _f("max_position_usd", DEFAULT_MAX_POSITION_USD),
             "min_leader": _f("min_leader_usd", 0.0),
             "ignore_below": _f("ignore_below_usd", DEFAULT_IGNORE_BELOW_USD),
-            "max_open": int(mo) if mo is not None else None,   # NULL/0 = unlimited
+            # NULL/0 = unlimited, as the API normalizes 0. `int(0)` here meant
+            # "no opens at all" for any row holding a literal 0.
+            "max_open": int(mo) if mo else None,
             "min_price": _f("min_price", DEFAULT_MIN_PRICE),
             "max_price": _f("max_price", DEFAULT_MAX_PRICE),
         }
@@ -1672,11 +2133,16 @@ class CopyEngine:
         start = dt.datetime.now(dt.timezone.utc).replace(
             hour=0, minute=0, second=0, microsecond=0).isoformat()
         store = store or self.db
+        # e.user_id lets idx_trade_events_user_ts bound the scan to this
+        # user's events since midnight; filtering only on p.user_id made this
+        # (called for every leader trade and every reconcile pass) read the
+        # whole events table as it grew.
         val = await store.fetchval(
             "SELECT COALESCE(SUM(e.pnl), 0) FROM trade_events e "
             "JOIN copy_positions p ON p.id = e.position_id "
-            "WHERE p.user_id = ? AND p.trader_address = ? AND e.pnl IS NOT NULL AND e.ts >= ?",
-            (user_id, trader_address, start))
+            "WHERE e.user_id = ? AND e.ts >= ? AND e.pnl IS NOT NULL "
+            "AND p.user_id = ? AND p.trader_address = ?",
+            (user_id, start, user_id, trader_address))
         return float(val or 0.0) <= -daily_limit
 
     # --- default collaborators (overridable for tests) --------------------
