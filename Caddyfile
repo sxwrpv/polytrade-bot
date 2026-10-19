@@ -51,6 +51,8 @@ polytradebot.live, www.polytradebot.live {
 	#                    casualty is the scrollbar CSS web.telegram.org pushes
 	#                    into the Mini App iframe (the SDK's set_custom_style):
 	#                    refused, and purely cosmetic.
+	#   reporting        report-uri and report-to send every refusal to
+	#                    /api/csp-report; see Reporting-Endpoints below.
 	@csp_app not path /api/docs /api/redoc /screener /screener/*
 	@csp_swagger path /api/docs
 	@csp_redoc path /api/redoc
@@ -61,7 +63,7 @@ polytradebot.live, www.polytradebot.live {
 	# than all of telegram.org. The SDK loads nothing further: it talks to
 	# Telegram through postMessage and the native bridge, not the network.
 	header @csp_app {
-		Content-Security-Policy "default-src 'self'; script-src 'self' https://telegram.org/js/telegram-web-app.js; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'self' https://web.telegram.org https://*.telegram.org"
+		Content-Security-Policy "default-src 'self'; script-src 'self' https://telegram.org/js/telegram-web-app.js; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'self' https://web.telegram.org https://*.telegram.org; report-uri /api/csp-report; report-to csp-endpoint"
 		defer
 	}
 
@@ -72,7 +74,7 @@ polytradebot.live, www.polytradebot.live {
 	# bootstrap: a FastAPI upgrade that changes it fails
 	# tests/test_docker_deployment.py instead of blanking this page.
 	header @csp_swagger {
-		Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-LWEObRpoIY0KVsFUCWtm1nukxJWE7dt6S4GyO+Wlo60=' https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js; style-src 'self' https://fonts.googleapis.com https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css; font-src https://fonts.gstatic.com; img-src 'self' data: https://fastapi.tiangolo.com/img/favicon.png; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'self' https://web.telegram.org https://*.telegram.org"
+		Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-LWEObRpoIY0KVsFUCWtm1nukxJWE7dt6S4GyO+Wlo60=' https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js; style-src 'self' https://fonts.googleapis.com https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css; font-src https://fonts.gstatic.com; img-src 'self' data: https://fastapi.tiangolo.com/img/favicon.png; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'self' https://web.telegram.org https://*.telegram.org; report-uri /api/csp-report; report-to csp-endpoint"
 		defer
 	}
 
@@ -82,7 +84,7 @@ polytradebot.live, www.polytradebot.live {
 	# either, the browser refuses it (checked). Its menu footer shows
 	# Redocly's logo from cdn.redoc.ly.
 	header @csp_redoc {
-		Content-Security-Policy "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net/npm/redoc@2/bundles/redoc.standalone.js; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: https://fastapi.tiangolo.com/img/favicon.png https://cdn.redoc.ly/redoc/logo-mini.svg; connect-src 'self'; worker-src blob:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'self' https://web.telegram.org https://*.telegram.org"
+		Content-Security-Policy "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net/npm/redoc@2/bundles/redoc.standalone.js; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: https://fastapi.tiangolo.com/img/favicon.png https://cdn.redoc.ly/redoc/logo-mini.svg; connect-src 'self'; worker-src blob:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'self' https://web.telegram.org https://*.telegram.org; report-uri /api/csp-report; report-to csp-endpoint"
 		defer
 	}
 
@@ -92,9 +94,21 @@ polytradebot.live, www.polytradebot.live {
 	# S3 bucket; an image from any other host falls back to initials or is
 	# dropped (the onerror handlers in lib/render.js and wallet.js).
 	header @csp_screener {
-		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' https://polymarket-upload.s3.us-east-2.amazonaws.com; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'self' https://web.telegram.org https://*.telegram.org"
+		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' https://polymarket-upload.s3.us-east-2.amazonaws.com; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'self' https://web.telegram.org https://*.telegram.org; report-uri /api/csp-report; report-to csp-endpoint"
 		defer
 	}
+
+	# Where refusals go. Without reporting, a refused asset leaves no trace
+	# server-side. Every policy ends with report-uri and report-to, both
+	# naming /api/csp-report, where the app logs one sanitized line per
+	# report (backend/api/routes_csp_report.py). A browser with the Reporting
+	# API follows report-to and ignores report-uri; one without it does the
+	# opposite. report-to names an endpoint group, which this header defines
+	# on every response. The URL is relative, so www.polytradebot.live
+	# reports to itself and the upload stays same-origin. Chromium honours
+	# this header only over HTTPS: over plain HTTP (a local run) it reports
+	# nothing at all, report-uri included.
+	header Reporting-Endpoints `csp-endpoint="/api/csp-report"`
 
 	# --- Request bodies ----------------------------------------------------
 	# Nothing bounded a request body, so one client could stream as much as

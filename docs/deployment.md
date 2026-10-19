@@ -103,7 +103,13 @@ two days old, so a stalled refresh degrades visibly rather than silently.
 
 The Caddyfile serves `polytradebot.live` and `www.polytradebot.live`, obtains and renews certificates, redirects HTTP, proxies internally, and adds HSTS, `nosniff`, a referrer policy, and one Content-Security-Policy per surface (the app, `/screener`, `/api/docs`, `/api/redoc`), each still permitting Telegram framing. It caps `/api` request bodies at 64 KB. The plain-HTTP IP block answers only `/api/health`, `/api/ready`, `/api/version` and `/screener/api/health`, the paths `scripts/deploy.sh` verifies through, and returns 404 for everything else.
 
-A page that starts loading a script, stylesheet, font or image from a new host needs that source added to its policy, or the browser refuses it without any server-side error. `tests/test_docker_deployment.py` checks the shipped pages against the policies.
+A page that starts loading a script, stylesheet, font or image from a new host needs that source added to its policy, or the browser refuses it. `tests/test_docker_deployment.py` checks the shipped pages against the policies.
+
+Browsers report each refusal to `/api/csp-report`, and the app logs one WARNING line per report: the directive, the blocked origin or keyword (`inline`, `eval`, `data`, `blob`), the page path with identifiers masked, and the origin of the script involved. It never logs a query string, cookie, user id or wallet address. Chromium sends reports in batches, so a line can arrive up to a minute after the refusal. Lines naming `chrome-extension` or `moz-extension` come from a visitor's browser extension, not from the site. Read them with:
+
+```bash
+docker compose logs app | grep -i "csp violation"
+```
 
 Before reload:
 

@@ -342,6 +342,44 @@ class ContentSecurityPolicyTests(unittest.TestCase):
             if name != "@csp_redoc":
                 self.assertNotIn("'unsafe-inline'", policy["style-src"], name)
 
+    REPORT_PATH = "/api/csp-report"
+
+    def test_every_policy_reports_refusals_to_the_app(self):
+        """A refusal leaves no server-side trace unless the browser reports
+        it. report-to wins wherever the Reporting API exists, and its group
+        must be defined on the same response; report-uri covers the rest."""
+        declared = re.findall(r"^\s*header Reporting-Endpoints `([^`]*)`\s*$", self.domain, re.M)
+        # One declaration and no matcher, so every surface's responses carry it.
+        self.assertEqual(len(declared), 1, declared)
+        groups = dict(re.findall(r'([a-z][a-z0-9_-]*)="([^"]*)"', declared[0]))
+        for name, policy in self.policies.items():
+            self.assertEqual(policy.get("report-uri"), [self.REPORT_PATH], name)
+            self.assertEqual(len(policy.get("report-to", [])), 1, name)
+            self.assertEqual(groups.get(policy["report-to"][0]), self.REPORT_PATH, name)
+
+    def test_reports_reach_the_app_endpoint(self):
+        """The report path falls through to the app: under /api, so the body
+        cap applies; refused by none of the scanner 404s; and served there."""
+        from fnmatch import fnmatchcase
+        from fastapi.testclient import TestClient
+        from backend.api import routes_csp_report
+        from backend.main import app
+
+        self.assertTrue(self.REPORT_PATH.startswith("/api/"))
+        hidden = re.search(r"^\s*@hidden path (.+)$", self.domain, re.M).group(1).split()
+        self.assertEqual([p for p in hidden if fnmatchcase(self.REPORT_PATH, p)], [])
+        report = ('{"csp-report": {"document-uri": "https://polytradebot.live/", '
+                  '"effective-directive": "img-src", "blocked-uri": "https://cdn.example.net/x.png"}}')
+        routes_csp_report.reset_rate_limits()
+        try:
+            with self.assertLogs("csp", level="WARNING"):
+                response = TestClient(app).post(
+                    self.REPORT_PATH, content=report,
+                    headers={"content-type": "application/csp-report"})
+        finally:
+            routes_csp_report.reset_rate_limits()
+        self.assertEqual(response.status_code, 204)
+
     def test_shipped_pages_load_only_what_their_policy_allows(self):
         pages = {
             "frontend/index.html": "@csp_app",
