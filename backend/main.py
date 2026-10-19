@@ -36,8 +36,8 @@ from backend.core.polymarket import PolymarketClient
 from backend.core.telegram_alerts import TelegramPositionNotifier
 from backend.db.database import Database
 from backend.api import (
-    routes_auth, routes_positions, routes_public_screener, routes_telemetry,
-    routes_traders, routes_user,
+    routes_auth, routes_csp_report, routes_positions, routes_public_screener,
+    routes_telemetry, routes_traders, routes_user,
 )
 
 logging.basicConfig(
@@ -400,6 +400,9 @@ app.include_router(routes_telemetry.router, prefix="/api/telemetry", tags=["tele
 # gate and its upstream-spending routes stay exactly as they are.
 app.include_router(routes_public_screener.router, prefix="/api/public/screener",
                    tags=["public-screener"])
+# Anonymous sink for the Caddyfile's report-uri/report-to: one sanitized log
+# line per Content-Security-Policy refusal, which is otherwise invisible here.
+app.include_router(routes_csp_report.router, prefix="/api", tags=["csp"])
 
 
 @app.get("/api/docs", include_in_schema=False)
