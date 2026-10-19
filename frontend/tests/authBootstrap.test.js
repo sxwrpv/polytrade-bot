@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { bootstrapSession } from '../src/authBootstrap.js'
+import { bootstrapLaunch } from '../src/authBootstrap.js'
 
 test('re-authenticates with Telegram when cached address exists but cookie is invalid', async () => {
   const saved = []
@@ -15,15 +15,15 @@ test('re-authenticates with Telegram when cached address exists but cookie is in
     },
   }
 
-  const result = await bootstrapSession({
+  const { session } = await bootstrapLaunch({
     cachedSession: { address: '0xstale' },
     initData: 'signed-init-data',
     api,
-    saveSession: (session) => saved.push(session),
+    saveSession: (next) => saved.push(next),
     clearSession: () => { cleared += 1 },
   })
 
-  assert.deepEqual(result, { address: '0xlinked' })
+  assert.deepEqual(session, { address: '0xlinked' })
   assert.deepEqual(saved, [{ address: '0xlinked' }])
   assert.equal(cleared, 0)
 })

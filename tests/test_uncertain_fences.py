@@ -364,7 +364,8 @@ class OnChainSettlementTests(FenceDb):
                 await self.db.execute("DELETE FROM copy_open_claims")
 
     async def test_without_an_rpc_nothing_is_ever_released(self):
-        await self.claim(age=ce.UNCERTAIN_CLAIM_RELEASE_SECONDS + 60)
+        # Older than the 24h auto-release that 44a5b7d removed.
+        await self.claim(age=24 * 3600 + 60)
         await self.engine([], chain=None)._reconcile_uncertain_claims()
         self.assertEqual(1, await self.claims())
 

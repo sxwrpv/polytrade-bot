@@ -206,14 +206,3 @@ class NoBackfillTests(unittest.IsolatedAsyncioTestCase):
         src = inspect.getsource(ce.CopyEngine._sync_user)
         self.assertIn("_no_backfill", src)
         self.assertIn("predates copying", src)
-
-
-class AdoptUntrackedTests(unittest.IsolatedAsyncioTestCase):
-    """A volatile intent cannot establish a fill or ownership of inventory."""
-
-    async def test_legacy_adoption_is_disabled_without_touching_dependencies(self):
-        e = _Engine()
-        e._note_submitted("u", "tok", 15)
-        # No database is attached: this path must not even attempt a write.
-        self.assertEqual(0, await e._adopt_untracked_submissions("u", "leader", [], []))
-        self.assertEqual(15, e._submitted_basis("u", "tok"))

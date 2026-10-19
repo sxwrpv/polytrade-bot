@@ -9,9 +9,6 @@ eth-account>=0.11.0
 cryptography>=42.0.0
 pydantic>=2.7.0
 
-# On-chain leader-trade detection (OrderFilled logs via Polygon RPC).
-web3>=6.0.0
-
 # Order placement + wallet creation via polymarket-client's AsyncSecureClient.
 # Not py-clob-client (archived upstream 2026-05-25, signs a rejected order
 # format) or py-clob-client-v2 (its L1 auth binds the API key to the EOA
