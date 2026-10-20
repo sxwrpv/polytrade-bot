@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
+import Icon from './Icon'
 
 const storageKey = (id) => `folder:${id}`
 
@@ -12,12 +13,13 @@ function readPersisted(id, fallback) {
   }
 }
 
-// Collapsible brutalist "folder" — a clickable section header that expands/
-// collapses its content. Nestable (children can themselves be Folders).
-// Pass a stable `id` to persist open/closed state across reloads; without an
-// id it behaves exactly as before (resets to `open` on every mount).
+// Collapsible section — a full-width header (52px, so it is an easy thumb
+// target) that expands/collapses its content. Nestable (children can
+// themselves be Folders). Pass a stable `id` to persist open/closed state
+// across reloads; without an id it resets to `open` on every mount.
 export default function Folder({ id, title, children, open: initial = false, count }) {
   const [open, setOpen] = useState(() => readPersisted(id, initial))
+  const bodyId = useId()
 
   useEffect(() => {
     if (!id) return
@@ -29,13 +31,19 @@ export default function Folder({ id, title, children, open: initial = false, cou
   }, [id, open])
 
   return (
-    <div className="folder">
-      <button className={`folder-header ${open ? 'open' : ''}`} onClick={() => setOpen((o) => !o)}>
-        <span className="folder-caret">{open ? '▾' : '▸'}</span>
-        {title}
-        {count != null && <span className="folder-count">[{count}]</span>}
+    <section className="folder">
+      <button
+        type="button"
+        className={`folder-header ${open ? 'open' : ''}`}
+        aria-expanded={open}
+        aria-controls={bodyId}
+        onClick={() => setOpen((o) => !o)}
+      >
+        <Icon name="chevron" className="icon icon-sm folder-caret" />
+        <span className="folder-title">{title}</span>
+        {count != null && <span className="folder-count">{count}</span>}
       </button>
-      {open && <div className="folder-body">{children}</div>}
-    </div>
+      {open && <div className="folder-body" id={bodyId}>{children}</div>}
+    </section>
   )
 }

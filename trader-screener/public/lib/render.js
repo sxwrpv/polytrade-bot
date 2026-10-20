@@ -15,9 +15,25 @@ export function el(tag, cls, text) {
   return n;
 }
 
+/** A failed or empty load, said plainly: a title, what happened, and what to
+ *  do next. Mirrors the Mini App's state block so both surfaces fail alike. */
+export function stateBlock({ title, body, tone = 'error', actions = [] }) {
+  const box = el('div', `state-block${tone === 'error' ? ' is-error' : ''}`);
+  if (tone === 'error') box.setAttribute('role', 'alert');
+  box.append(el('p', 'state-title', title));
+  if (body) box.append(el('p', 'state-body', body));
+  if (actions.length) {
+    const row = el('div', 'state-actions');
+    row.append(...actions);
+    box.append(row);
+  }
+  return box;
+}
+
 const TONE_COLOR = {
   clear: 'var(--green-deep)', ahead: 'var(--green-text)', caution: 'var(--yellow)',
-  negative: 'var(--red)', neutral: 'var(--cyan)', unknown: 'var(--faint)',
+  // --faint is 3.2:1 on paper; chip text needs --muted to stay at AA.
+  negative: 'var(--red)', neutral: 'var(--cyan)', unknown: 'var(--muted)',
 };
 
 /** The Copy Score pill. `variant: 'signed'` prints +6 / −4 instead of 11%. */

@@ -35,9 +35,12 @@ class RiskSettingsContractTests(unittest.TestCase):
     def test_wallet_ui_names_position_cap_and_allows_small_account_limits(self):
         source = (Path(__file__).parents[1] / "frontend" / "src" /
                   "components" / "WalletRiskCard.jsx").read_text()
-        self.assertIn("'MAX / POSITION'", source)
-        self.assertIn("'max_total_exposure_usd', 'MAX EXPOSURE', 0, 5000, 5", source)
-        self.assertIn("'daily_loss_limit_usd', 'DAILY LOSS LIMIT', 0, 1000, 1", source)
+        # Labels moved to sentence case with the 2026-10-20 design pass (the
+        # whole Mini App dropped all-caps controls); the names and the
+        # small-account bounds they guard are unchanged.
+        self.assertIn("'Max per position'", source)
+        self.assertIn("'max_total_exposure_usd', 'Max total exposure', 0, 5000, 5", source)
+        self.assertIn("'daily_loss_limit_usd', 'Daily loss limit', 0, 1000, 1", source)
         self.assertIn("Risk warning:", source)
 
     def test_exchange_sdk_is_exactly_pinned(self):

@@ -28,7 +28,7 @@
 .kpi { padding: 15px 18px; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); }
 .kpi:last-child { border-right: none; }
 .kpi span {
-  display: block; font-family: var(--mono); font-size: 9px; letter-spacing: .14em;
+  display: block; font-family: var(--mono); font-size: 11px; letter-spacing: .14em;
   text-transform: uppercase; color: var(--muted);
 }
 .kpi b { display: block; font-family: var(--mono); font-size: 24px; font-weight: 500; letter-spacing: -.02em; margin-top: 6px; }
@@ -51,9 +51,9 @@
 @media (max-width: 700px) { .eqn { grid-template-columns: 1fr 1fr; } }
 .eqn > div { padding: 13px 15px; border-right: 1px solid var(--border); }
 .eqn > div:last-child { border-right: none; background: var(--green-wash); }
-.eqn span { display: block; font-family: var(--mono); font-size: 9px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+.eqn span { display: block; font-family: var(--mono); font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
 .eqn b { display: block; font-family: var(--mono); font-size: 20px; font-weight: 500; margin-top: 5px; }
-.eqn i { font-style: normal; display: block; font-size: 10.5px; color: var(--muted); margin-top: 3px; line-height: 1.5; }
+.eqn i { font-style: normal; display: block; font-size: 11px; color: var(--muted); margin-top: 3px; line-height: 1.5; }
 
 .bars { display: grid; gap: 9px; }
 .bars .b { display: grid; grid-template-columns: 104px minmax(0,1fr) 64px; gap: 10px; align-items: center; font-size: 12px; }
@@ -67,7 +67,7 @@
 .seg-inline { display: flex; gap: 5px; flex-wrap: wrap; }
 .seg-inline button {
   padding: 5px 10px; border: 1px solid var(--border); border-radius: 999px; background: transparent;
-  color: var(--muted); font-family: var(--mono); font-size: 10px; cursor: pointer;
+  color: var(--muted); font-family: var(--mono); font-size: 11px; cursor: pointer;
 }
 .seg-inline button[aria-pressed="true"] { border-color: var(--green); background: var(--pill-tint); color: var(--green-deep); }
 
@@ -75,7 +75,7 @@
 .mkt img { width: 20px; height: 20px; border-radius: var(--r-sm); object-fit: cover; flex: none; }
 .mkt a { color: var(--text); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mkt a:hover { color: var(--green-deep); }
-.side { font-family: var(--mono); font-size: 10px; letter-spacing: .06em; text-transform: uppercase; }
+.side { font-family: var(--mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; }
 .side.buy { color: var(--green-deep); }
 .side.sell { color: var(--red); }
 
@@ -85,7 +85,7 @@
   border-radius: var(--r-md); background: rgba(138, 93, 6, .06);
 }
 .notice strong {
-  display: block; font-family: var(--mono); font-size: 10px; font-weight: 500;
+  display: block; font-family: var(--mono); font-size: 11px; font-weight: 500;
   letter-spacing: .16em; text-transform: uppercase; color: var(--yellow);
 }
 .notice p { margin-top: 6px; font-size: 12px; line-height: 1.65; color: var(--text); }
@@ -113,11 +113,11 @@
 .chart svg:focus-visible { outline: 2px solid var(--green-deep); outline-offset: 2px; }
 .chart-axis {
   display: flex; justify-content: space-between; gap: 12px; margin-top: 4px;
-  font-family: var(--mono); font-size: 9px; color: var(--muted);
+  font-family: var(--mono); font-size: 11px; color: var(--muted);
 }
-.chart-axis-range { color: var(--faint); }
+.chart-axis-range { color: var(--muted); }
 .chart-empty { color: var(--muted); font-size: 12px; padding: 30px 0; text-align: center; }
-.chart-hint { color: var(--faint); font-size: 10.5px; margin-top: 8px; line-height: 1.55; }
+.chart-hint { color: var(--muted); font-size: 11px; margin-top: 8px; line-height: 1.55; }
 
 /* --- trading clock heat-map ------------------------------------------------
    Intensity rides on a single --t per cell (0..1, square-rooted upstream so one
@@ -128,7 +128,7 @@
   display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 10px;
 }
 .clock-readout {
-  font-family: var(--mono); font-size: 10.5px; color: var(--muted);
+  font-family: var(--mono); font-size: 11px; color: var(--muted);
   margin-left: auto; text-align: right; min-height: 15px;
 }
 .clock-readout.is-pinned { color: var(--green-deep); }
@@ -136,7 +136,7 @@
 .clock-body { display: grid; grid-template-columns: minmax(0, 1fr) 54px; gap: 8px; align-items: start; }
 .clock { display: grid; grid-template-columns: 22px repeat(24, minmax(0, 1fr)); gap: 2px; }
 .clock-lab {
-  font-family: var(--mono); font-size: 9px; color: var(--muted);
+  font-family: var(--mono); font-size: 11px; color: var(--muted);
   display: flex; align-items: center; justify-content: flex-end; padding-right: 4px;
 }
 .clock-cell {
@@ -151,12 +151,12 @@
 
 .clock-rowtotals { display: grid; grid-template-rows: repeat(7, 1fr); gap: 2px; }
 .clock-total {
-  font-family: var(--mono); font-size: 9px; color: var(--muted);
+  font-family: var(--mono); font-size: 11px; color: var(--muted);
   display: flex; align-items: center; justify-content: flex-end;
 }
 .clock-x {
   display: grid; grid-template-columns: 22px repeat(24, minmax(0, 1fr)); gap: 2px;
-  margin-top: 4px; font-family: var(--mono); font-size: 8px; color: var(--muted); text-align: center;
+  margin-top: 4px; font-family: var(--mono); font-size: 11px; color: var(--muted); text-align: center;
 }
 .clock-coltotals {
   display: grid; grid-template-columns: 22px repeat(24, minmax(0, 1fr)); gap: 2px;

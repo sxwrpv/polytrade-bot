@@ -1,49 +1,72 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, getWallet, clearWallet } from '../api'
 import CopyText from '../components/CopyText'
 import StatGrid from '../components/StatGrid'
 import PnlHeatmap from '../components/PnlHeatmap'
 import Modal from '../components/Modal'
 import Folder from '../components/Folder'
+import Icon from '../components/Icon'
 import { FundingAccess } from '../components/DepositAddresses'
+import { Notice, StateBlock, describeError } from '../components/UiState'
 import { performLogout } from '../authBootstrap'
 
+const usd = (v) => (v != null ? `$${v.toFixed(2)}` : '—')
+const short = (a) => (a ? `${a.slice(0, 6)}…${a.slice(-4)}` : '')
+
 export default function User({ onLogout }) {
-  const [me, setMe] = useState(null)
+  const [profile, setProfile] = useState(null)   // quick read: name, gasless
+  const [me, setMe] = useState(null)             // full read: balances
+  const [meError, setMeError] = useState(null)
   const [pnl, setPnl] = useState(null)
-  const [byWallet, setByWallet] = useState([])
+  const [pnlError, setPnlError] = useState(null)
+  const [byWallet, setByWallet] = useState(null)
   const [name, setName] = useState('')
+  const [nameStatus, setNameStatus] = useState(null)   // null | 'saving' | 'saved' | Error
   const [exp, setExp] = useState(false)
   const [key, setKey] = useState('')
   const [expErr, setExpErr] = useState('')
+  const [revealing, setRevealing] = useState(false)
   const [logoutErr, setLogoutErr] = useState('')
   const [loggingOut, setLoggingOut] = useState(false)
+  const [reload, setReload] = useState(0)
+  const savedName = useRef(null)
   const addr = getWallet()
 
   useEffect(() => {
     // paint the profile immediately, upgrade with balance when it lands (the
     // balance read builds the CLOB client server-side on first call — slow)
+    // The quick read only fills the name field; balances come from the full
+    // read alone, so a skeleton (not a dash) shows until it lands.
     api.me().then((m) => {
-      setMe((prev) => prev ?? m)
-      setName(m.display_name || '')
-    })
-    api.me(true).then(setMe).catch(() => {})
-    api.pnlByWallet().then(setByWallet).catch(() => {})
-  }, [])
+      setProfile(m)
+      if (savedName.current == null) {
+        savedName.current = m.display_name || ''
+        setName(m.display_name || '')
+      }
+    }).catch(() => {})
+    setMe(null)
+    setMeError(null)
+    api.me(true).then(setMe).catch((e) => setMeError(e))
+    api.pnlByWallet().then(setByWallet).catch(() => setByWallet([]))
+  }, [reload])
 
   useEffect(() => {
     // 30d: the only period-scoped thing left in this section is the heat-map's
     // calendar, and it is a fixed 30-day window.
-    api.pnl('30d').then(setPnl).catch(() => {})
-  }, [])
+    api.pnl('30d').then((p) => { setPnl(p); setPnlError(null) }).catch((e) => setPnlError(e))
+  }, [reload])
 
-  async function saveName() {
+  const saveName = useCallback(async () => {
+    if (name === savedName.current) return
+    setNameStatus('saving')
     try {
       await api.settings({ display_name: name })
-    } catch {
-      /* ignore */
+      savedName.current = name
+      setNameStatus('saved')
+    } catch (e) {
+      setNameStatus(e)
     }
-  }
+  }, [name])
 
   async function reveal() {
     setExpErr('')
@@ -51,14 +74,17 @@ export default function User({ onLogout }) {
     // can only be revealed from inside Telegram — a stolen session isn't enough.
     const initData = window.Telegram?.WebApp?.initData || ''
     if (!initData) {
-      setExpErr('OPEN THE APP FROM THE TELEGRAM BOT TO EXPORT YOUR KEY')
+      setExpErr('Open the app from the Telegram bot to export your key.')
       return
     }
+    setRevealing(true)
     try {
       const r = await api.exportKey(initData)
       setKey(r.private_key)
     } catch (e) {
       setExpErr(String(e.message || e))
+    } finally {
+      setRevealing(false)
     }
   }
 
@@ -75,129 +101,189 @@ export default function User({ onLogout }) {
   }
 
   const curve = pnl?.equity_curve || []
+  const balancesRead = me?.balance != null
 
   return (
     <div>
-      <Folder id="user-account" title="ACCOUNT" open>
+      <Folder id="user-account" title="Account" open>
         <div className="card">
-          <div className="muted">WALLET (click to copy)</div>
-          <CopyText value={addr} />
-          <label className="fld">
-            DISPLAY NAME
-            <input value={name} onChange={(e) => setName(e.target.value)} onBlur={saveName} />
+          <div className="account-row">
+            <span className="account-label">Wallet</span>
+            <CopyText value={addr} display={addr ? `${addr.slice(0, 10)}…${addr.slice(-8)}` : '—'} label="Copy wallet address" />
+          </div>
+          <label className="fld account-row">
+            Display name
+            <input
+              value={name}
+              autoComplete="nickname"
+              onChange={(e) => { setName(e.target.value); setNameStatus(null) }}
+              onBlur={saveName}
+              onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+            />
+            <span
+              className={`fld-status ${nameStatus === 'saved' ? 'is-ok' : nameStatus instanceof Error ? 'is-error' : ''}`}
+              role="status"
+            >
+              {nameStatus === 'saving' && 'Saving…'}
+              {nameStatus === 'saved' && <><Icon name="check" className="icon icon-sm" />Saved</>}
+              {nameStatus instanceof Error && `Not saved: ${describeError(nameStatus)}`}
+              {nameStatus == null && 'Saved when you leave the field.'}
+            </span>
           </label>
+
           {/* Home shows the total and the curve at a glance (see
               components/BalanceCard.jsx). The breakdown stays here, because
               "what is my money doing" is a different question from "what am I
               worth", and only one of them belongs on the glance surface. */}
-          <div className="stat-grid" style={{ marginTop: 10 }}>
+          <div className="stat-grid two account-balances">
             <div className="stat-cell">
-              <div className="label">BALANCE (CASH)</div>
-              <div className="value">{me?.balance != null ? `$${me.balance.toFixed(2)}` : '—'}</div>
+              <div className="label">Cash balance</div>
+              <div className="value">{me == null && !meError ? <span className="sk sk-line" /> : usd(me?.balance)}</div>
             </div>
             <div className="stat-cell">
-              <div className="label">IN POSITIONS</div>
-              <div className="value">{me?.positions_value != null ? `$${me.positions_value.toFixed(2)}` : '—'}</div>
+              <div className="label">In positions</div>
+              <div className="value">{me == null && !meError ? <span className="sk sk-line" /> : usd(me?.positions_value)}</div>
             </div>
             <div className="stat-cell">
-              <div className="label" title="resolved wins not yet redeemed — claim on polymarket.com">CLAIMABLE</div>
-              <div className="value">{me?.claimable != null ? `$${me.claimable.toFixed(2)}` : '—'}</div>
+              <div className="label" title="Resolved wins not yet redeemed — claim on polymarket.com">Claimable</div>
+              <div className="value">{me == null && !meError ? <span className="sk sk-line" /> : usd(me?.claimable)}</div>
             </div>
             <div className="stat-cell">
-              <div className="label">EQUITY (TOTAL)</div>
-              <div className="value">{me?.equity != null ? `$${me.equity.toFixed(2)}` : '—'}</div>
+              <div className="label">Equity (total)</div>
+              <div className="value">{me == null && !meError ? <span className="sk sk-line" /> : usd(me?.equity)}</div>
             </div>
           </div>
-          {me?.balance == null && (
-            <div className="muted small" style={{ marginTop: 6 }}>fund wallet to trade</div>
+          {meError && (
+            <Notice
+              tone="error"
+              action={<button type="button" className="btn btn-ghost btn-sm" onClick={() => setReload((n) => n + 1)}>Retry</button>}
+            >
+              Balances couldn’t be read. {describeError(meError)}
+            </Notice>
+          )}
+          {!meError && me && !balancesRead && (
+            <Notice
+              tone="error"
+              action={<button type="button" className="btn btn-ghost btn-sm" onClick={() => setReload((n) => n + 1)}>Retry</button>}
+            >
+              Your live balance couldn’t be read right now.
+            </Notice>
+          )}
+          {!meError && balancesRead && me.equity === 0 && (
+            <p className="small muted">Fund the wallet to start trading.</p>
           )}
           {me?.claimable > 0 && (
-            <div className="warn-box" style={{ marginTop: 8 }}>
-              ${me.claimable.toFixed(2)} in resolved winnings isn&apos;t auto-claimed yet —
+            <Notice>
+              <b>${me.claimable.toFixed(2)} in resolved winnings</b> isn&apos;t auto-claimed yet —
               redeem it on polymarket.com to turn it into spendable cash.
-            </div>
+            </Notice>
           )}
         </div>
       </Folder>
 
-      <Folder id="user-fund" title="FUND WALLET">
-        <FundingAccess gasless={me?.gasless} />
+      <Folder id="user-fund" title="Fund wallet">
+        <FundingAccess gasless={(me || profile)?.gasless} />
       </Folder>
 
-      <Folder id="user-performance" title="PERFORMANCE" open>
-        <StatGrid pnl={pnl} />
+      <Folder id="user-performance" title="Performance" open>
+        {pnlError ? (
+          <Notice
+            tone="error"
+            action={<button type="button" className="btn btn-ghost btn-sm" onClick={() => setReload((n) => n + 1)}>Retry</button>}
+          >
+            Performance couldn’t be loaded. {describeError(pnlError)}
+          </Notice>
+        ) : (
+          <StatGrid pnl={pnl} />
+        )}
 
         {/* The window buttons went with the chart they used to drive. Nothing
             left in this section is period-scoped: StatGrid already shows 7D and
             30D side by side, and the heat-map is a fixed 30-day calendar. */}
-        <div className="section-header">DAILY PNL · LAST 30 DAYS</div>
+        <div className="section-header">Daily P&amp;L, last 30 days</div>
         <div className="card">
-          <PnlHeatmap curve={curve} />
+          {pnl == null && !pnlError ? <div className="sk sk-chart" /> : <PnlHeatmap curve={curve} />}
         </div>
 
-        <Folder id="user-breakdown" title="BREAKDOWN BY COPIED WALLET">
-          {byWallet.length === 0 ? (
-            <div className="muted">no closed positions yet</div>
+        <Folder id="user-breakdown" title="Breakdown by copied wallet" count={byWallet?.length || undefined}>
+          {byWallet == null ? (
+            <div className="sk-card"><div className="sk sk-title" /><div className="sk sk-line" /></div>
+          ) : byWallet.length === 0 ? (
+            <StateBlock icon="positions" title="No closed positions yet">
+              Realized results per copied wallet appear here once positions close.
+            </StateBlock>
           ) : (
-            byWallet.map((w) => (
-              <div className="card" key={w.trader_address}>
-                <div className="tc-top">
-                  <span className="tc-name">
-                    {w.trader_address === 'manual'
-                      ? 'MANUAL TRADES'
-                      : w.display_name || `${w.trader_address.slice(0, 6)}…${w.trader_address.slice(-4)}`}
+            <div className="card">
+              {byWallet.map((w) => (
+                <div className="breakdown-row" key={w.trader_address}>
+                  <span>
+                    <b>
+                      {w.trader_address === 'manual'
+                        ? 'Manual trades'
+                        : w.display_name || short(w.trader_address)}
+                    </b>
+                    <small>{w.closed_trades} closed · {Math.round((w.win_rate || 0) * 100)}% won</small>
                   </span>
-                  <span className={w.realized_pnl >= 0 ? 'pos' : 'neg'}>
-                    {w.realized_pnl >= 0 ? '+' : '-'}${Math.abs(w.realized_pnl).toFixed(2)}
+                  <span className={`mono ${w.realized_pnl >= 0 ? 'pos' : 'neg'}`}>
+                    {w.realized_pnl >= 0 ? '+' : '−'}${Math.abs(w.realized_pnl).toFixed(2)}
                   </span>
                 </div>
-                <div className="tc-stats">
-                  <span>CLOSED {w.closed_trades}</span>
-                  <span>WR {Math.round((w.win_rate || 0) * 100)}%</span>
-                </div>
-              </div>
-            ))
+              ))}
+            </div>
           )}
         </Folder>
       </Folder>
 
-      <Folder id="user-security" title="SECURITY">
+      <Folder id="user-security" title="Security">
         <div className="card">
-          <button className="btn btn-danger" onClick={() => setExp(true)}>EXPORT PRIVATE KEY</button>
+          <p className="security-copy">
+            Your private key gives full control of the wallet and everything in it. Export it only to
+            back it up somewhere offline you trust.
+          </p>
+          <button type="button" className="btn btn-danger btn-block" onClick={() => setExp(true)}>
+            <Icon name="key" />Export private key
+          </button>
         </div>
       </Folder>
 
-      <Folder id="user-legal" title="LEGAL">
-        <div className="card muted small">
+      <Folder id="user-legal" title="Legal">
+        <div className="card legal-copy">
           Real trades execute on Polymarket. Prediction markets carry risk of total loss. You
           are solely responsible for the funds in your custodial wallet and for backing up your
           private key. Not available in restricted jurisdictions.
         </div>
       </Folder>
 
-      <p className="muted logout-note">Logging out ends this session. Reopening PolyTrade from Telegram signs you in automatically.</p>
-      {logoutErr && <div className="warn-box" role="alert">{logoutErr}</div>}
-      <button className="btn" style={{ marginTop: 16 }} disabled={loggingOut} onClick={logOut}>
-        {loggingOut ? 'LOGGING OUT…' : 'LOG OUT'}
-      </button>
+      <div className="logout-block">
+        <p className="muted logout-note">Logging out ends this session. Reopening PolyTrade from Telegram signs you in automatically.</p>
+        {logoutErr && <div className="warn-box" role="alert">{logoutErr}</div>}
+        <button type="button" className="btn btn-ghost btn-block" disabled={loggingOut} onClick={logOut}>
+          <Icon name="logout" />
+          {loggingOut ? 'Logging out…' : 'Log out'}
+        </button>
+      </div>
 
       {exp && (
         <Modal
-          title="EXPORT PRIVATE KEY"
+          title="Export private key"
           accent="red"
           onClose={() => { setExp(false); setKey(''); setExpErr('') }}
         >
-          <div className="warn-box">
-            WARNING: YOUR PRIVATE KEY GIVES FULL ACCESS TO YOUR FUNDS. NEVER SHARE IT. STORE
-            OFFLINE.
-          </div>
+          <Notice tone="error">
+            <b>Your private key gives full access to your funds.</b> Never share it, never paste it
+            into a website, and store it offline.
+          </Notice>
           {!key ? (
             <>
-              {expErr && <div className="neg">{expErr}</div>}
-              <button className="btn btn-danger" onClick={reveal}>REVEAL KEY</button>
+              {expErr && <p className="neg modal-lede" role="alert">{expErr}</p>}
+              <div className="modal-actions">
+                <button type="button" className="btn btn-danger is-strong" onClick={reveal} disabled={revealing}>
+                  {revealing ? 'Verifying with Telegram…' : 'Reveal key'}
+                </button>
+              </div>
             </>
           ) : (
-            <div className="addr key-reveal">{key}</div>
+            <div className="addr key-reveal" aria-label="Private key">{key}</div>
           )}
         </Modal>
       )}

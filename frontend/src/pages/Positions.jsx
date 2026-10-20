@@ -4,6 +4,8 @@ import { buildCloseOutcomeTelemetry, trackTelemetry } from '../telemetry'
 import PositionCard from '../components/PositionCard'
 import ActivityFeed from '../components/ActivityFeed'
 import Modal from '../components/Modal'
+import Icon from '../components/Icon'
+import { ErrorState, Notice, SkeletonCards, StateBlock } from '../components/UiState'
 import {
   CLOSE_POSITION_EVENT,
   CLOSE_POSITION_STATE,
@@ -26,27 +28,30 @@ function summarize(rows, closed) {
     const total = realized.reduce((a, b) => a + b, 0)
     const wins = realized.filter((v) => v > 0).length
     return [
-      ['REALIZED PNL', signed(total), total >= 0 ? 'pos' : 'neg'],
-      ['WIN RATE', realized.length ? `${Math.round((wins / realized.length) * 100)}%` : '—', ''],
-      ['BEST', realized.length ? signed(Math.max(...realized)) : '—', 'pos'],
-      ['WORST', realized.length ? signed(Math.min(...realized)) : '—', 'neg'],
+      ['Realized P&L', signed(total), total >= 0 ? 'pos' : 'neg'],
+      ['Win rate', realized.length ? `${Math.round((wins / realized.length) * 100)}%` : '—', ''],
+      ['Best', realized.length ? signed(Math.max(...realized)) : '—', 'pos'],
+      ['Worst', realized.length ? signed(Math.min(...realized)) : '—', 'neg'],
     ]
   }
   const exposure = rows.reduce((a, r) => a + Number(r.notional_usd || 0), 0)
   const unrealized = rows.reduce((a, r) => a + Number(r.unrealized_pnl || 0), 0)
   return [
-    ['OPEN EXPOSURE', `$${exposure.toFixed(2)}`, ''],
-    ['UNREALIZED PNL', signed(unrealized), unrealized >= 0 ? 'pos' : 'neg'],
-    ['OPEN POSITIONS', rows.length, ''],
+    ['Open exposure', `$${exposure.toFixed(2)}`, ''],
+    ['Unrealized P&L', signed(unrealized), unrealized >= 0 ? 'pos' : 'neg'],
+    ['Open positions', rows.length, ''],
   ]
 }
 
-const TABS = [['open', 'OPEN'], ['closed', 'CLOSED'], ['activity', 'ACTIVITY']]
+const TABS = [['open', 'Open'], ['closed', 'Closed'], ['activity', 'Activity']]
 
-export default function Positions() {
+export default function Positions({ onNavigate }) {
   const [tab, setTab] = useState('open')
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
+  // A failed read is kept apart from an empty one: "no open positions" after
+  // a timeout would be a false statement about the account's money.
+  const [error, setError] = useState(null)
   const [closeTarget, setCloseTarget] = useState(null)
   const [closeState, setCloseState] = useState(CLOSE_POSITION_STATE.IDLE)
   const [closeSlippage, setCloseSlippage] = useState(2)
@@ -85,7 +90,15 @@ export default function Positions() {
       const result = await fn()
       if (mountedRef.current && sequence === loadSequenceRef.current && tabRef.current === requestedTab) {
         setRows(result)
+        setError(null)
       }
+    } catch (failure) {
+      // Recorded for the view, then rethrown: callers such as the close flow's
+      // post-sell refresh rely on a failed reload still rejecting.
+      if (mountedRef.current && sequence === loadSequenceRef.current && tabRef.current === requestedTab) {
+        setError(failure)
+      }
+      throw failure
     } finally {
       if (mountedRef.current && sequence === loadSequenceRef.current && tabRef.current === requestedTab) {
         setLoading(false)
@@ -107,10 +120,18 @@ export default function Positions() {
   const cells = useMemo(() => summarize(rows, tab === 'closed'), [rows, tab])
 
   const selectTab = useCallback((nextTab) => {
+    if (nextTab === tabRef.current) return
     tabRef.current = nextTab
     loadSequenceRef.current += 1
+    // The previous tab's rows must not show under the new tab's heading while
+    // its own list loads.
+    setRows([])
+    setError(null)
+    setLoading(nextTab !== 'activity')
     setTab(nextTab)
   }, [])
+
+  const retryLoad = useCallback(() => { load().catch(() => {}) }, [load])
 
   const transitionClose = useCallback((event) => {
     const next = reduceClosePosition(closeStateRef.current, event)
@@ -291,11 +312,24 @@ export default function Positions() {
     reconciliationRefreshOk,
   )
 
+  const tabIndex = TABS.findIndex(([k]) => k === tab)
+  const titleByState = {
+    [CLOSE_POSITION_STATE.RECONCILIATION_REQUIRED]: 'Execution status',
+    [CLOSE_POSITION_STATE.SUBMITTING]: 'Closing position',
+    [CLOSE_POSITION_STATE.CONFIRMED]: 'Position closed',
+    [CLOSE_POSITION_STATE.FAILED]: 'Close not completed',
+  }
+
   return (
-    <div ref={pageContainerRef} tabIndex={-1} data-modal-focus-fallback>
-      <div className="toggle-row">
+    <div ref={pageContainerRef} tabIndex={-1} data-modal-focus-fallback className="page-focus">
+      <div
+        className="seg seg-row"
+        role="group"
+        aria-label="Positions view"
+        style={{ '--n': TABS.length, '--i': tabIndex }}
+      >
         {TABS.map(([k, label]) => (
-          <button key={k} className={`chip ${tab === k ? 'active' : ''}`} onClick={() => selectTab(k)}>
+          <button key={k} type="button" aria-pressed={tab === k} onClick={() => selectTab(k)}>
             {label}
           </button>
         ))}
@@ -305,7 +339,7 @@ export default function Positions() {
         <ActivityFeed />
       ) : (
         <>
-          {!loading && rows.length > 0 && (
+          {rows.length > 0 && (
             <div className="stat-grid">
               {cells.map(([label, value, c]) => (
                 <div className="stat-cell" key={label}>
@@ -316,10 +350,48 @@ export default function Positions() {
             </div>
           )}
 
-          {loading ? (
-            <div className="muted">loading…</div>
+          {error && rows.length > 0 && (
+            <div className="list-notice">
+              <Notice
+                tone="error"
+                action={(
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={retryLoad} disabled={loading}>
+                    <Icon name="refresh" />Retry
+                  </button>
+                )}
+              >
+                Couldn’t refresh. These are the positions loaded earlier.
+              </Notice>
+            </div>
+          )}
+
+          {loading && rows.length === 0 ? (
+            <SkeletonCards count={3} label={`Loading ${tab} positions`} />
+          ) : error && rows.length === 0 ? (
+            <ErrorState
+              title={`Couldn’t load ${tab} positions`}
+              error={error}
+              onRetry={retryLoad}
+              retrying={loading}
+            />
           ) : rows.length === 0 ? (
-            <div className="muted">no {tab} positions</div>
+            tab === 'open' ? (
+              <StateBlock
+                icon="layers"
+                title="No open positions"
+                action={onNavigate && (
+                  <button type="button" className="btn btn-ghost" onClick={() => onNavigate('home')}>
+                    Copy a wallet
+                  </button>
+                )}
+              >
+                Positions appear here when a wallet you copy opens a trade.
+              </StateBlock>
+            ) : (
+              <StateBlock icon="clock" title="No closed positions">
+                Nothing was closed in the last 12 hours.
+              </StateBlock>
+            )
           ) : (
             rows.map((r) => (
               <PositionCard
@@ -331,7 +403,7 @@ export default function Positions() {
             ))
           )}
           {tab === 'closed' && !loading && (
-            <div className="muted" style={{ marginTop: 18, textAlign: 'center' }}>
+            <div className="history-note">
               <div>Showing position history from the last 12 hours.</div>
               <a
                 href="https://polymarket.com/portfolio"
@@ -347,32 +419,34 @@ export default function Positions() {
 
       {closeTarget && closeState !== CLOSE_POSITION_STATE.IDLE && (
         <Modal
-          title={closeState === CLOSE_POSITION_STATE.RECONCILIATION_REQUIRED
-            ? 'EXECUTION STATUS'
-            : closeState === CLOSE_POSITION_STATE.SUBMITTING
-              ? 'CLOSING POSITION'
-              : closeState === CLOSE_POSITION_STATE.CONFIRMED
-                ? 'POSITION CLOSED'
-                : closeState === CLOSE_POSITION_STATE.FAILED
-                  ? 'CLOSE NOT COMPLETED'
-                  : 'CONFIRM CLOSE'}
+          title={titleByState[closeState] || 'Close this position?'}
           accent="red"
           onClose={handleDismissClose}
           canClose={canDismissModal}
           returnFocusRef={pageContainerRef}
         >
+          <p className="modal-market">{closeTarget.market_title || 'This position'}</p>
           {canSubmitClose && (
             <>
-              <p><strong>Close the entire current position</strong></p>
-              <p className="muted">
-                Estimated shares: {Number(closeTarget.shares || 0).toFixed(6)}
-                {closeTarget.current_price != null
-                  ? ` · Estimated value: $${((closeTarget.shares || 0) * closeTarget.current_price).toFixed(2)} at ${(closeTarget.current_price * 100).toFixed(1)}¢`
-                  : ''}
-              </p>
-              {closeDetail && <div className="muted">{closeDetail}</div>}
-              <label className="fld">
-                Acceptable slippage: <strong>{closeSlippage.toFixed(1)}%</strong>
+              <p className="modal-lede">Close the entire current position at market, within the price tolerance below.</p>
+              <dl className="modal-facts">
+                <div>
+                  <dt>Estimated shares</dt>
+                  <dd>{Number(closeTarget.shares || 0).toFixed(6)}</dd>
+                </div>
+                {closeTarget.current_price != null && (
+                  <div>
+                    <dt>Estimated value</dt>
+                    <dd>${((closeTarget.shares || 0) * closeTarget.current_price).toFixed(2)} at {(closeTarget.current_price * 100).toFixed(1)}¢</dd>
+                  </div>
+                )}
+              </dl>
+              {closeDetail && <Notice>{closeDetail}</Notice>}
+              <div className="fld fld-slider">
+                <div className="setting-head">
+                  <span>Acceptable slippage</span>
+                  <span className="setting-val" aria-hidden="true">{closeSlippage.toFixed(1)}%</span>
+                </div>
                 <div className="slider-row">
                   <input
                     type="range"
@@ -380,6 +454,7 @@ export default function Positions() {
                     max="10"
                     step="0.5"
                     value={closeSlippage}
+                    style={{ '--fill': `${closeSlippage * 10}%` }}
                     onChange={(e) => {
                       const value = Number(e.target.value)
                       closeSlippageRef.current = value
@@ -388,33 +463,42 @@ export default function Positions() {
                     aria-label="Acceptable close slippage percentage"
                   />
                 </div>
-              </label>
-              <div className="muted" style={{ marginBottom: 10 }}>
-                The order will not fill below the selected price tolerance.
+                <span className="setting-hint">The order will not fill below the selected price tolerance.</span>
               </div>
-              <button className="btn btn-danger" onClick={handleConfirmClose}>
-                {closeState === CLOSE_POSITION_STATE.CONFIRMING ? 'CONFIRM CLOSE' : 'TRY CLOSE AGAIN'}
-              </button>
+              <div className="modal-actions">
+                <button type="button" className="btn btn-danger is-strong" onClick={handleConfirmClose}>
+                  {closeState === CLOSE_POSITION_STATE.CONFIRMING ? 'Close position' : 'Try closing again'}
+                </button>
+                <button type="button" className="btn btn-ghost" onClick={handleDismissClose} disabled={!canDismissModal}>
+                  Keep position
+                </button>
+              </div>
             </>
           )}
           {closeState === CLOSE_POSITION_STATE.SUBMITTING && (
-            <div className="muted" role="status">CLOSING…</div>
+            <div className="modal-progress" role="status">
+              <span className="launch-progress" aria-hidden="true" />
+              <span>Selling at market. Waiting for the exchange to confirm…</span>
+            </div>
           )}
           {closeState === CLOSE_POSITION_STATE.RECONCILIATION_REQUIRED && (
             <>
-              <div className="muted">{closeDetail || UNCERTAIN_EXECUTION_DETAIL}</div>
-              <button className="btn" onClick={refreshCloseStatus} disabled={reconciliationRefreshPending}>
-                {reconciliationRefreshPending ? 'REFRESHING…' : 'REFRESH STATUS'}
-              </button>
+              <Notice>{closeDetail || UNCERTAIN_EXECUTION_DETAIL}</Notice>
+              <div className="modal-actions">
+                <button type="button" className="btn" onClick={refreshCloseStatus} disabled={reconciliationRefreshPending}>
+                  <Icon name="refresh" />
+                  {reconciliationRefreshPending ? 'Refreshing…' : 'Refresh status'}
+                </button>
+              </div>
             </>
           )}
           {closeState === CLOSE_POSITION_STATE.CONFIRMED && (
-            <div className="muted">CLOSED ✓</div>
+            <Notice tone="ok">{closeDetail || 'Position closed.'}</Notice>
           )}
           {closeState === CLOSE_POSITION_STATE.FAILED && (
-            <div className="muted">
+            <Notice tone="error">
               {closeDetail || 'Close could not be safely completed.'} No new SELL will be submitted from this dialog.
-            </div>
+            </Notice>
           )}
         </Modal>
       )}

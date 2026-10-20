@@ -3,8 +3,22 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Trader Screener — PolyTrade</title>
+<title>Wallet Screener — PolyTrade</title>
 <meta name="description" content="Rank Polymarket wallets by what survives being copied, not by bankroll.">
+<meta name="theme-color" content="#eef2ef">
+<link rel="canonical" href="https://polytradebot.live/screener/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="PolyTrade">
+<meta property="og:title" content="Wallet Screener — PolyTrade">
+<meta property="og:description" content="Rank Polymarket wallets by what survives being copied, not by bankroll. Read-only public data; not financial advice.">
+<meta property="og:url" content="https://polytradebot.live/screener/">
+<meta property="og:image" content="https://polytradebot.live/brand/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://polytradebot.live/brand/og-image.png">
+<link rel="icon" type="image/png" sizes="32x32" href="/screener/brand/favicon-32.png">
+<link rel="apple-touch-icon" href="/screener/brand/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
@@ -14,26 +28,32 @@
 </head>
 <body class="screener">
 
-<nav class="screener-nav">
-  <a class="screener-brand" href="/">
-    <span class="brand-logo" aria-hidden="true">PT</span>
-    PolyTrade
+<header class="screener-nav">
+  <a class="screener-brand" href="/" aria-label="PolyTrade home">
+    <img class="brand-logo" src="/screener/brand/polytrade-mark.png" alt="">
+    <span>PolyTrade</span>
   </a>
   <span class="screener-brand-divider" aria-hidden="true"></span>
-  <span class="screener-brand-label">Screener</span>
+  <span class="screener-brand-label">Wallet Screener</span>
+
+  <nav class="site-switcher" aria-label="PolyTrade sites">
+    <a href="/">Home</a>
+    <a href="/screener" aria-current="page">Screener</a>
+    <a href="/docs">Docs</a>
+  </nav>
 
   <div class="screener-search">
     <label class="visually-hidden" for="q">Search wallets</label>
-    <input id="q" type="search" placeholder="0x… or trader name" autocomplete="off" spellcheck="false">
+    <input id="q" type="search" placeholder="Search 0x… or trader name" autocomplete="off" spellcheck="false">
     <div class="hits" id="hits" hidden></div>
   </div>
 
   <div class="screener-nav-links">
-    <a href="#methodology">Method</a>
+    <a class="nav-text-link" href="#methodology">Method</a>
     <span id="saved-slot"></span>
-    <a class="btn btn-primary" href="https://t.me/cpolytrade_bot" target="_blank" rel="noreferrer">Open bot</a>
+    <a class="btn btn-primary btn-cta" href="https://t.me/cpolytrade_bot" target="_blank" rel="noreferrer">Open Telegram <span aria-hidden="true">↗</span></a>
   </div>
-</nav>
+</header>
 
 <div class="screener-shell">
 

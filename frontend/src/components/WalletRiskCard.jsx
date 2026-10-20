@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { api } from '../api'
 import Folder from './Folder'
 import SettingSlider from './SettingSlider'
+import CopyText from './CopyText'
+import Icon from './Icon'
 
 const short = (a) => (a ? `${a.slice(0, 6)}…${a.slice(-4)}` : '')
 
@@ -26,16 +28,21 @@ const DEFAULTS = {
 
 // [key, label, min, max, step, unit, hint]
 const SLIDERS = [
-  ['copy_ratio_pct', 'RATIO %', 0, 20, 0.1, '%', 'copy = leader position × this %'],
-  ['max_position_usd', 'MAX / POSITION', 1, 500, 1, '$', 'hard cap for the whole copied market position'],
-  ['min_leader_usd', 'MIN LEADER', 0, 10000, 50, '$', "skip if leader's position is smaller"],
-  ['ignore_below_usd', 'MIN SIZE / COPY', 0.5, 50, 0.5, '$', 'skip any copy or top-up smaller than this'],
-  ['max_open_positions', 'MAX OPEN', 0, 50, 1, '', '0 = unlimited'],
-  ['max_total_exposure_usd', 'MAX EXPOSURE', 0, 5000, 5, '$', 'cap total open on this wallet (0 = none)'],
-  ['min_price', 'MIN PRICE', 0, 1, 0.01, '', 'skip cheaper longshots'],
-  ['max_price', 'MAX PRICE', 0, 1, 0.01, '', 'skip near-resolved markets'],
-  ['max_slippage_pct', 'MAX SLIPPAGE %', 0, 10, 0.5, '%', 'vs leader fill price'],
-  ['daily_loss_limit_usd', 'DAILY LOSS LIMIT', 0, 1000, 1, '$', '0 = none'],
+  ['copy_ratio_pct', 'Copy ratio', 0, 20, 0.1, '%', 'Your copy = their position × this %.'],
+  ['max_position_usd', 'Max per position', 1, 500, 1, '$', 'Hard cap for the whole copied market position.'],
+  ['min_leader_usd', 'Min leader position', 0, 10000, 50, '$', 'Skip if their position is smaller than this.'],
+  ['ignore_below_usd', 'Min copy size', 0.5, 50, 0.5, '$', 'Skip any copy or top-up smaller than this.'],
+  ['max_open_positions', 'Max open positions', 0, 50, 1, '', '0 = unlimited.'],
+  ['max_total_exposure_usd', 'Max total exposure', 0, 5000, 5, '$', 'Cap on everything open from this wallet. 0 = none.'],
+  ['min_price', 'Min price', 0, 1, 0.01, '¢', 'Skip cheaper longshots. 0.10 = 10¢.'],
+  ['max_price', 'Max price', 0, 1, 0.01, '¢', 'Skip near-resolved markets. 0.98 = 98¢.'],
+  ['max_slippage_pct', 'Max slippage', 0, 10, 0.5, '%', 'Versus the leader’s fill price.'],
+  ['daily_loss_limit_usd', 'Daily loss limit', 0, 1000, 1, '$', '0 = none.'],
+]
+const GROUPS = [
+  ['Position sizing', ['copy_ratio_pct', 'max_position_usd', 'ignore_below_usd', 'min_leader_usd']],
+  ['Market filters', ['min_price', 'max_price', 'max_slippage_pct']],
+  ['Risk limits', ['max_open_positions', 'max_total_exposure_usd', 'daily_loss_limit_usd']],
 ]
 // values where 0 means "no limit" and should persist as NULL, not 0
 const ZERO_IS_NULL = new Set(['max_open_positions', 'max_total_exposure_usd', 'daily_loss_limit_usd'])
@@ -48,21 +55,26 @@ function withDefaults(w) {
 
 export default function WalletRiskCard({ w, onChange }) {
   const [s, setS] = useState(() => withDefaults(w))
-  const [saved, setSaved] = useState('')
+  const [saved, setSaved] = useState(null)        // { ok, text } — the last save's outcome
+  const [confirmStop, setConfirmStop] = useState(false)
+  const [stopping, setStopping] = useState(false)
   const timers = useRef({})
+  const savedTimer = useRef(null)
 
   // Parent reloads are authoritative. Without this, a failed optimistic pause
   // could leave the card showing OFF even though the DB still said ON.
   useEffect(() => setS(withDefaults(w)), [w])
+  useEffect(() => () => clearTimeout(savedTimer.current), [])
 
   async function persist(patch) {
+    clearTimeout(savedTimer.current)
     try {
       await api.followSettings(w.trader_address, patch)
-      setSaved('SAVED ✓')
-      setTimeout(() => setSaved(''), 900)
+      setSaved({ ok: true, text: 'Saved' })
+      savedTimer.current = setTimeout(() => setSaved(null), 1400)
       return true
     } catch (e) {
-      setSaved(String(e.message || e))
+      setSaved({ ok: false, text: `Not saved: ${String(e.message || e)}` })
       onChange?.()
       return false
     }
@@ -91,68 +103,113 @@ export default function WalletRiskCard({ w, onChange }) {
   }
 
   async function remove() {
-    await api.unfollow(w.trader_address).catch(() => {})
-    onChange?.()
+    setStopping(true)
+    try {
+      await api.unfollow(w.trader_address)
+      onChange?.()
+    } catch (e) {
+      setSaved({ ok: false, text: `Could not stop copying: ${String(e.message || e)}` })
+      setConfirmStop(false)
+    } finally {
+      setStopping(false)
+    }
   }
 
   const enabled = !s.paused
+  const name = w.display_name || short(w.trader_address)
   const title = (
-    <span>
-      {w.display_name || short(w.trader_address)}{' '}
-      <span className={`tier-badge tier-${w.tier || 'bronze'}`}>{(w.tier || 'bronze').toUpperCase()}</span>
-      {enabled ? null : <span className="neg"> · OFF</span>}
-    </span>
+    <>
+      <span className="wallet-name">{name}</span>
+      <span className={`tier-badge tier-${w.tier || 'bronze'}`}>{w.tier || 'bronze'}</span>
+      <span className={`wallet-status ${enabled ? 'is-on' : 'is-off'}`}>{enabled ? 'Copying' : 'Paused'}</span>
+    </>
   )
+  const byKey = Object.fromEntries(SLIDERS.map((row) => [row[0], row]))
+  const noExposure = !Number(s.max_total_exposure_usd)
+  const noDailyLoss = !Number(s.daily_loss_limit_usd)
 
   return (
     <Folder id={`wallet-${w.trader_address}`} title={title}>
-      <div className="card">
-        <div className="muted small">{w.trader_address}</div>
+      <div className="card wallet-card">
+        <CopyText value={w.trader_address} display={`${w.trader_address.slice(0, 10)}…${w.trader_address.slice(-8)}`} label="Copy wallet address" />
 
-        <label className="fld fld-slider" style={{ marginTop: 8 }}>
-          <span className="setting-head">
-            <span>ENABLED</span>
-            <button
-              className={`chip ${enabled ? 'active' : ''}`}
-              onClick={toggleEnabled}
-            >
-              {enabled ? 'ON' : 'OFF'}
-            </button>
+        <div className="switch-row">
+          <span className="switch-copy">
+            <b>{enabled ? 'Copying new trades' : 'Copying paused'}</b>
+            <span>Paused stops new buys. Open positions still exit and resolve.</span>
           </span>
-          <span className="setting-hint muted small">
-            off = no new buys; open positions still exit &amp; resolve
-          </span>
-        </label>
-
-        <div className="settings-grid">
-          {SLIDERS.map(([k, label, min, max, step, unit, hint]) => (
-            <SettingSlider
-              key={k}
-              label={label}
-              value={s[k]}
-              onChange={(v) => set(k, v)}
-              min={min}
-              max={max}
-              step={step}
-              unit={unit}
-              hint={hint}
+          <span className="switch">
+            <input
+              type="checkbox"
+              role="switch"
+              checked={enabled}
+              onChange={toggleEnabled}
+              aria-label={`Copy new trades from ${name}`}
             />
-          ))}
+            <span className="switch-track" aria-hidden="true"><span className="switch-thumb" /></span>
+          </span>
         </div>
 
-        {(!Number(s.max_total_exposure_usd) || !Number(s.daily_loss_limit_usd)) && (
-          <div className="neg small" style={{ marginTop: 8 }}>
-            Risk warning: {(!Number(s.max_total_exposure_usd) && !Number(s.daily_loss_limit_usd))
-              ? 'no total exposure or daily loss limit is active.'
-              : !Number(s.max_total_exposure_usd)
-                ? 'no total exposure limit is active.'
-                : 'no daily loss limit is active.'}
+        {GROUPS.map(([group, keys]) => (
+          <div className="settings-group" key={group}>
+            <div className="settings-group-title">{group}</div>
+            <div className="settings-grid">
+              {keys.map((k) => {
+                const [, label, min, max, step, unit, hint] = byKey[k]
+                return (
+                  <SettingSlider
+                    key={k}
+                    label={label}
+                    value={s[k]}
+                    onChange={(v) => set(k, v)}
+                    min={min}
+                    max={max}
+                    step={step}
+                    unit={unit}
+                    hint={hint}
+                  />
+                )
+              })}
+            </div>
+            {group === 'Risk limits' && (noExposure || noDailyLoss) && (
+              <div className="notice" role="note">
+                <Icon name="alert" />
+                <div>
+                  <b>Risk warning:</b>{' '}
+                  {noExposure && noDailyLoss
+                    ? 'no total exposure or daily loss limit is active.'
+                    : noExposure
+                      ? 'no total exposure limit is active.'
+                      : 'no daily loss limit is active.'}
+                </div>
+              </div>
+            )}
           </div>
-        )}
+        ))}
 
-        <div className="pc-row" style={{ marginTop: 8 }}>
-          <button className="btn btn-danger" onClick={remove}>UNFOLLOW</button>
-          {saved && <span className="muted">{saved}</span>}
+        <div className="wallet-actions">
+          {confirmStop ? (
+            <div className="confirm-inline" role="alertdialog" aria-label={`Stop copying ${name}`}>
+              <p>
+                Stop copying <b>{name}</b>? New buys from this wallet stop. Nothing is sold: open
+                positions still follow its reductions, and you can close them or let them resolve.
+              </p>
+              <div className="confirm-inline-actions">
+                <button type="button" className="btn btn-ghost" onClick={() => setConfirmStop(false)} disabled={stopping}>Keep copying</button>
+                <button type="button" className="btn btn-danger is-strong" onClick={remove} disabled={stopping}>
+                  {stopping ? 'Stopping…' : 'Stop copying'}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button type="button" className="btn btn-danger" onClick={() => setConfirmStop(true)}>Stop copying</button>
+          )}
+          {saved && !confirmStop && (
+            <span className={`fld-status ${saved.ok ? 'is-ok' : 'is-error'}`} role="status">
+              {saved.ok && <Icon name="check" className="icon icon-sm" />}
+              {saved.text}
+            </span>
+          )}
         </div>
       </div>
     </Folder>

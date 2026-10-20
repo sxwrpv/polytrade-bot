@@ -26,16 +26,36 @@ document.getElementById('saved-slot').append(savedPill(drawer.open));
 
 boot();
 
+function backToBoard() {
+  const back = el('a', 'btn', 'Back to all wallets');
+  back.href = '/screener/';
+  return back;
+}
+
 async function boot() {
   if (!M.isAddress(wallet)) {
-    page.replaceChildren(el('p', 'screener-state', 'That is not a wallet address.'));
+    page.replaceChildren(R.stateBlock({
+      title: 'That is not a wallet address.',
+      body: 'A wallet address is 0x followed by 40 hex characters. Search the screener for a trader by name or address instead.',
+      actions: [backToBoard()],
+    }));
     return;
   }
   document.getElementById('pm-link').href = M.polymarketProfile(wallet);
   try {
     data = await api.trader(wallet);
   } catch (e) {
-    page.replaceChildren(el('p', 'screener-state', `Could not read this wallet: ${e.message}`));
+    const retry = el('button', 'btn btn-primary', 'Try again');
+    retry.type = 'button';
+    retry.addEventListener('click', () => {
+      page.replaceChildren(el('p', 'screener-state', 'Reading this wallet’s tape from Polymarket…'));
+      boot();
+    });
+    page.replaceChildren(R.stateBlock({
+      title: 'This wallet couldn’t be loaded.',
+      body: `${String(e.message || 'Polymarket did not answer').replace(/\.$/, '')}. Polymarket’s public data can be slow or briefly unavailable; try again in a moment.`,
+      actions: [retry, backToBoard()],
+    }));
     return;
   }
   document.title = `${data.profile.displayName || M.shortAddress(wallet)} — PolyTrade Screener`;

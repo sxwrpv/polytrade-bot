@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { getModalManager } from './modalManager'
+import Icon from './Icon'
 
 const FOCUSABLE_SELECTOR = [
   'a[href]',
@@ -154,20 +155,24 @@ export default function Modal({
         aria-labelledby={titleId}
         tabIndex={-1}
       >
-        <div className="modal-title" id={titleId}>{title}</div>
+        <div className="modal-head">
+          <h2 className="modal-title" id={titleId}>{title}</h2>
+          <button
+            type="button"
+            className="icon-btn modal-x"
+            aria-label="Close dialog"
+            onClick={() => {
+              const entry = entryRef.current
+              if (!entry) return
+              const manager = getModalManager(entry.dialog.ownerDocument)
+              if (manager.isTop(entry) && canCloseRef.current) onCloseRef.current?.()
+            }}
+            disabled={!canClose}
+          >
+            <Icon name="close" />
+          </button>
+        </div>
         {children}
-        <button
-          className="modal-x"
-          onClick={() => {
-            const entry = entryRef.current
-            if (!entry) return
-            const manager = getModalManager(entry.dialog.ownerDocument)
-            if (manager.isTop(entry) && canCloseRef.current) onCloseRef.current?.()
-          }}
-          disabled={!canClose}
-        >
-          [ CLOSE ]
-        </button>
       </div>
     </div>,
     portalTarget,

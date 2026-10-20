@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { api } from '../api'
 import SettingSlider from './SettingSlider'
+import Icon from './Icon'
 
 /* Start copying a wallet: paste, set limits, confirm.
  *
@@ -77,10 +78,10 @@ export default function CopyWalletCard({ onAdded }) {
 
   if (state === 'done') {
     return (
-      <div className="card copy-wallet">
+      <div className="card copy-wallet" role="status">
         <p className="copy-wallet-ok">
-          Copying started. Change the ratio or the per-trade cap any time under
-          Copied Wallets.
+          <Icon name="check" />
+          <span>Copying started. Change the ratio or the per-trade cap any time under Copied wallets.</span>
         </p>
       </div>
     )
@@ -89,31 +90,36 @@ export default function CopyWalletCard({ onAdded }) {
   return (
     <div className="card copy-wallet">
       <label className="fld">
-        WALLET ADDRESS
+        Wallet address
         <input
           value={value}
           onChange={(e) => { setValue(e.target.value); setState('idle'); setError('') }}
-          placeholder="0x… or paste a profile link"
+          placeholder="0x… or paste a Polymarket profile link"
           spellCheck="false"
           autoComplete="off"
+          autoCapitalize="off"
           aria-invalid={malformed || undefined}
+          aria-describedby="copy-wallet-help"
         />
+        <span className="fld-hint" id="copy-wallet-help">
+          {address ? `Found ${address.slice(0, 6)}…${address.slice(-4)}. Set your limits below.` : 'Any link that ends in a wallet address works.'}
+        </span>
       </label>
 
       {malformed && (
-        <p className="copy-wallet-err">
+        <p className="copy-wallet-err" role="alert">
           That is not a wallet address. It should be 0x followed by 40 hex characters.
         </p>
       )}
-      {error && <p className="copy-wallet-err">{error}</p>}
+      {error && <p className="copy-wallet-err" role="alert">{error}</p>}
 
       {/* Limits appear only once there is a wallet to apply them to. */}
       {address && (
         <div className="copy-wallet-settings">
-          <div className="control-label">LIMITS FOR THIS WALLET</div>
+          <span className="control-label">Limits for this wallet</span>
 
           <SettingSlider
-            label="COPY RATIO"
+            label="Copy ratio"
             value={ratio}
             onChange={setRatio}
             min={0.5}
@@ -123,7 +129,7 @@ export default function CopyWalletCard({ onAdded }) {
             hint="Your position = their position value × this. 1% of a $2,000 trade is $20."
           />
           <SettingSlider
-            label="MAX PER TRADE"
+            label="Max per trade"
             value={maxUsd}
             onChange={setMaxUsd}
             min={1}
@@ -139,15 +145,15 @@ export default function CopyWalletCard({ onAdded }) {
       )}
 
       {state === 'confirm' ? (
-        <div className="copy-wallet-confirm">
+        <div className="copy-wallet-confirm" role="alertdialog" aria-label="Confirm copying">
           <p>
             Start copying <b>{address.slice(0, 10)}…{address.slice(-6)}</b> at{' '}
             <b>{ratio}%</b> of their position size, capped at <b>${maxUsd}</b> per trade?
             This spends real money on their next qualifying trade.
           </p>
           <div className="copy-wallet-actions">
-            <button type="button" className="btn" onClick={start}>Start copying</button>
             <button type="button" className="btn btn-ghost" onClick={() => setState('idle')}>Cancel</button>
+            <button type="button" className="btn" onClick={start}>Start copying</button>
           </div>
         </div>
       ) : (
@@ -156,7 +162,7 @@ export default function CopyWalletCard({ onAdded }) {
           className="btn"
           disabled={!ready || state === 'working'}
           onClick={() => setState('confirm')}
-        >{state === 'working' ? 'STARTING…' : 'REVIEW AND COPY'}</button>
+        >{state === 'working' ? 'Starting…' : 'Review and copy'}</button>
       )}
 
       {/* This sentence has to stay true. It was false when first written: the

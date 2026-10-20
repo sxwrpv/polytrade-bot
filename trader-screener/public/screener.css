@@ -9,51 +9,46 @@
  */
 
 /* --- page ground ---------------------------------------------------------
-   The Mini App's mint radial wash, capped at 0.16 so --muted stays at AA
-   against it (4.57:1) — labels and lede sit directly on this. */
+   Flat paper, like the landing page and the documentation. The old neon-mint
+   glow was retired from the main app for reading as generic SaaS; this page is
+   reference material and now reads like the rest of PolyTrade. */
 .screener {
   min-height: 100vh;
-  background:
-    radial-gradient(820px circle at 2% -8%, rgba(61, 220, 132, 0.16), transparent 64%),
-    radial-gradient(680px circle at 105% 26%, rgba(61, 220, 132, 0.13), transparent 62%),
-    radial-gradient(620px circle at 24% 106%, rgba(61, 220, 132, 0.11), transparent 60%);
-  background-color: var(--bg);
-  background-attachment: fixed;
+  background: var(--bg);
   --pill-tint: rgba(11, 158, 99, 0.10);
   --pill-tint-strong: rgba(11, 158, 99, 0.18);
   --paper-surface: rgba(238, 242, 239, 0.94);
+  --nav-h: 65px;
 }
 
 /* --- nav ------------------------------------------------------------------ */
 .screener-nav {
   position: sticky; top: 0; z-index: 20;
-  display: flex; align-items: center; gap: 20px;
-  padding: 12px max(20px, calc((100% - 1560px) / 2));
+  display: flex; align-items: center; gap: 16px;
+  min-height: var(--nav-h);
+  padding: 10px max(20px, calc((100% - 1560px) / 2));
   background: rgba(238, 242, 239, 0.92);
   backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
   border-bottom: 1px solid var(--border);
 }
 .screener-brand {
-  display: inline-flex; align-items: center; gap: 10px;
+  display: inline-flex; align-items: center; gap: 10px; min-height: 44px;
   color: var(--text); text-decoration: none;
-  font-size: 15px; font-weight: 700; letter-spacing: -.01em; white-space: nowrap;
+  font-size: 16px; font-weight: 700; letter-spacing: -.01em; white-space: nowrap;
 }
+/* The real mark, as on the landing page, the docs and the Mini App. */
 .screener-brand .brand-logo {
-  width: 28px; height: 28px; border-radius: 8px; background: var(--green);
-  display: inline-flex; align-items: center; justify-content: center;
-  color: var(--green-ink); font-family: var(--mono); font-size: 13px; font-weight: 700;
+  width: 32px; height: 32px; border-radius: 10px; object-fit: cover; flex: none;
+  box-shadow: 0 0 0 1px var(--border);
 }
-.screener-brand-divider { width: 1px; height: 18px; background: var(--border); }
-.screener-brand-label {
-  font-family: var(--mono); font-size: 10px; font-weight: 500;
-  letter-spacing: .16em; text-transform: uppercase; color: var(--muted);
-}
-.screener-search { flex: 1; max-width: 460px; position: relative; }
+.screener-brand-divider { width: 1px; height: 18px; background: var(--border-strong); }
+.screener-brand-label { font-size: 14px; font-weight: 500; color: var(--muted); white-space: nowrap; }
+.screener-search { flex: 1 1 220px; max-width: 420px; position: relative; }
 .screener-search input {
-  width: 100%; height: 34px; padding: 0 12px;
-  border: 1px solid var(--border); border-radius: 999px;
-  background: var(--bg); color: var(--text);
-  font-family: var(--mono); font-size: 12px;
+  width: 100%; height: 40px; padding: 0 14px;
+  border: 1px solid var(--border-strong); border-radius: 999px;
+  background: #fafcfb; color: var(--text);
+  font-family: inherit; font-size: 14px;
 }
 .screener-search input::placeholder { color: var(--muted); }
 .screener-search input:focus-visible {
@@ -71,11 +66,11 @@
 .hits a:last-child { border-bottom: none; }
 .hits a:hover { background: var(--green-wash); }
 .hits .hit-name { font-size: 13px; font-weight: 500; }
-.hits .hit-meta { display: block; font-family: var(--mono); font-size: 10px; color: var(--muted); }
+.hits .hit-meta { display: block; font-family: var(--mono); font-size: 11px; color: var(--muted); }
 .screener-nav-links { margin-left: auto; display: flex; align-items: center; gap: 14px; }
 .screener-nav-links a:not(.btn) {
-  font-family: var(--mono); font-size: 10px; letter-spacing: .12em;
-  text-transform: uppercase; color: var(--muted); text-decoration: none;
+  display: inline-flex; align-items: center; min-height: 44px;
+  font-size: 14px; font-weight: 600; color: var(--muted); text-decoration: none; white-space: nowrap;
 }
 .screener-nav-links a:not(.btn):hover { color: var(--green-deep); }
 
@@ -90,7 +85,7 @@
 .screener-intro { grid-area: intro; padding: 34px 0 4px; }
 .screener-eyebrow {
   margin: 0 0 8px; font-family: var(--mono); color: var(--muted);
-  font-size: 10px; font-weight: 500; letter-spacing: .16em; text-transform: uppercase;
+  font-size: 11px; font-weight: 500; letter-spacing: .16em; text-transform: uppercase;
 }
 .screener-intro h1 {
   margin: 0 0 12px; font-family: var(--serif); font-weight: 400;
@@ -100,14 +95,14 @@
 .screener-lede b { color: var(--text); font-weight: 600; }
 
 .screener-sidebar {
-  grid-area: sidebar; position: sticky; top: 59px; align-self: start;
-  max-height: calc(100vh - 59px); overflow-y: auto;
+  grid-area: sidebar; position: sticky; top: var(--nav-h); align-self: start;
+  max-height: calc(100vh - var(--nav-h)); overflow-y: auto;
   padding: 26px 18px 26px 0; border-right: 1px solid var(--border); scrollbar-width: thin;
 }
 .screener-main { grid-area: main; min-width: 0; padding: 22px 0 56px; }
 .screener-rail {
-  grid-area: rail; position: sticky; top: 59px; align-self: start;
-  max-height: calc(100vh - 59px); overflow-y: auto;
+  grid-area: rail; position: sticky; top: var(--nav-h); align-self: start;
+  max-height: calc(100vh - var(--nav-h)); overflow-y: auto;
   padding: 30px 0 26px 22px; border-left: 1px solid var(--border); scrollbar-width: thin;
 }
 
@@ -125,8 +120,33 @@
     gap: 0 28px; align-content: start; align-items: start;
   }
   .screener-main { order: 3; padding-top: 26px; }
-  .screener-nav { flex-wrap: wrap; gap: 10px; padding: 10px 16px; }
-  .screener-search { order: 3; flex-basis: 100%; max-width: none; }
+  /* Three rows on narrow screens: brand and actions, the site switcher, then
+     search. Too tall to stay pinned, so it scrolls away with the page. */
+  .screener-nav {
+    position: relative;
+    display: grid; grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas: "brand label links" "switch switch switch" "search search search";
+    gap: 10px 12px; padding: 10px 16px 14px;
+  }
+  .screener-brand { grid-area: brand; }
+  .screener-brand-divider { display: none; }
+  .screener-brand-label { grid-area: label; }
+  .screener-nav > .site-switcher { grid-area: switch; display: grid; grid-template-columns: repeat(3, 1fr); }
+  .screener-search { grid-area: search; max-width: none; }
+  .screener-nav-links { grid-area: links; gap: 8px; }
+}
+@media (max-width: 560px) {
+  .screener-brand-label { display: none; }
+  .screener-nav-links a.nav-text-link { display: none; }
+  /* The pill keeps its accessible name ("Saved wallets, N") in aria-label;
+     on a phone only the heart and the count need to show. */
+  .saved-pill > span:nth-child(2) { display: none; }
+  .screener-nav-links .btn-primary { padding-inline: 12px; }
+}
+/* A phone is too narrow for the wordmark, the saved pill and "Open Telegram"
+   in one row; the mark carries the brand there, as in the docs header. */
+@media (max-width: 420px) {
+  .screener-brand > span { display: none; }
 }
 @media (max-width: 560px) { .screener-sidebar { grid-template-columns: 1fr; } }
 
@@ -139,7 +159,7 @@
 .rail-heading::after { content: ''; display: block; margin-top: 9px; height: 1px; background: var(--border); }
 .rail-title {
   margin-bottom: 11px; font-family: var(--mono); color: var(--muted);
-  font-size: 9px; font-weight: 500; letter-spacing: .16em; text-transform: uppercase;
+  font-size: 11px; font-weight: 500; letter-spacing: .16em; text-transform: uppercase;
 }
 .rail-notes { display: grid; gap: 12px; }
 .rail-notes li { list-style: none; color: var(--muted); font-size: 11.5px; line-height: 1.62; }
@@ -152,13 +172,14 @@
 .control { display: grid; gap: 8px; margin-bottom: 20px; align-content: start; }
 .control-label {
   font-family: var(--mono); color: var(--muted);
-  font-size: 9px; font-weight: 500; letter-spacing: .14em; text-transform: uppercase;
+  font-size: 11px; font-weight: 500; letter-spacing: .14em; text-transform: uppercase;
 }
 .seg { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 6px; }
 .seg button {
-  padding: 6px 11px; border: 1px solid var(--border); border-radius: 999px;
+  min-height: 32px; padding: 5px 12px; border: 1px solid var(--border); border-radius: 999px;
   background: transparent; color: var(--muted);
-  font-family: var(--mono); font-size: 10px; letter-spacing: .04em; cursor: pointer;
+  font-family: inherit; font-size: 13px; font-weight: 500; cursor: pointer;
+  transition: background-color .2s ease, border-color .2s ease, color .2s ease;
 }
 .seg button:hover { border-color: var(--border-strong); color: var(--text); }
 .seg button[aria-pressed="true"] {
@@ -170,12 +191,12 @@
 }
 .filter-check input { margin-top: 2px; accent-color: var(--green); }
 .filter-check strong { display: block; font-size: 12px; font-weight: 600; }
-.filter-check small { display: block; color: var(--muted); font-size: 10.5px; line-height: 1.55; }
+.filter-check small { display: block; color: var(--muted); font-size: 11px; line-height: 1.55; }
 .chip-row { display: flex; flex-wrap: wrap; gap: 7px; padding-top: 14px; border-top: 1px solid var(--border); grid-column: 1 / -1; }
 .chip {
-  padding: 5px 11px; border: 1px solid var(--green); border-radius: 999px;
+  min-height: 32px; padding: 5px 12px; border: 1px solid var(--green); border-radius: 999px;
   background: var(--pill-tint); color: var(--green-deep);
-  font-family: var(--mono); font-size: 10px; cursor: pointer; text-align: left;
+  font-family: inherit; font-size: 13px; font-weight: 500; cursor: pointer; text-align: left;
 }
 .chip-clear { border-color: var(--border); background: transparent; color: var(--muted); }
 
@@ -188,7 +209,7 @@
   line-height: 1.15; letter-spacing: -.015em;
 }
 .sec-kicker {
-  font-family: var(--mono); color: var(--muted); font-size: 9px;
+  font-family: var(--mono); color: var(--muted); font-size: 11px;
   font-weight: 500; letter-spacing: .16em; text-transform: uppercase; margin-bottom: 7px;
 }
 .sec-lede { max-width: 74ch; color: var(--muted); font-size: 13px; line-height: 1.7; margin-top: 8px; }
@@ -211,7 +232,7 @@
 }
 .screener-table thead th {
   border-bottom: 1px solid var(--border-strong); color: var(--muted); font-family: var(--mono);
-  font-size: 9px; font-weight: 500; letter-spacing: .13em; text-transform: uppercase; line-height: 1.4;
+  font-size: 11px; font-weight: 500; letter-spacing: .13em; text-transform: uppercase; line-height: 1.4;
 }
 .screener-table tbody tr:hover { background: rgba(20, 32, 26, 0.03); }
 .screener-table tbody tr.selected { background: var(--green-wash); }
@@ -230,7 +251,7 @@
   font-size: 13px; font-weight: 500; text-decoration: none; color: var(--text);
 }
 .who .who-name:hover { color: var(--green-deep); text-decoration: underline; }
-.who .who-addr { display: block; font-family: var(--mono); font-size: 10px; color: var(--muted); }
+.who .who-addr { display: block; font-family: var(--mono); font-size: 11px; color: var(--muted); }
 .av {
   display: inline-flex; align-items: center; justify-content: center; flex: none;
   overflow: hidden; border-radius: var(--r-sm); background: var(--surface2);
@@ -248,47 +269,95 @@
 }
 .band-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--band); align-self: center; flex: none; }
 .band-name {
-  font-family: var(--mono); font-size: 10px; font-weight: 500;
+  font-family: var(--mono); font-size: 11px; font-weight: 500;
   letter-spacing: .16em; text-transform: uppercase; color: var(--band);
 }
-.band-n { font-family: var(--mono); font-size: 10px; color: var(--muted); }
+.band-n { font-family: var(--mono); font-size: 11px; color: var(--muted); }
 .band-line { font-size: 11.5px; color: var(--muted); flex: 1 1 320px; min-width: 0; line-height: 1.5; }
 .band-strong { --band: var(--green-deep); }
 .band-marginal { --band: var(--green-text); }
 .band-uneconomic, .band-loss_making { --band: var(--red); }
 .band-not_measurable { --band: var(--cyan); }
-.band-unproven, .band-none { --band: var(--faint); }
+.band-unproven, .band-none { --band: var(--muted); }
 
 .cchip {
   display: inline-flex; align-items: center; gap: 5px; white-space: nowrap;
   border: 1px solid color-mix(in srgb, var(--tone) 34%, transparent); border-radius: 999px;
   background: color-mix(in srgb, var(--tone) 9%, transparent); color: var(--tone);
-  padding: 3px 9px; font-family: var(--mono); font-size: 10px; cursor: help; vertical-align: middle;
+  padding: 3px 9px; font-family: var(--mono); font-size: 11px; cursor: help; vertical-align: middle;
 }
 .cchip-state { font-weight: 500; letter-spacing: .04em; }
 .cchip-num { font-weight: 700; }
-.smove { font-family: var(--mono); font-size: 9.5px; white-space: nowrap; cursor: help; margin-left: 6px; }
+.smove { font-family: var(--mono); font-size: 11px; white-space: nowrap; cursor: help; margin-left: 6px; }
 .smove.up { color: var(--green-deep); }
 .smove.down { color: var(--red); }
 .hchip {
-  font-family: var(--mono); font-size: 9px; letter-spacing: .1em; text-transform: uppercase;
+  font-family: var(--mono); font-size: 11px; letter-spacing: .1em; text-transform: uppercase;
   color: var(--muted); background: var(--surface2); border: 1px solid var(--border);
   border-radius: var(--r-sm); padding: 2px 6px; white-space: nowrap; cursor: help; flex: none;
 }
-.coverage { color: var(--muted); font-family: var(--mono); font-size: 10px; letter-spacing: .04em; white-space: nowrap; }
+.coverage { color: var(--muted); font-family: var(--mono); font-size: 11px; letter-spacing: .04em; white-space: nowrap; }
 
 /* --- buttons -------------------------------------------------------------- */
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-  padding: 7px 13px; border-radius: var(--r-md); border: 1px solid var(--border-strong);
+  min-height: 36px; padding: 7px 14px; border-radius: var(--r-md); border: 1px solid var(--border-strong);
   background: transparent; color: var(--text);
-  font-family: var(--mono); font-size: 10px; letter-spacing: .1em; text-transform: uppercase;
+  font-family: inherit; font-size: 13px; font-weight: 600; letter-spacing: 0;
   cursor: pointer; text-decoration: none; white-space: nowrap;
+  transition: background-color .2s ease, border-color .2s ease, color .2s ease, transform .3s cubic-bezier(.16, 1, .3, 1);
 }
+.btn:active { transform: scale(.97); }
+.btn:focus-visible { outline: 2px solid var(--green-deep); outline-offset: 2px; }
 .btn:hover { border-color: var(--green); color: var(--green-deep); }
-.btn-primary { background: var(--green-fill); border-color: var(--green-fill); color: var(--green-ink); font-weight: 600; }
-.btn-primary:hover { background: var(--green-deep); border-color: var(--green-deep); color: #fff; }
-.btn-sm { padding: 5px 9px; font-size: 9px; }
+/* The primary action is the landing page's tinted liquid-glass button (the
+   frontend's .btn in brutalism.css), so "Open Telegram" and "Copy" look the
+   same on every PolyTrade surface: a green-tinted body under a blurred
+   backdrop, a specular sweep, a bright top rim and a soft lift. --green-deep
+   on the tint stays at AA. */
+.btn-primary {
+  position: relative; isolation: isolate;
+  background:
+    linear-gradient(158deg, rgba(255, 255, 255, 0.58) 0%, rgba(255, 255, 255, 0.16) 44%, rgba(11, 158, 99, 0.22) 100%),
+    rgba(11, 158, 99, 0.16);
+  backdrop-filter: blur(14px) saturate(185%);
+  -webkit-backdrop-filter: blur(14px) saturate(185%);
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.8),
+    inset 0 -1px 0 rgba(11, 158, 99, 0.16),
+    0 6px 18px -8px rgba(20, 32, 26, 0.34);
+  color: var(--green-deep);
+  font-weight: 600;
+  transition: background .2s ease, box-shadow .2s ease, border-color .2s ease, transform .3s cubic-bezier(.16, 1, .3, 1);
+}
+.btn-primary::before {
+  content: '';
+  position: absolute; inset: 0; z-index: -1;
+  border-radius: inherit; pointer-events: none;
+  background: linear-gradient(138deg, rgba(255, 255, 255, 0.52) 0%, rgba(255, 255, 255, 0) 40%);
+  opacity: .9; transition: opacity .2s ease;
+}
+.btn-primary:hover {
+  background:
+    linear-gradient(158deg, rgba(255, 255, 255, 0.66) 0%, rgba(255, 255, 255, 0.2) 44%, rgba(11, 158, 99, 0.3) 100%),
+    rgba(11, 158, 99, 0.24);
+  border-color: rgba(255, 255, 255, 0.7);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    inset 0 -1px 0 rgba(11, 158, 99, 0.22),
+    0 10px 24px -10px rgba(11, 158, 99, 0.5);
+  color: var(--green-deep);
+}
+.btn-primary:hover::before { opacity: 1; }
+.btn-primary:active { transform: scale(.98); box-shadow: inset 0 1px 3px rgba(20, 32, 26, 0.18); }
+/* The header call to action, sized like the landing page's nav button. */
+.btn-cta { min-height: 40px; padding: 8px 14px; font-size: 14px; gap: 8px; }
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .btn-primary { background: #d3e6dc; border-color: var(--border-strong); }
+  .btn-primary:hover { background: #c4ddd1; }
+}
+.btn-sm { min-height: 30px; padding: 4px 10px; font-size: 12px; }
 .btn[aria-pressed="true"] { border-color: var(--green); background: var(--pill-tint); color: var(--green-deep); }
 .rowacts { display: flex; gap: 6px; justify-content: flex-end; }
 
@@ -301,7 +370,7 @@
 }
 .angle-card:hover { border-color: var(--border-strong); }
 .angle-tag {
-  font-family: var(--mono); font-size: 9px; letter-spacing: .14em; text-transform: uppercase;
+  font-family: var(--mono); font-size: 11px; letter-spacing: .14em; text-transform: uppercase;
   color: var(--green-deep); background: var(--pill-tint); border-radius: var(--r-sm); padding: 3px 7px;
   align-self: flex-start;
 }
@@ -312,7 +381,7 @@
   justify-content: start; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border);
 }
 .angle-stats div span {
-  display: block; font-family: var(--mono); font-size: 9px; letter-spacing: .13em;
+  display: block; font-family: var(--mono); font-size: 11px; letter-spacing: .13em;
   text-transform: uppercase; color: var(--muted);
 }
 .angle-stats div b { font-family: var(--mono); font-size: 14px; font-weight: 500; }
@@ -322,8 +391,8 @@
   gap: 9px; align-items: center; padding: 9px 0; border-bottom: 1px solid var(--border);
 }
 .lead-row:last-child { border-bottom: none; }
-.lead-row .rk { font-family: var(--mono); font-size: 10px; color: var(--muted); text-align: right; }
-.lead-row .meta { display: block; font-family: var(--mono); font-size: 9.5px; color: var(--muted); }
+.lead-row .rk { font-family: var(--mono); font-size: 11px; color: var(--muted); text-align: right; }
+.lead-row .meta { display: block; font-family: var(--mono); font-size: 11px; color: var(--muted); }
 .lead-row .n { font-family: var(--mono); font-size: 12px; text-align: right; }
 .angle-foot { margin-top: auto; padding-top: 12px; }
 .angle-foot .coverage { display: block; margin-bottom: 8px; }
@@ -331,7 +400,7 @@
 
 .spread-bar { height: 4px; background: var(--surface2); position: relative; margin-top: 8px; border-radius: 2px; }
 .spread-bar i { position: absolute; inset: 0 auto 0 0; background: var(--green); border-radius: 2px; }
-.spread-foot { display: flex; justify-content: space-between; margin-top: 5px; font-family: var(--mono); font-size: 9px; color: var(--muted); }
+.spread-foot { display: flex; justify-content: space-between; margin-top: 5px; font-family: var(--mono); font-size: 11px; color: var(--muted); }
 
 /* --- Smart Money Index ---------------------------------------------------- */
 .index-card {
@@ -344,7 +413,7 @@
 .index-score { font-family: var(--mono); font-size: 40px; font-weight: 500; line-height: 1; letter-spacing: -.03em; }
 .index-score span { font-size: 15px; color: var(--muted); }
 .index-zone {
-  font-family: var(--mono); font-size: 10px; letter-spacing: .18em;
+  font-family: var(--mono); font-size: 11px; letter-spacing: .18em;
   text-transform: uppercase; color: var(--green-deep); margin-top: 6px;
 }
 .index-read { font-size: 15px; line-height: 1.6; }
@@ -353,11 +422,11 @@
 .index-comp { display: grid; gap: 12px; padding-left: 22px; border-left: 1px solid var(--border); }
 @media (max-width: 1000px) { .index-comp { padding-left: 0; border-left: none; padding-top: 16px; border-top: 1px solid var(--border); } }
 .index-comp div span {
-  display: block; font-family: var(--mono); font-size: 9px; letter-spacing: .14em;
+  display: block; font-family: var(--mono); font-size: 11px; letter-spacing: .14em;
   text-transform: uppercase; color: var(--muted);
 }
 .index-comp div b { font-family: var(--mono); font-size: 16px; font-weight: 500; display: block; margin-top: 2px; }
-.index-comp div i { font-style: normal; display: block; font-size: 10.5px; color: var(--muted); margin-top: 2px; line-height: 1.5; }
+.index-comp div i { font-style: normal; display: block; font-size: 11px; color: var(--muted); margin-top: 2px; line-height: 1.5; }
 
 /* --- event cards ---------------------------------------------------------- */
 .event-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 16px; margin-top: 20px; }
@@ -368,7 +437,7 @@
 }
 .event-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .event-when {
-  font-family: var(--mono); font-size: 9px; letter-spacing: .12em; text-transform: uppercase;
+  font-family: var(--mono); font-size: 11px; letter-spacing: .12em; text-transform: uppercase;
   color: var(--muted); background: var(--surface2); border-radius: var(--r-sm); padding: 3px 7px; white-space: nowrap;
 }
 .event-when.soon { background: rgba(138, 93, 6, .12); color: var(--yellow); }
@@ -385,8 +454,8 @@
   padding: 14px 15px; display: flex; flex-direction: column;
 }
 .trend-hero { font-family: var(--mono); font-size: 23px; font-weight: 500; line-height: 1; margin-top: 12px; display: flex; align-items: baseline; gap: 7px; }
-.trend-pct { font-family: var(--mono); font-size: 10px; color: var(--muted); background: var(--surface2); border-radius: var(--r-sm); padding: 2px 5px; }
-.trend-sub { font-family: var(--mono); font-size: 9px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); margin-top: 8px; }
+.trend-pct { font-family: var(--mono); font-size: 11px; color: var(--muted); background: var(--surface2); border-radius: var(--r-sm); padding: 2px 5px; }
+.trend-sub { font-family: var(--mono); font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); margin-top: 8px; }
 .trend-val { font-family: var(--mono); font-size: 11.5px; color: var(--muted); margin-top: 3px; }
 .trend-spark { margin-top: 10px; }
 .trend-foot { margin-top: auto; padding-top: 12px; display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
@@ -418,7 +487,7 @@
 }
 .screener-table th .th-sort:hover { color: var(--green-deep); }
 .screener-table th .th-sort.is-active { color: var(--green-deep); font-weight: 700; }
-.screener-table th .th-arrow { opacity: .5; font-size: 9px; }
+.screener-table th .th-arrow { opacity: .5; font-size: 11px; }
 .screener-table th .th-sort.is-active .th-arrow { opacity: 1; }
 .screener-table th .th-sort:focus-visible { outline: 2px solid var(--green-deep); outline-offset: 2px; }
 .screener-table th[aria-sort]:not([aria-sort="none"]) { background: var(--green-wash); }
@@ -461,7 +530,25 @@
   border-radius: var(--r-md); background: rgba(138, 93, 6, .06);
 }
 .notice strong {
-  display: block; font-family: var(--mono); font-size: 10px; font-weight: 500;
+  display: block; font-family: var(--mono); font-size: 11px; font-weight: 500;
   letter-spacing: .16em; text-transform: uppercase; color: var(--yellow);
 }
 .notice p { margin-top: 6px; font-size: 12px; line-height: 1.65; color: var(--text); }
+
+/* --- states and touch ---------------------------------------------------- */
+.state-block {
+  display: grid; justify-items: start; gap: 8px;
+  margin: 16px 0; padding: 26px 24px;
+  border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--paper-surface);
+}
+.state-block.is-error { border-color: rgba(179, 36, 47, .32); background: rgba(179, 36, 47, .05); }
+.state-title { font-family: var(--serif); font-size: 26px; line-height: 1.15; letter-spacing: -.01em; }
+.state-body { max-width: 62ch; color: var(--muted); font-size: 15px; line-height: 1.6; }
+.state-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+
+/* Touch screens get 44px targets; a mouse keeps the denser desktop rhythm. */
+@media (pointer: coarse) {
+  .btn, .btn-sm, .seg button, .chip, .chip-clear { min-height: 44px; }
+  .screener-search input { height: 44px; }
+  .screener-table th .th-sort { min-height: 44px; }
+}

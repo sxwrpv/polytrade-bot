@@ -1,22 +1,27 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api'
+import Icon from './Icon'
 
 /* Total balance and its curve, at the top of Home.
  *
  * Deliberately one number and one shape. This is the glance surface — the
  * account opens the app to see what it is worth — so the cash / positions /
- * claimable breakdown lives on the User tab rather than competing here.
+ * claimable breakdown lives on the Account tab rather than competing here.
  *
  * The chart is hand-drawn SVG rather than a charting library. Axes, gridlines
  * and tick labels would be most of its height, and none of them earn their
  * space at a glance: the figure above the chart already states the current
  * value, and hovering states any other point.
+ *
+ * Three states besides the chart: loading (skeleton), a failed read (an error
+ * with a retry — never the "collecting snapshots" copy, which would describe a
+ * timeout as an empty history) and too little history to draw a line.
  */
 
 const UP = '#0b9e63'
 const DOWN = '#b3242f'
-const PERIODS = [['7d', '7D'], ['30d', '30D'], ['all', 'ALL']]
-const H = 78                  // plot height; the whole card lands near 190px
+const PERIODS = [['7d', '7D'], ['30d', '30D'], ['all', 'All']]
+const H = 86                  // plot height
 const PAD = 3                 // keeps the 2px stroke off the clip edge
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
@@ -25,23 +30,37 @@ const signed = (v) => `${v >= 0 ? '+' : '−'}$${Math.abs(v).toFixed(2)}`
 
 export default function BalanceCard() {
   const [me, setMe] = useState(null)
+  const [meError, setMeError] = useState(null)
   const [period, setPeriod] = useState('30d')
-  const [series, setSeries] = useState([])
+  const [series, setSeries] = useState(null)   // null = still loading
+  const [seriesError, setSeriesError] = useState(null)
+  const [reload, setReload] = useState(0)
   const [at, setAt] = useState(null)          // hovered index, null = idle
   const svgRef = useRef(null)
 
   useEffect(() => {
-    // Cheap read paints the card; the second costs a server-side CLOB client
-    // build on first call, so the balance lands late. Until it does the figure
-    // shows a dash — a balance we have not read is not a balance of nothing.
-    api.me().then((m) => setMe((prev) => prev ?? m)).catch(() => {})
-    api.me(true).then(setMe).catch(() => {})
-  }, [])
+    let live = true
+    // The balance read costs a server-side CLOB client build on first call, so
+    // it lands late. Until it does the figure is a skeleton — a balance we have
+    // not read is neither a balance of nothing nor a failed read.
+    setMe(null)
+    setMeError(null)
+    api.me(true)
+      .then((m) => { if (live) setMe(m) })
+      .catch((e) => { if (live) setMeError(e) })
+    return () => { live = false }
+  }, [reload])
 
   useEffect(() => {
+    let live = true
     setAt(null)
-    api.equitySeries(period).then(setSeries).catch(() => setSeries([]))
-  }, [period])
+    setSeries(null)
+    setSeriesError(null)
+    api.equitySeries(period)
+      .then((s) => { if (live) setSeries(s) })
+      .catch((e) => { if (live) { setSeries([]); setSeriesError(e) } })
+    return () => { live = false }
+  }, [period, reload])
 
   const points = useMemo(
     () => (series || []).filter((s) => Number.isFinite(s.equity)).map((s) => ({ t: s.ts, y: s.equity })),
@@ -71,26 +90,49 @@ export default function BalanceCard() {
     setAt(Math.round(((clientX - rect.left) / rect.width) * (points.length - 1)))
   }
 
+  const figureLoading = me == null && !meError
+  const balanceMissing = !figureLoading && me?.equity == null
+  const periodIndex = PERIODS.findIndex(([key]) => key === period)
+
   return (
-    <div className="card balance-card">
+    <section className="card balance-card" aria-labelledby="balance-title">
       <div className="balance-head">
-        <span className="balance-label">TOTAL BALANCE</span>
+        <h2 className="balance-label" id="balance-title">Total balance</h2>
         {me?.claimable > 0 && (
-          <span className="balance-claimable" title="resolved wins not yet redeemed">
+          <span className="balance-claimable" title="Resolved wins not yet redeemed — redeem them on polymarket.com">
             {money(me.claimable)} claimable
           </span>
         )}
       </div>
 
       <div className="balance-figure">
-        <span className="balance-value">{money(at == null ? me?.equity : shown?.y)}</span>
-        {delta != null && points.length > 1 && (
+        {figureLoading ? (
+          <span className="sk sk-figure" role="status" aria-label="Loading balance" />
+        ) : (
+          <span className="balance-value loaded-in">{money(at == null ? me?.equity : shown?.y)}</span>
+        )}
+        {!figureLoading && delta != null && points.length > 1 && (
           <span className={`balance-delta ${delta >= 0 ? 'pos' : 'neg'}`}>{signed(delta)}</span>
         )}
       </div>
+      {balanceMissing && !seriesError && (
+        <p className="small muted">
+          {meError ? 'Your live balance could not be read.' : 'Part of your live balance could not be read right now.'}{' '}
+          <button type="button" className="link-btn" onClick={() => setReload((n) => n + 1)}>Try again</button>
+        </p>
+      )}
 
       <div className="balance-chart">
-        {geom ? (
+        {series === null ? (
+          <div className="sk sk-chart" role="status" aria-label="Loading balance history" />
+        ) : seriesError ? (
+          <div className="balance-empty is-error" role="alert">
+            <span>Couldn’t load your balance history.</span>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => setReload((n) => n + 1)}>
+              <Icon name="refresh" />Try again
+            </button>
+          </div>
+        ) : geom ? (
           <>
             {at != null && shown && (
               <div
@@ -103,6 +145,7 @@ export default function BalanceCard() {
             )}
             <svg
               ref={svgRef}
+              className="loaded-in"
               viewBox={`0 0 100 ${H}`}
               preserveAspectRatio="none"
               role="img"
@@ -113,7 +156,7 @@ export default function BalanceCard() {
             >
               <defs>
                 <linearGradient id="balance-fill" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor={geom.rising ? UP : DOWN} stopOpacity="0.26" />
+                  <stop offset="0%" stopColor={geom.rising ? UP : DOWN} stopOpacity="0.24" />
                   <stop offset="100%" stopColor={geom.rising ? UP : DOWN} stopOpacity="0" />
                 </linearGradient>
               </defs>
@@ -152,17 +195,16 @@ export default function BalanceCard() {
         )}
       </div>
 
-      <div className="balance-periods">
+      <div className="seg seg-sm balance-periods" role="group" aria-label="Chart period" style={{ '--n': PERIODS.length, '--i': periodIndex }}>
         {PERIODS.map(([key, text]) => (
           <button
             key={key}
             type="button"
-            className={`chip ${period === key ? 'active' : ''}`}
             aria-pressed={period === key}
             onClick={() => setPeriod(key)}
           >{text}</button>
         ))}
       </div>
-    </div>
+    </section>
   )
 }

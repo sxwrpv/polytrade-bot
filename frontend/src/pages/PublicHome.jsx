@@ -178,7 +178,7 @@ export default function PublicHome() {
 
           <div className="feature-row reveal">
             <div className="feature-copy">
-              <h3>Every state is visible</h3>
+              <h3>Nothing is dropped quietly</h3>
               <p>Open, closing, resolved, claimable, uncertain — positions are never quietly dropped. When a submission outcome is unknown, the wallet itself settles the question.</p>
               <div className="feature-list">
                 <span>Live position and exposure view</span>
@@ -200,10 +200,20 @@ export default function PublicHome() {
           </div>
         </section>
 
-        <section className="public-final">
+        <section className="public-final" aria-labelledby="final-title">
           <div className="public-wrap final-inner reveal">
-            <div><div className="eyebrow">READY TO EXPLORE?</div><h2>Start with the bot.<br />Move at your pace.</h2></div>
-            <a className="btn public-primary" href={BOT_URL}>Open @cpolytrade_bot <Arrow /></a>
+            <div><div className="eyebrow">READY TO EXPLORE?</div><h2 id="final-title">Start with the bot.<br />Move at your pace.</h2></div>
+            {/* The destination, shown the way Telegram shows it: the bot's
+                avatar, name and handle, so the hand-off is recognisable. */}
+            <div className="bot-card">
+              <img className="bot-card-avatar" src="/brand/polytrade-mark.png" alt="" />
+              <div className="bot-card-id">
+                <b>PolyTrade</b>
+                <span>@cpolytrade_bot · Telegram bot</span>
+              </div>
+              <p className="bot-card-copy">Create your wallet, fund it and choose the wallets you copy, all inside Telegram.</p>
+              <a className="btn public-primary" href={BOT_URL}>Open @cpolytrade_bot <Arrow /></a>
+            </div>
           </div>
         </section>
       </main>
@@ -211,7 +221,12 @@ export default function PublicHome() {
       <footer className="public-footer public-wrap">
         <a className="public-brand" href="#top"><img className="brand-logo" src="/brand/polytrade-mark.png" alt="" /><span>PolyTrade</span></a>
         <p>Copy trading infrastructure for Polymarket. Not financial advice.</p>
-        <div><a href="/docs">Documentation</a><a href="/docs/risk-and-security">Risk &amp; security</a><a href={BOT_URL}>Telegram</a></div>
+        <div>
+          <a href="/screener">Wallet Screener</a>
+          <a href="/docs">Documentation</a>
+          <a href="/docs/risk-and-security">Risk &amp; security</a>
+          <a href={BOT_URL}>Telegram</a>
+        </div>
         <small>© {new Date().getFullYear()} PolyTrade</small>
       </footer>
     </div>

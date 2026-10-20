@@ -91,7 +91,17 @@ async function boot() {
       SOURCE === 'live' ? Promise.resolve(null) : api.smi().catch(() => null),
     ]);
   } catch (e) {
-    $('#results').replaceChildren(el('p', 'screener-state', `Could not load the cohort: ${e.message}`));
+    const retry = el('button', 'btn btn-primary', 'Try again');
+    retry.type = 'button';
+    retry.addEventListener('click', () => {
+      $('#results').replaceChildren(el('p', 'screener-state', 'Loading the cohort…'));
+      boot();
+    });
+    $('#results').replaceChildren(R.stateBlock({
+      title: 'The wallet board couldn’t be loaded.',
+      body: `${String(e.message || 'No answer').replace(/\.$/, '')}. Polymarket’s public data can be slow or briefly unavailable; try again in a moment.`,
+      actions: [retry],
+    }));
     return;
   }
   renderProvenance();

@@ -66,7 +66,7 @@ export default function PnlHeatmap({ curve = [] }) {
   }, [curve])
 
   if (!curve || curve.length === 0) {
-    return <span className="muted small">no history yet</span>
+    return <p className="muted small">No closed positions in the last 30 days yet. Each day you close a position shows up here as a square.</p>
   }
 
   const tone = (pnl) => {
@@ -144,14 +144,14 @@ export default function PnlHeatmap({ curve = [] }) {
       </div>
 
       <div className="hm-legend">
-        <span>loss</span>
+        <span>Loss</span>
         <i className="hm-cell hm-down" style={{ '--t': 1 }} />
         <i className="hm-cell hm-down" style={{ '--t': 0.45 }} />
         <i className="hm-cell hm-zero" />
         <i className="hm-cell hm-up" style={{ '--t': 0.45 }} />
         <i className="hm-cell hm-up" style={{ '--t': 1 }} />
-        <span>gain</span>
-        <span className="hm-legend-none"><i className="hm-cell hm-none" /> no closings</span>
+        <span>Gain</span>
+        <span className="hm-legend-none"><i className="hm-cell hm-none" /> No closings</span>
       </div>
     </div>
   )
