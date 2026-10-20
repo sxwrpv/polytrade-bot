@@ -5,7 +5,9 @@ released, so a FOK kill fenced that token for that user for good and, while
 fenced, no SELL of the position could run. Now:
   - uncertain claims settle from the deposit wallet's on-chain balance;
   - a SELL of the tracked shares never waits for an uncertain claim;
-  - the operator can list and clear fences without SQL.
+  - the operator can list and clear fences without SQL;
+  - (2026-10-19) a BUY the exchange refused outright (FOK kill, not enough
+    balance / allowance) is a definite failure and leaves no fence at all.
 """
 from __future__ import annotations
 
@@ -20,14 +22,18 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 from fastapi import HTTPException
+from polymarket.clients._transport import AsyncTransport
+from polymarket.models.clob import order_response
+from polymarket.models.clob.order_response import RawOrderResponse, normalize_order_response
 
 from backend.api import routes_positions
 from backend.core import copy_engine as ce
+from backend.core import execution
 from backend.core import fences
 from backend.core.copy_engine import Action, CopyEngine, chain_verdict
 from backend.core.ctf import ChainBalance, ChainHead, CtfError, CtfReader, sdk_ctf_contract
 from backend.core.execution import OrderResult
-from backend.core.polymarket import Position
+from backend.core.polymarket import Level, OrderBook, Position
 from backend.db.database import Database, now_iso
 
 USER = "0x" + "1" * 40
@@ -693,6 +699,201 @@ class FenceToolTests(FenceDb):
         self.assertTrue(parser.parse_args(["list", "--evidence"]).evidence)
         args = parser.parse_args(["clear", "claim-1", "--yes"])
         self.assertEqual(("claim-1", True, False), (args.claim_id, args.yes, args.force))
+
+
+# ---------------------------------------------------------------------------
+# The exchange's terminal refusals (2026-10-19)
+# ---------------------------------------------------------------------------
+FOK_KILLED = "order couldn't be fully filled. FOK orders are fully filled or killed."
+NO_BALANCE = "not enough balance / allowance"
+
+
+def clob_body(**fields) -> dict:
+    """A POST /order response body, success=false unless overridden."""
+    body = {"success": False, "errorMsg": "", "orderID": "", "status": "",
+            "makingAmount": "", "takingAmount": ""}
+    body.update(fields)
+    return body
+
+
+class SdkClob:
+    """Answers POST /order with one canned CLOB response, decoded by the pinned
+    polymarket-client's own transport and response parser, so execution sees
+    exactly the exception or RejectedOrder it would get in production."""
+
+    def __init__(self, status, payload=None):
+        self.status, self.payload, self.calls = status, payload, 0
+
+    async def place_market_order(self, **kwargs):
+        self.calls += 1
+
+        def answer(request):
+            if self.status == "timeout":
+                raise httpx.ReadTimeout("read timed out", request=request)
+            return httpx.Response(self.status, json=self.payload)
+
+        async with httpx.AsyncClient(base_url="https://clob.test",
+                                     transport=httpx.MockTransport(answer)) as http:
+            data = await AsyncTransport(base_url="https://clob.test",
+                                        client=http).post_json("/order", json={})
+        return normalize_order_response(RawOrderResponse.parse_response(data))
+
+
+class Book:
+    async def get_geoblock(self):
+        return {"blocked": False}
+
+    async def get_orderbook(self, token_id):
+        return OrderBook(token_id=token_id, condition_id=COND, bids=(Level(0.49, 1000),),
+                         asks=(Level(0.5, 1000),), tick_size=0.01, min_order_size=1,
+                         neg_risk=False, last_trade_price=0.5)
+
+
+class TerminalRejectionTests(unittest.IsolatedAsyncioTestCase):
+    """Which answers after submission prove that a BUY never executed."""
+
+    async def place(self, clob, side="BUY"):
+        return await execution.place_market_order(clob, Book(), TOKEN, side, 10.0,
+                                                  reference_price=0.5)
+
+    async def test_the_two_terminal_verdicts_fail_the_buy_definitely(self):
+        figures = NO_BALANCE + ": the balance is not enough -> balance: 0, order amount: 10000000"
+        for name, clob, code in (
+                ("FOK kill, HTTP 400", SdkClob(400, {"error": FOK_KILLED}), "fok_not_filled"),
+                ("balance, HTTP 400", SdkClob(400, {"error": NO_BALANCE}), "not_enough_balance"),
+                ("balance with figures", SdkClob(400, {"error": figures}), "not_enough_balance"),
+                ("FOK kill, success=false", SdkClob(200, clob_body(errorMsg=FOK_KILLED)),
+                 "fok_not_filled"),
+                ("balance, success=false", SdkClob(200, clob_body(errorMsg=NO_BALANCE)),
+                 "not_enough_balance")):
+            with self.subTest(name):
+                res = await self.place(clob)
+                self.assertEqual(1, clob.calls, "the order did go on the wire")
+                self.assertFalse(res.ok)
+                self.assertFalse(res.submission_uncertain)
+                self.assertEqual(code, res.exchange_rejection)
+
+    async def test_every_other_answer_after_submission_stays_uncertain(self):
+        delayed = "order match delayed due to market conditions"
+        for name, clob in (
+                ("transport timeout", SdkClob("timeout")),
+                ("rate limited", SdkClob(429, {"error": "Too Many Requests"})),
+                ("5xx carrying the FOK text", SdkClob(500, {"error": FOK_KILLED})),
+                ("another 4xx carrying the FOK text", SdkClob(422, {"error": FOK_KILLED})),
+                ("400 with any other text", SdkClob(400, {"error": "invalid order payload"})),
+                ("a reworded FOK text", SdkClob(400, {"error": "order couldn't be fully filled"})),
+                ("400 merely mentioning the balance text", SdkClob(400, {
+                    "error": "could not run the execution: " + NO_BALANCE})),
+                # The next two can still execute after the response is sent.
+                ("delayed, carrying an errorMsg", SdkClob(200, clob_body(
+                    success=True, status="delayed", orderID="0xabc", errorMsg=delayed))),
+                ("accepted, nothing filled yet", SdkClob(200, clob_body(
+                    success=True, status="delayed", orderID="0xabc"))),
+                ("unmatched placement", SdkClob(200, clob_body(
+                    status="unmatched", errorMsg=NO_BALANCE)))):
+            with self.subTest(name):
+                res = await self.place(clob)
+                self.assertFalse(res.ok)
+                self.assertTrue(res.submission_uncertain)
+                self.assertEqual("", res.exchange_rejection)
+
+    async def test_a_sell_keeps_todays_classification(self):
+        """Stuck-closing recovery settles an uncertain SELL from the wallet, and
+        also finalizes a row whose shares are already gone, the usual reason a
+        SELL is refused for balance. Only the BUY fence changed."""
+        for text in (FOK_KILLED, NO_BALANCE):
+            with self.subTest(text):
+                res = await self.place(SdkClob(400, {"error": text}), side="SELL")
+                self.assertTrue(res.submission_uncertain)
+                self.assertEqual("", res.exchange_rejection)
+
+    def test_the_texts_match_the_pinned_sdk(self):
+        """A new SDK release must not silently change what counts as terminal."""
+        self.assertEqual(FOK_KILLED, order_response._FOK_NOT_FILLED_MSG)
+        self.assertEqual(FOK_KILLED, execution._FOK_NOT_FILLED)
+        self.assertEqual(NO_BALANCE, execution._NOT_ENOUGH_BALANCE)
+
+
+class RefusedBuyTests(FenceDb):
+    """A refused BUY leaves no fence and holds no budget, and the engine still
+    does not hammer a book that just refused it."""
+
+    def buy_engine(self) -> CopyEngine:
+        pm = self.pm()
+        pm.get_geoblock = Book().get_geoblock
+        pm.get_orderbook = Book().get_orderbook
+        return CopyEngine(self.db, pm)
+
+    def open_action(self, token: str = TOKEN) -> Action:
+        return Action(kind="open", token_id=token, condition_id=COND, outcome="YES",
+                      side="BUY", amount=8.0, notional_usd=8.0, reference_price=0.5,
+                      trader_shares=2000.0, trader_address=TRADER,
+                      position=SimpleNamespace(cur_price=0.5, current_value=1000.0,
+                                               size=2000.0))
+
+    async def other_token_reservation(self, engine) -> float:
+        """What a BUY of another token may reserve under a $12 user cap."""
+        prepared = await engine._prepare_buy(USER, self.open_action("other-token"))
+        await self.db.execute("DELETE FROM copy_open_claims WHERE token_id='other-token'")
+        return prepared[0].amount
+
+    async def fence_list(self) -> str:
+        lines: list[str] = []
+        await fences.list_fences(self.db, out=lines.append)
+        return "\n".join(lines)
+
+    async def test_a_refused_buy_leaves_no_fence_and_releases_its_budget(self):
+        await self.db.execute("UPDATE users SET max_total_exposure_usd=12 WHERE id=?", (USER,))
+        for text in (FOK_KILLED, NO_BALANCE):
+            with self.subTest(text):
+                engine, clob = self.buy_engine(), SdkClob(400, {"error": text})
+                self.assertEqual(0.0, await engine._execute(USER, clob, self.open_action()))
+                self.assertEqual(1, clob.calls)
+                self.assertEqual(0, await self.claims(), "no claim of any state is kept")
+                self.assertIn("no active BUY fences", await self.fence_list())
+                self.assertEqual(8.0, await self.other_token_reservation(engine),
+                                 "the refused $8 still counts against the user cap")
+                self.assertEqual(0, await self.db.fetchval("SELECT COUNT(*) FROM copy_positions"))
+
+    async def test_the_fill_or_kill_budget_brakes_the_retry(self):
+        """2026-10-19: once the fence was cleared, the engine re-fired within
+        seconds and the book killed it again. Each refusal spends the budget,
+        so the leader's intent is dropped after MAX_FILL_ATTEMPTS."""
+        engine, clob = self.buy_engine(), SdkClob(400, {"error": FOK_KILLED})
+        for _ in range(ce.MAX_FILL_ATTEMPTS + 3):
+            await engine._execute(USER, clob, self.open_action())
+        self.assertEqual(ce.MAX_FILL_ATTEMPTS, clob.calls)
+        self.assertEqual(0, await self.claims())
+
+    async def test_a_refusal_that_used_the_whole_cap_waits_out_its_ttl(self):
+        """The refused notional went on the wire, so it keeps counting against
+        the cap for SUBMITTED_BASIS_TTL_SECONDS: no immediate re-fire."""
+        await self.db.execute("UPDATE followed_traders SET max_position_usd=8 WHERE id='follow-1'")
+        engine, clob = self.buy_engine(), SdkClob(400, {"error": FOK_KILLED})
+        await engine._execute(USER, clob, self.open_action())
+        await engine._execute(USER, clob, self.open_action())          # the next tick
+        self.assertEqual(1, clob.calls, "re-fired while the refused notional still counts")
+        self.assertEqual(0, await self.claims())
+
+        engine._submitted[(USER, TOKEN)][1] = time.monotonic() - 1     # TTL lapsed
+        await engine._execute(USER, clob, self.open_action())
+        self.assertEqual(2, clob.calls)
+
+    async def test_an_ambiguous_outcome_still_fences_and_keeps_its_budget(self):
+        await self.db.execute("UPDATE users SET max_total_exposure_usd=12 WHERE id=?", (USER,))
+        for name, clob in (("timeout", SdkClob("timeout")),
+                           ("rate limited", SdkClob(429, {"error": "Too Many Requests"})),
+                           ("other 400", SdkClob(400, {"error": "invalid order payload"}))):
+            with self.subTest(name):
+                engine = self.buy_engine()
+                await engine._execute(USER, clob, self.open_action())
+                await engine._execute(USER, clob, self.open_action())  # the next tick
+                self.assertEqual(1, clob.calls, "the fence blocks the retry")
+                self.assertEqual(1, await self.db.fetchval(
+                    "SELECT COUNT(*) FROM copy_open_claims WHERE state='uncertain'"))
+                self.assertEqual(4.0, await self.other_token_reservation(engine),
+                                 "the fenced $8 stays reserved")
+                await self.db.execute("DELETE FROM copy_open_claims")
 
 
 if __name__ == "__main__":

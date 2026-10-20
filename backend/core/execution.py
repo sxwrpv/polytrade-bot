@@ -7,8 +7,9 @@ comes from real preconditions checked *before* submission, not from a fake mode:
      MAX_COPY_SLIPPAGE_PCT), also signed into the order as a price cap/floor
 Only if these pass do we submit. The frontend geoblock probe is advisory unless
 ENFORCE_FRONTEND_GEOBLOCK=1. Balance/allowance is NOT pre-checked separately —
-the SDK's own RejectedOrder(code='not_enough_balance') covers that cleanly, so a
-doomed order just gets a clean rejection instead of costing an extra API call.
+the exchange's own not_enough_balance refusal covers that cleanly
+(_terminal_rejection), so a doomed BUY just gets a clean rejection instead of
+costing an extra API call.
 
 `amount` semantics: for BUY it is the pUSD notional to spend; for SELL it is the
 number of shares to sell. The client (AsyncSecureClient) is natively async — no
@@ -20,6 +21,8 @@ import logging
 import math
 from dataclasses import dataclass, field
 from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
+
+from polymarket.errors import RequestRejectedError
 
 from backend.config import (
     ENFORCE_FRONTEND_GEOBLOCK, MAX_COPY_SLIPPAGE_PCT, POLYMARKET_BUILDER_CODE,
@@ -126,6 +129,10 @@ class OrderResult:
     amount_usd: float = 0.0
     limit_price: float = 0.0
     submission_uncertain: bool = False
+    # Set (with ok=False, submission_uncertain=False) when the exchange received
+    # this BUY and refused it outright: see _terminal_rejection. Unlike a
+    # pre-submission skip, the order did go on the wire.
+    exchange_rejection: str = ""
     raw: dict = field(default_factory=dict)
 
 
@@ -154,6 +161,40 @@ def ceil_decimal_to_tick(value: Decimal, tick: Decimal) -> Decimal:
     return (value / tick).to_integral_value(rounding=ROUND_CEILING) * tick
 
 
+# The two CLOB answers to POST /order that prove the order never executed.
+# Each is the exchange's verdict on the order we sent, given before anything
+# matched: a FOK that cannot fill completely is killed whole, and the balance /
+# allowance check runs before matching. polymarket-client 0.6.0 raises them as
+# RequestRejectedError(status=400) carrying the server's text, or returns them
+# as RejectedOrder(code='fok_not_filled' / 'not_enough_balance')
+# (polymarket/models/clob/order_response.py). Its only retry re-posts the SAME
+# signed order once, after a 400 allowance shortfall
+# (polymarket/_internal/actions/orders/place.py), so the error we see is the
+# last of at most two refusals. Production, 2026-10-19: all five fences behind
+# these texts held 0 shares on-chain and in the indexer.
+#
+# Everything else after submission stays uncertain: transport errors and
+# timeouts, rate limits, 5xx, a 4xx with any other text, and the "rejected"
+# shapes that can still execute. A delayed order whose response carries an
+# errorMsg normalizes to RejectedOrder(code='unknown'), and 'unmatched' is a
+# placement status, not a refusal.
+_FOK_NOT_FILLED = "order couldn't be fully filled. FOK orders are fully filled or killed."
+_NOT_ENOUGH_BALANCE = "not enough balance / allowance"
+
+
+def _terminal_rejection(message: str) -> str:
+    """'fok_not_filled' or 'not_enough_balance' when `message` is one of those
+    two verdicts, else ''. The FOK text must match exactly (a trailing period
+    is optional); the balance text is a prefix, because the server may append
+    the balance or allowance figures. A reworded message stays uncertain."""
+    text = (message or "").strip()
+    if text.rstrip(".") == _FOK_NOT_FILLED.rstrip("."):
+        return "fok_not_filled"
+    if text.startswith(_NOT_ENOUGH_BALANCE):
+        return "not_enough_balance"
+    return ""
+
+
 def _finalize(res: "OrderResult", resp, side: str) -> None:
     """Parse an AcceptedOrder/RejectedOrder (polymarket-client) into the result.
 
@@ -176,7 +217,13 @@ def _finalize(res: "OrderResult", resp, side: str) -> None:
         res.ok = False
         res.reason = f"order_rejected: {code} - {message}"
         # The production cap incident proved that a post-submit "rejected"
-        # response is not authoritative evidence that no shares arrived.
+        # response is not, in general, evidence that no shares arrived (a
+        # delayed order can come back as RejectedOrder(code='unknown')). The
+        # SDK's codes for the two terminal verdicts are, but only on a BUY.
+        rejection = _terminal_rejection(message) if side == "BUY" else ""
+        if rejection and code == rejection:
+            res.exchange_rejection = rejection
+            return
         res.submission_uncertain = True
         return
     res.ok = True
@@ -346,14 +393,23 @@ async def place_market_order(
                 min_price=exchange_floor,
                 builder_code=_BUILDER_CODE)
     except Exception as e:
-        # We crossed the SDK's submission boundary. Production evidence showed
-        # exceptions labelled as FOK/4xx failures even though shares arrived in
-        # the wallet. Treat every exception from this call as ambiguous: the
-        # engine must retain its durable claim and reconcile before any retry.
-        # Preflight failures above still return cleanly without setting this.
+        # We crossed the SDK's submission boundary, so an exception is ambiguous
+        # (the engine retains its durable claim and reconciles before any
+        # retry) unless it is the exchange's own terminal verdict on a BUY: a
+        # 400 carrying one of the two texts in _terminal_rejection, meaning the
+        # order was refused outright and nothing executed. A 4xx with any other
+        # text stays ambiguous: the 2026-08-23 cap incident (three BUYs
+        # reported failed, all filled) is why that is the default. Preflight
+        # failures above still return cleanly without setting either flag.
         label = "insufficient_liquidity" if type(e).__name__ == "InsufficientLiquidityError" else "api_error"
         res.reason = f"{label}: {e}"
-        res.submission_uncertain = True
+        rejection = ""
+        if side == "BUY" and isinstance(e, RequestRejectedError) and e.status == 400:
+            rejection = _terminal_rejection(str(e))
+        if rejection:
+            res.exchange_rejection = rejection
+        else:
+            res.submission_uncertain = True
         return res
 
     _finalize(res, resp, side)

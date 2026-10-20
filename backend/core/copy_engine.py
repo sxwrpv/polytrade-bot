@@ -1641,9 +1641,23 @@ class CopyEngine:
                     # must not consume the fill budget
                     await self._mark_claim_uncertain(user_id, action, result.reason)
                 else:
+                    if getattr(result, "exchange_rejection", ""):
+                        # Refused outright by the exchange
+                        # (execution._terminal_rejection): nothing filled, so
+                        # the claim and its reserved budget go, and the attempt
+                        # counts against the fill-or-kill budget, which brakes
+                        # the retry (2026-10-19: a cleared FOK fence was re-fired
+                        # within seconds and killed again). The notional is not
+                        # forgotten, because it did go on the wire: it keeps
+                        # counting toward the cap like any submitted notional
+                        # (SUBMITTED_BASIS_TTL_SECONDS), so a re-fire only gets
+                        # the headroom left, and the cap holds if that verdict
+                        # were ever wrong.
+                        log.info("BUY refused by the exchange (%s), claim released: %s %s",
+                                 result.exchange_rejection, user_id[:10], action.token_id)
                     # Only this attempt is proven not submitted. Preserve any
                     # earlier intent rather than clearing aggregate protection.
-                    if prior_submission is None:
+                    elif prior_submission is None:
                         self._clear_submitted(user_id, action.token_id)
                     else:
                         self._submitted[(user_id, action.token_id)] = prior_submission

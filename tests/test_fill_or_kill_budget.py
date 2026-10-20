@@ -10,9 +10,14 @@ from __future__ import annotations
 import pathlib
 import re
 import unittest
+from dataclasses import replace
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import httpx
 
 from backend.core.copy_engine import MAX_FILL_ATTEMPTS, Action, CopyEngine
+from backend.core.execution import OrderResult, PreflightError
 
 
 def _engine() -> CopyEngine:
@@ -22,6 +27,13 @@ def _engine() -> CopyEngine:
 def _resize(shares=20000.0, amount=5.0) -> Action:
     return Action(kind="resize", subkind="increase", token_id="tok", side="BUY",
                   amount=amount, trader_shares=shares)
+
+
+def _open() -> Action:
+    return Action(kind="open", token_id="tok", side="BUY", amount=8.0, trader_shares=2000.0)
+
+
+RISK = {"slippage": 2.0, "min_price": 0.1, "max_price": 0.98}
 
 
 class FillOrKillBudgetTests(unittest.TestCase):
@@ -89,6 +101,67 @@ class FillOrKillBudgetTests(unittest.TestCase):
                                          reason="slippage_exceeded")
         joined = " ".join(logs.output)
         self.assertIn("STILL HOLDING", joined)
+
+
+class ExchangeRefusalBudgetTests(unittest.IsolatedAsyncioTestCase):
+    """A BUY the exchange refused outright (execution._terminal_rejection) is a
+    non-fill like any other, so this budget is what brakes its retry. Before
+    2026-10-19 such a refusal was uncertain, and its fence was the only brake.
+    """
+
+    def engine(self, outcome) -> CopyEngine:
+        async def place_order(*args, **kwargs):
+            if isinstance(outcome, BaseException):
+                raise outcome
+            return outcome
+
+        async def prepare(user_id, action):
+            return replace(action, claim_id="claim-1"), RISK
+
+        async def clamp(user_id, action, risk):
+            return action
+
+        eng = CopyEngine(db=SimpleNamespace(), pm=SimpleNamespace(), place_order=place_order)
+        eng._prepare_buy = prepare
+        eng._clamp_to_verified_position = clamp
+        eng._mark_claim_submitting = AsyncMock(return_value=True)
+        eng._release_buy_claim = AsyncMock()
+        eng._mark_claim_uncertain = AsyncMock()
+        return eng
+
+    async def test_a_refused_buy_spends_the_budget_and_releases_its_claim(self):
+        eng = self.engine(OrderResult(ok=False, exchange_rejection="fok_not_filled"))
+        for _ in range(MAX_FILL_ATTEMPTS):
+            self.assertFalse(eng._fill_budget_exhausted("u", _open()))
+            await eng._execute("u", object(), _open())
+        self.assertTrue(eng._fill_budget_exhausted("u", _open()))
+        self.assertEqual(MAX_FILL_ATTEMPTS, eng._release_buy_claim.await_count)
+        eng._mark_claim_uncertain.assert_not_awaited()
+
+    async def test_an_uncertain_outcome_still_does_not_spend_it(self):
+        eng = self.engine(OrderResult(ok=False, reason="api_error: read timed out",
+                                      submission_uncertain=True))
+        for _ in range(MAX_FILL_ATTEMPTS + 1):
+            await eng._execute("u", object(), _open())
+        self.assertFalse(eng._fill_budget_exhausted("u", _open()))
+        eng._release_buy_claim.assert_not_awaited()
+
+    async def test_a_refusal_keeps_its_notional_and_an_unsent_order_does_not(self):
+        """The refused order went on the wire, so its notional keeps counting
+        against the cap for the TTL. An order that was never sent is forgotten,
+        exactly as before: a local skip, or a PreflightError."""
+        refused = self.engine(OrderResult(ok=False, exchange_rejection="not_enough_balance"))
+        await refused._execute("u", object(), _open())
+        self.assertEqual(8.0, refused._submitted_basis("u", "tok"))
+
+        for outcome in (OrderResult(ok=False, reason="slippage_exceeded"),
+                        PreflightError("orderbook", httpx.ReadTimeout("slow"))):
+            with self.subTest(type(outcome).__name__):
+                unsent = self.engine(outcome)
+                await unsent._execute("u", object(), _open())
+                self.assertEqual(0.0, unsent._submitted_basis("u", "tok"))
+                unsent._release_buy_claim.assert_awaited_once()
+                unsent._mark_claim_uncertain.assert_not_awaited()
 
 
 if __name__ == "__main__":

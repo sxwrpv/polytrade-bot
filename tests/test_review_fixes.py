@@ -64,13 +64,18 @@ class FailingClient:
 
 
 class RejectionClassificationTests(unittest.IsolatedAsyncioTestCase):
-    """Once the SDK submission call begins, an exception cannot prove no fill.
+    """Once the SDK submission call begins, an exception cannot prove no fill,
+    except the exchange's two terminal verdicts on a BUY.
 
-    Production evidence showed exceptions labelled as FOK failures while shares
-    still arrived. Retrying those exceptions breached MAX/TRADE repeatedly.
+    The default stays uncertain because of 2026-08-23: three BUYs reported
+    failed all filled, and retrying them breached MAX/TRADE. These two
+    verdicts are given before anything matches. On 2026-10-19 all five
+    fences behind them held 0 shares on-chain. Freezing the token for them is
+    what this class first fixed on 2026-07-12; the engine now brakes the
+    retry with the fill-or-kill budget instead (tests/test_uncertain_fences.py).
     """
 
-    async def test_clob_exceptions_after_submit_are_uncertain(self):
+    async def test_terminal_clob_rejections_of_a_buy_are_definitive(self):
         for message in ("not enough balance / allowance",
                         "order couldn't be fully filled. FOK orders are fully "
                         "filled or killed"):
@@ -78,7 +83,8 @@ class RejectionClassificationTests(unittest.IsolatedAsyncioTestCase):
             res = await place_market_order(
                 client, FakeBookPM(), TOKEN, "BUY", 10.0, reference_price=0.5)
             self.assertFalse(res.ok)
-            self.assertTrue(res.submission_uncertain, message)
+            self.assertFalse(res.submission_uncertain, message)
+            self.assertTrue(res.exchange_rejection, message)
 
     async def test_5xx_and_transport_failures_stay_uncertain(self):
         for error in (RequestRejectedError("upstream exploded", status=502),
