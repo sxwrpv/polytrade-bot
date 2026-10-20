@@ -25,7 +25,6 @@ const groups = [
     ['troubleshooting', 'Troubleshooting', 'troubleshooting.md'],
   ]},
   { title: 'Reference', pages: [
-    ['glossary', 'Glossary', 'glossary.md'],
     ['links', 'Official Links', 'links.md'],
   ]},
 ];

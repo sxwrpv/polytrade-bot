@@ -77,7 +77,6 @@ _DOCS_PAGES = {
     "configuration.md",
     "deployment.md",
     "troubleshooting.md",
-    "glossary.md",
     "developers.md",
     "operators.md",
     "links.md",

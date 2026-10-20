@@ -99,8 +99,11 @@ def test_audience_hubs_and_official_links_are_allowlisted_and_navigable():
 def test_official_links_inventory_includes_all_core_consumer_guides():
     links = client.get("/docs/content/links.md").text
 
-    for slug in ("core-concepts", "copy-trading", "glossary"):
+    for slug in ("core-concepts", "copy-trading"):
         assert f"https://polytradebot.live/docs/{slug}" in links
+    # The glossary was removed at the owner's request (2026-10-20); the
+    # official links must not advertise a page that now returns 404.
+    assert "/docs/glossary" not in links
 
 
 def test_root_readme_uses_calm_before_funding_disclosure():
@@ -140,9 +143,9 @@ def test_brand_mark_and_typography_are_consistent_across_docs_surfaces():
     assert mark.headers["content-type"] == "image/png"
     assert len(mark.content) > 1_000
 
-    # Glossary remains useful reference material in the sidebar/search corpus;
-    # it does not need a competing top-header tab.
-    assert "['glossary', 'Glossary', 'glossary.md']" in navigation
+    # The glossary was removed at the owner's request (2026-10-20): no sidebar
+    # or search entry, and no header tab.
+    assert "glossary" not in navigation.lower()
     assert '>Glossary</a>' not in docs.text
 
 
@@ -201,7 +204,6 @@ def test_existing_documentation_urls_remain_available():
         "configuration",
         "deployment",
         "troubleshooting",
-        "glossary",
     }
     for slug in existing_slugs:
         assert client.get(f"/docs/{slug}").status_code == 200
@@ -209,6 +211,10 @@ def test_existing_documentation_urls_remain_available():
 
 def test_unknown_documentation_page_returns_not_found():
     assert client.get("/docs/not-a-real-page").status_code == 404
+    # Removed at the owner's request (2026-10-20): neither the page nor its
+    # Markdown is served any more.
+    assert client.get("/docs/glossary").status_code == 404
+    assert client.get("/docs/content/glossary.md").status_code == 404
     assert client.get("/docs/README").status_code == 404
     assert client.get("/docs/content/.env").status_code == 404
     assert client.get("/docs/content/not-a-real-page.md").status_code == 404

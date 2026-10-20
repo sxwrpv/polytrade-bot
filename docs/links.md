@@ -12,7 +12,6 @@ Use this inventory when sharing PolyTrade publicly. `polytradebot.live` is the c
 - **Copy Trading:** [https://polytradebot.live/docs/copy-trading](https://polytradebot.live/docs/copy-trading)
 - **Wallet and Funding:** [https://polytradebot.live/docs/wallet-and-funding](https://polytradebot.live/docs/wallet-and-funding)
 - **Risk and Security:** [https://polytradebot.live/docs/risk-and-security](https://polytradebot.live/docs/risk-and-security)
-- **Glossary:** [https://polytradebot.live/docs/glossary](https://polytradebot.live/docs/glossary)
 
 ## Developers
 

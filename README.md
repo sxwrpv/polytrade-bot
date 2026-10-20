@@ -136,7 +136,6 @@ real database.
 - [Configuration](docs/configuration.md)
 - [Deployment](docs/deployment.md)
 - [Troubleshooting](docs/troubleshooting.md)
-- [Glossary](docs/glossary.md)
 - [Official Links](docs/links.md)
 
 ## License and responsibility

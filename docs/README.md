@@ -44,7 +44,6 @@ Only fund an amount you can afford to lose completely. See [Risk and Security](r
 - [Copy Trading](copy-trading.md) — detection, sizing, order submission, pauses, exits, and divergence.
 - [Wallet and Funding](wallet-and-funding.md) — custody, deposits, balances, key export, and redemption.
 - [Risk and Security](risk-and-security.md) — material risks, controls, and security practices.
-- [Glossary](glossary.md) — product and trading terminology.
 
 ## Other audiences
 
