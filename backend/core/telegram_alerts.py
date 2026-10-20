@@ -14,10 +14,33 @@ def _cents(value) -> str:
     return f"{float(value or 0) * 100:.1f}¢"
 
 
+def _signed_usd(value) -> str:
+    amount = float(value or 0)
+    return f"{'+' if amount >= 0 else '-'}${abs(amount):.2f}"
+
+
+def _source(trader_address) -> str:
+    """Which wallet the trade came from, shortened the way the Mini App shows it."""
+    address = str(trader_address or "").strip()
+    if not address:
+        return ""
+    if address == "manual":
+        return "Manual trade"
+    short = f"{address[:6]}…{address[-4:]}" if len(address) > 12 else address
+    return f"Copied from {html.escape(short)}"
+
+
 def format_position_alert(event: dict) -> str:
     """One message per CONFIRMED execution. Senders only call this after the
     exchange confirmed the fill (or the resolution was recorded) AND the DB
-    committed — never on detection, intent, or a skipped/rejected order."""
+    committed — never on detection, intent, or a skipped/rejected order.
+
+    Layout, the same for every kind so alerts scan alike in a chat:
+      status line   emoji + bold label (what happened; shows in the push preview)
+      market        bold title
+      facts         a Telegram blockquote: outcome, size or shares, price(s), P&L
+      footer        the wallet it was copied from and a link to the market
+    """
     kind = str(event.get("event", "")).lower()
     title = html.escape(str(event.get("market_title") or "Polymarket position"))
     outcome = html.escape(str(event.get("outcome") or "").upper())
@@ -25,50 +48,48 @@ def format_position_alert(event: dict) -> str:
     slug = str(event.get("market_slug") or "").strip()
 
     if kind == "opened":
-        text = (
-            "🟢 <b>POSITION OPENED</b>\n\n"
-            f"<b>{title}</b>\n"
-            f"Outcome: <b>{outcome}</b>\n"
-            f"Size: <b>${float(event.get('notional_usd') or 0):.2f}</b> "
-            f"({shares:.2f} shares)\n"
-            f"Entry: <b>{_cents(event.get('entry_price'))}</b>"
-        )
+        status = "🟢 <b>POSITION OPENED</b>"
+        facts = [
+            f"Outcome: <b>{outcome}</b>",
+            f"Size: <b>${float(event.get('notional_usd') or 0):.2f}</b> ({shares:.2f} shares)",
+            f"Entry: <b>{_cents(event.get('entry_price'))}</b>",
+        ]
     elif kind == "increased":       # confirmed partial BUY (leader topped up)
-        text = (
-            "🟢 <b>POSITION INCREASED</b>\n\n"
-            f"<b>{title}</b>\n"
-            f"Outcome: <b>{outcome}</b>\n"
+        status = "🟢 <b>POSITION INCREASED</b>"
+        facts = [
+            f"Outcome: <b>{outcome}</b>",
             f"Added: <b>${float(event.get('notional_usd') or 0):.2f}</b> "
-            f"({shares:.2f} shares) @ <b>{_cents(event.get('entry_price'))}</b>\n"
-            f"Now holding: <b>{float(event.get('total_shares') or 0):.2f} shares</b>"
-        )
+            f"({shares:.2f} shares) @ <b>{_cents(event.get('entry_price'))}</b>",
+            f"Now holding: <b>{float(event.get('total_shares') or 0):.2f} shares</b>",
+        ]
     elif kind == "reduced":         # confirmed partial SELL (leader trimmed)
-        pnl = float(event.get("realized_pnl") or 0)
-        text = (
-            "🟠 <b>POSITION REDUCED</b>\n\n"
-            f"<b>{title}</b>\n"
-            f"Outcome: <b>{outcome}</b>\n"
-            f"Sold: <b>{shares:.2f} shares</b> @ <b>{_cents(event.get('exit_price'))}</b>\n"
-            f"Realized P&amp;L: <b>{'+' if pnl >= 0 else '-'}${abs(pnl):.2f}</b>\n"
-            f"Still holding: <b>{float(event.get('total_shares') or 0):.2f} shares</b>"
-        )
+        status = "🟠 <b>POSITION REDUCED</b>"
+        facts = [
+            f"Outcome: <b>{outcome}</b>",
+            f"Sold: <b>{shares:.2f} shares</b> @ <b>{_cents(event.get('exit_price'))}</b>",
+            f"Realized P&amp;L: <b>{_signed_usd(event.get('realized_pnl'))}</b>",
+            f"Still holding: <b>{float(event.get('total_shares') or 0):.2f} shares</b>",
+        ]
     else:
         pnl = float(event.get("realized_pnl") or 0)
         label = "POSITION RESOLVED" if kind == "resolved" else "POSITION CLOSED"
         icon = "✅" if pnl >= 0 else "🔴"
-        text = (
-            f"{icon} <b>{label}</b>\n\n"
-            f"<b>{title}</b>\n"
-            f"Outcome: <b>{outcome}</b>\n"
-            f"Shares: <b>{shares:.2f}</b>\n"
-            f"Price: <b>{_cents(event.get('entry_price'))} → "
-            f"{_cents(event.get('exit_price'))}</b>\n"
-            f"Realized P&amp;L: <b>{'+' if pnl >= 0 else '-'}${abs(pnl):.2f}</b>"
-        )
+        status = f"{icon} <b>{label}</b>"
+        facts = [
+            f"Outcome: <b>{outcome}</b>",
+            f"Shares: <b>{shares:.2f}</b>",
+            f"Price: <b>{_cents(event.get('entry_price'))} → {_cents(event.get('exit_price'))}</b>",
+            f"Realized P&amp;L: <b>{_signed_usd(pnl)}</b>",
+        ]
+
+    lines = [status, "", f"<b>{title}</b>", "<blockquote>" + "\n".join(facts) + "</blockquote>"]
+    footer = [part for part in (_source(event.get("trader_address")),) if part]
     if slug:
         safe_url = "https://polymarket.com/event/" + html.escape(slug, quote=True)
-        text += f'\n\n<a href="{safe_url}">View market</a>'
-    return text
+        footer.append(f'<a href="{safe_url}">View market on Polymarket</a>')
+    if footer:
+        lines.append(" · ".join(footer))
+    return "\n".join(lines)
 
 
 class TelegramAPIError(RuntimeError):
