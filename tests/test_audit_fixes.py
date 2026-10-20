@@ -28,6 +28,11 @@ def _iso_ago(seconds: float) -> str:
             - dt.timedelta(seconds=seconds)).isoformat()
 
 
+# The 24h auto-release removed in 44a5b7d. A claim older than it must still be
+# retained: elapsed time alone never proves that nothing filled.
+OLD_RELEASE_WINDOW_SECONDS = 24 * 3600
+
+
 # --------------------------------------------------------------------------
 # H3 — an uncertain claim must not fence a token forever
 # --------------------------------------------------------------------------
@@ -65,7 +70,7 @@ class UncertainClaimReleaseTests(unittest.TestCase):
 
     def test_an_aged_claim_the_wallet_cannot_explain_is_retained(self):
         eng = self._engine()
-        age = ce.UNCERTAIN_CLAIM_RELEASE_SECONDS + 60
+        age = OLD_RELEASE_WINDOW_SECONDS + 60
         run(eng._settle_uncertain_claim("0xu", self._claim(age), None))
         self.assertEqual(eng.released, [],
                          "elapsed time and indexer absence cannot prove non-fill")
@@ -82,15 +87,10 @@ class UncertainClaimReleaseTests(unittest.TestCase):
         eng._adopt_uncertain_fill = adopt
         held = SimpleNamespace(size=10.0, avg_price=0.5, asset="tok",
                                condition_id="c", slug="s", title="t", outcome="YES")
-        age = ce.UNCERTAIN_CLAIM_RELEASE_SECONDS + 60
+        age = OLD_RELEASE_WINDOW_SECONDS + 60
         run(eng._settle_uncertain_claim("0xu", self._claim(age), held))
         self.assertEqual(adopted, ["c1"])
         self.assertEqual(eng.released, [])
-
-    def test_claim_age_survives_a_naive_timestamp(self):
-        naive = dt.datetime.now() - dt.timedelta(seconds=120)
-        age = CopyEngine._claim_age_seconds({"claimed_at": naive.isoformat()})
-        self.assertIsNotNone(age)
 
     def test_an_unparseable_timestamp_does_not_release(self):
         """Unknown age must fail closed — retain, never release."""

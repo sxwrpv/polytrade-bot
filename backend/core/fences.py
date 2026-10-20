@@ -11,14 +11,14 @@ resolves: no SQL, and no HTTP endpoint (a CLI has no auth to get wrong). It
 reads the same evidence the engine does, and refuses to clear a fence that the
 chain says still guards untracked shares unless --force is given.
 
-Production, inside the app container (the image ships backend/, not scripts/):
+Production, inside the app container:
     docker compose exec app python -m backend.core.fences list
     docker compose exec app python -m backend.core.fences list --evidence
     docker compose exec app python -m backend.core.fences clear <claim_id>        # dry run
     docker compose exec app python -m backend.core.fences clear <claim_id> --yes
 
 From a checkout (repo root, .env loaded automatically):
-    .venv/bin/python scripts/fences.py list
+    .venv/bin/python -m backend.core.fences list
 """
 from __future__ import annotations
 

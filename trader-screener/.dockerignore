@@ -1,0 +1,4 @@
+# The Dockerfile copies only what the server needs. Keep tests and local
+# installs out of the build context.
+tests
+node_modules

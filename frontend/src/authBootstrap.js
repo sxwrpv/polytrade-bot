@@ -87,10 +87,3 @@ export async function performLogout({ api, clearSession, onLogout }) {
   clearSession()
   onLogout?.()
 }
-
-// Backwards-compatible session-only helper for callers/tests that predate the
-// explicit launch modes.
-export async function bootstrapSession(options) {
-  const result = await bootstrapLaunch(options)
-  return result.session
-}

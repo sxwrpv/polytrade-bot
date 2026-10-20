@@ -483,13 +483,6 @@ input:focus, select:focus {
 .skeleton { height: 120px; animation: pulse 1.2s ease-in-out infinite; }
 @keyframes pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 0.7; } }
 
-/* User-page daily PnL visualization. */
-.dot-strip { display: flex; flex-wrap: wrap; gap: 3px; }
-.dot { width: 8px; height: 8px; display: inline-block; border: 1px solid var(--border); border-radius: 3px; }
-.dot-green { background: var(--green); border-color: var(--green); }
-.dot-red { background: var(--red); border-color: var(--red); }
-.dot-flat { background: rgba(20, 32, 26, 0.07); }
-
 
 /* ===== consumer public site ===== */
 html { scroll-behavior: smooth; }

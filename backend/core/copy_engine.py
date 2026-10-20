@@ -66,21 +66,19 @@ MAX_FILL_ATTEMPTS = 3
 # (stuck closings) before the wallet is treated as ground truth.
 UNCERTAIN_CLAIM_MIN_AGE_SECONDS = 180.0
 CLOSING_STUCK_MIN_AGE_SECONDS = 600.0
-# NOT a release timer. A 24h auto-release once lived here and was removed by
-# 44a5b7d ("retain uncertain execution fences"): elapsed time plus indexer
-# absence is not proof that nothing filled. Only the chain can show that
-# (UNCERTAIN_CLAIM_EVIDENCE_SECONDS below); without it an uncertain claim is
-# only ever ADOPTED or RETAINED, and it blocks BUYs of that token for that user
-# until the operator clears it (python -m backend.core.fences). It no longer
-# blocks SELLs of the tracked shares: an exit adds no exposure, and blocking
-# it left users unable to leave a position (review E3, 2026-10-18). The
-# constant survives only as the age the tests use to prove nothing is released
-# early or late.
+# Uncertain BUY claims have NO release timer. A 24h auto-release once lived
+# here and was removed by 44a5b7d ("retain uncertain execution fences"):
+# elapsed time plus indexer absence is not proof that nothing filled. Only the
+# chain can show that (UNCERTAIN_CLAIM_EVIDENCE_SECONDS below); without it an
+# uncertain claim is only ever ADOPTED or RETAINED, and it blocks BUYs of that
+# token for that user until the operator clears it (python -m
+# backend.core.fences). It no longer blocks SELLs of the tracked shares: an
+# exit adds no exposure, and blocking it left users unable to leave a
+# position (review E3, 2026-10-18).
 #
 # Misclassification is still expensive, which is why failures that provably
 # happen BEFORE submission (execution.PreflightError) are not uncertain.
-UNCERTAIN_CLAIM_RELEASE_SECONDS = float(
-    os.environ.get("UNCERTAIN_CLAIM_RELEASE_SECONDS", str(24 * 3600)))
+#
 # On-chain settlement of uncertain BUY claims (review E3). With POLYGON_RPC_URL
 # set, a claim whose last change (the claim, or any of the user's rows for the
 # token opening, closing or closed) is at least this old is weighed against
@@ -579,22 +577,6 @@ class CopyEngine:
             return False
         age = (dt.datetime.now(dt.timezone.utc) - changed).total_seconds()
         return age >= UNCERTAIN_CLAIM_EVIDENCE_SECONDS
-
-    @staticmethod
-    def _claim_age_seconds(claim: dict) -> float | None:
-        """Seconds since the claim was first reserved, or None if unparseable."""
-        for key in ("claimed_at", "updated_at"):
-            raw = claim.get(key)
-            if not raw:
-                continue
-            try:
-                ts = dt.datetime.fromisoformat(raw)
-            except (TypeError, ValueError):
-                continue
-            if ts.tzinfo is None:
-                ts = ts.replace(tzinfo=dt.timezone.utc)
-            return (dt.datetime.now(dt.timezone.utc) - ts).total_seconds()
-        return None
 
     async def _settle_uncertain_claim(self, user_id: str, claim: dict, p,
                                       onchain: ChainBalance | None = None) -> None:
@@ -1411,18 +1393,6 @@ class CopyEngine:
                 if action.side == "BUY":
                     available = max(0.0, available - spent)
 
-    async def _adopt_untracked_submissions(
-            self, user_id: str, trader: str, positions, open_rows) -> int:
-        """Legacy recovery is disabled: an intent is not execution evidence.
-
-        Callers historically pass LEADER holdings here. Even user holdings
-        alone cannot establish ownership by this engine. Do not create rows,
-        alerts, or release claims from this path. Durable uncertain claims
-        are reconciled separately against the USER wallet and reserved budget.
-        Legacy claimless outcomes require operator reconciliation.
-        """
-        return 0
-
     # --- fill-or-kill attempt budget --------------------------------------
     @staticmethod
     def _attempt_key(user_id: str, action: Action) -> tuple:
@@ -2060,9 +2030,9 @@ class CopyEngine:
 
     # --- shared persistence (used by both fast and reconcile paths) ---------
     # _insert_open lived here and was removed: no callers, no tests, and it
-    # duplicated the INSERT that _record_open and _adopt_untracked_submissions
-    # each do inside their own fencing transaction. An un-fenced copy of a
-    # money-writing path is a trap, not a spare.
+    # duplicated the INSERT that _record_open does inside its own fencing
+    # transaction. An un-fenced copy of a money-writing path is a trap, not a
+    # spare.
 
     async def _close_row(self, user_id, row, exit_price, filled_shares,
                          *, event_type="close", status="closed") -> None:

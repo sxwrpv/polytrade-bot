@@ -18,7 +18,6 @@ asyncio.to_thread needed, unlike the old py-clob-client(-v2)-based version.
 from __future__ import annotations
 
 import logging
-import math
 from dataclasses import dataclass, field
 from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
 
@@ -134,17 +133,6 @@ class OrderResult:
     # pre-submission skip, the order did go on the wire.
     exchange_rejection: str = ""
     raw: dict = field(default_factory=dict)
-
-
-def round_to_tick(price: float, tick: float, mode: str) -> float:
-    if tick <= 0:
-        return price
-    steps = price / tick
-    if mode == "floor":
-        return round(math.floor(steps) * tick, 6)
-    if mode == "ceil":
-        return round(math.ceil(steps) * tick, 6)
-    return round(round(steps) * tick, 6)
 
 
 def floor_decimal_to_tick(value: Decimal, tick: Decimal) -> Decimal:
@@ -410,103 +398,6 @@ async def place_market_order(
             res.exchange_rejection = rejection
         else:
             res.submission_uncertain = True
-        return res
-
-    _finalize(res, resp, side)
-    return res
-
-
-async def place_capped_order(
-    client,
-    pm: PolymarketClient,
-    token_id: str,
-    side: str,                       # "BUY" | "SELL"
-    *,
-    reference_price: float,          # the LEADER's fill price — the anchor
-    target_usd: float | None = None,     # BUY notional
-    target_shares: float | None = None,  # SELL share count
-    max_slippage_pct: float = MAX_COPY_SLIPPAGE_PCT,
-    check_geoblock: bool = True,
-    order_type: str = "FAK",
-) -> OrderResult:
-    # NOTE: intentionally retained with zero callers — dead-code sweeps, do not
-    # delete. The owner switched copy trades from this price-capped path to
-    # market orders (2026-07-03); this stays as the ready revert path:
-    # price-capped FAK strictly bounds every share at leader*(1+slippage%) and
-    # partial-fills, vs the market path's skip-or-fill-at-quote semantics.
-    # No tests reference it as of 2026-08-21 — re-add coverage before reverting.
-    # Its failure classification follows place_market_order's (every exception
-    # at the submission boundary is uncertain) so a revert cannot bring back
-    # the 4xx-means-no-fill assumption that b14d900 removed.
-    """Price-capped order anchored to the leader's fill price, via the SDK's
-    native max_price/min_price (server-side enforced, not just a local check).
-
-    BUY: cap = leader_price * (1 + slippage), rounded down to tick. SELL: floor
-    = leader_price * (1 - slippage), rounded up to tick. Posted FAK by default —
-    fills only what's available at/within the cap right now and kills the rest.
-    So we never pay more than the cap: if the market ran away past it we
-    partial-fill or skip (`no_liquidity_within_cap`, from our own local
-    pre-check) rather than chase a >10c-worse entry.
-    """
-    side = side.upper()
-    res = OrderResult(ok=False, side=side, token_id=token_id, amount_usd=target_usd or 0.0)
-
-    if check_geoblock and await _check_frontend_geoblock(pm, res):
-        return res
-
-    try:
-        book = await pm.get_orderbook(token_id)
-    except Exception as exc:
-        raise PreflightError("orderbook", exc) from exc
-    tick = book.tick_size or 0.01
-
-    if side == "BUY":
-        if target_usd is None:
-            res.reason = "missing target_usd"
-            return res
-        cap = reference_price * (1 + max_slippage_pct / 100)
-        limit_price = round_to_tick(cap, tick, "floor")
-        if limit_price <= 0:
-            res.reason = "cap_below_tick"
-            return res
-        in_cap = tuple(lvl for lvl in book.asks if lvl.price <= limit_price + _EPS)
-        fill = quote_buy(in_cap, target_usd)
-    else:
-        if target_shares is None:
-            res.reason = "missing target_shares"
-            return res
-        floor = reference_price * (1 - max_slippage_pct / 100)
-        limit_price = round_to_tick(floor, tick, "ceil")
-        in_cap = tuple(lvl for lvl in book.bids if lvl.price >= limit_price - _EPS)
-        fill = quote_sell(in_cap, target_shares)
-
-    res.limit_price = limit_price
-    if fill.shares <= _EPS:
-        res.reason = "no_liquidity_within_cap"   # don't chase — partial-fill or skip
-        return res
-    if fill.shares < book.min_order_size - _EPS:
-        res.reason = f"below_min_size ({book.min_order_size})"
-        return res
-    res.filled_shares = fill.shares       # expected; refined from resp by _finalize
-    res.avg_price = fill.avg_price
-
-    try:
-        if side == "BUY":
-            resp = await client.place_market_order(
-                token_id=token_id, side="BUY", amount=target_usd,
-                max_price=limit_price, order_type=order_type,
-                builder_code=_BUILDER_CODE)
-        else:
-            resp = await client.place_market_order(
-                token_id=token_id, side="SELL", shares=target_shares,
-                min_price=limit_price, order_type=order_type,
-                builder_code=_BUILDER_CODE)
-    except Exception as e:
-        # Same classification as place_market_order: a 4xx label has proved
-        # untrustworthy (shares arrived anyway), so every exception here is
-        # ambiguous and the engine must reconcile before any retry.
-        res.reason = f"api_error: {e}"
-        res.submission_uncertain = True
         return res
 
     _finalize(res, resp, side)

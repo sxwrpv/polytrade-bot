@@ -17,3 +17,15 @@ frontend/node_modules
 frontend/dist
 /data
 deploy
+
+# Never copied into the app image (the Dockerfile takes only requirements.txt,
+# backend/, docs/ and frontend/). Leaving them out keeps tests and the
+# screener's data away from every build stage and shrinks the build context.
+tests
+frontend/tests
+trader-screener
+screener-data
+supabase
+scripts
+brand
+.claude

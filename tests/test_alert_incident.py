@@ -24,20 +24,6 @@ def engine():
     return e
 
 
-@pytest.mark.parametrize('shares', [0, 16, 1687.99, 2521.45])
-def test_legacy_intent_alone_never_authorizes_adoption(shares):
-    async def run():
-        e = engine()
-        e._note_submitted('user', 'token', 15)
-        p = SimpleNamespace(asset='token', size=shares, avg_price=.45,
-                            condition_id='condition', event_slug='', slug='', title='', outcome='YES')
-        assert await e._adopt_untracked_submissions('user', 'leader', [p], []) == 0
-        e.db.transaction.assert_not_called()
-        e._notify_position.assert_not_called()
-        assert e._submitted_basis('user', 'token') == 15
-    asyncio.run(run())
-
-
 @pytest.mark.parametrize('uncertain', [False, True])
 @pytest.mark.parametrize('prior', [0, 6])
 def test_failed_buy_only_rolls_back_definitively_unsubmitted_intent(uncertain, prior):
