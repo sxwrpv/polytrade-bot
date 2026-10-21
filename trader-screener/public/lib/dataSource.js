@@ -32,6 +32,7 @@ async function get(path, params = {}) {
     const body = await res.json().catch(() => ({}));
     const err = new Error(body.detail || res.statusText);
     err.status = res.status;
+    err.retryAfter = Number(res.headers.get('retry-after')) || null;
     throw err;
   }
   return res.json();

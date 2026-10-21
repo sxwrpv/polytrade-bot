@@ -158,6 +158,13 @@ export function buildEpisodes(tape, openPositions) {
 
 export function buildProfile({ wallet, tape, open, rankRows, value, cash }) {
   if (open.complete === false) {
+    if (open.overCeiling) {
+      // Permanent for this wallet: asking again cannot help, so it is not a 5xx.
+      const error = new Error(`this wallet holds more than ${open.overCeiling.toLocaleString('en-US')} open positions with value, `
+        + 'more than the screener reads, so its results cannot be computed');
+      error.status = 422;
+      throw error;
+    }
     throw new Error('current positions are incomplete; resolved metrics and Copy Score are unavailable');
   }
   const complete = tape.complete !== false;
@@ -448,6 +455,8 @@ export function buildProfile({ wallet, tape, open, rankRows, value, cash }) {
     copyScore,
     positions: {
       open: [...open].sort((a, b) => n(b.currentValue) - n(a.currentValue)).slice(0, 100),
+      // The feed stopped at its first $0 position; the ones after it count as lost bets.
+      openWorthlessSkipped: Boolean(open.worthlessSkipped),
       topWins: [...finished].sort((a, b) => b.pnl - a.pnl).slice(0, 12)
         .map((e) => ({
           title: e.title, slug: e.slug, eventSlug: e.eventSlug, icon: e.icon, outcome: e.outcome,

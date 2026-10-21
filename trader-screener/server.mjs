@@ -189,7 +189,8 @@ const json = (res, code, body) => {
 
 const apiLimiter = createRateLimiter({ limit: 60 });
 const datasetLimiter = createRateLimiter({ limit: 8 });
-const profileLimiter = createRateLimiter({ limit: 6 });
+// Fresh wallet reads per visitor per minute. A cached profile is free.
+const profileLimiter = createRateLimiter({ limit: 10 });
 const apiError = (res, error, fallback = 500) => {
   const code = error.status || fallback;
   if (error.retryAfter) res.setHeader('Retry-After', String(error.retryAfter));
@@ -240,7 +241,8 @@ const server = createServer(async (req, res) => {
       try {
         apiLimiter.enforce(client);
         if (p === '/api/dataset') datasetLimiter.enforce(client);
-        if (p.startsWith('/api/trader/')) profileLimiter.enforce(client);
+        const traderPath = /^\/api\/trader\/(0x[a-fA-F0-9]{40})$/.exec(p);
+        if (traderPath && profileCache.get(traderPath[1].toLowerCase()) === undefined) profileLimiter.enforce(client);
       } catch (error) {
         return apiError(res, error, 429);
       }

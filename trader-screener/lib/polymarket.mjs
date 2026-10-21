@@ -61,14 +61,25 @@ export function deadlineSignal(timeout, parent) {
   };
 }
 
+/* Polymarket answers a burst with 429 and a bad moment with 5xx. One such
+ * answer used to end a whole paged read, and with it the wallet's profile, so
+ * those two statuses get two more tries, one and then two seconds apart. */
+const RETRY_PAUSES_MS = [1000, 2000];
+
 async function j(url, { timeout = 25000, signal } = {}) {
-  const deadline = deadlineSignal(timeout, signal);
-  try {
-    const res = await fetch(url, { headers: HEADERS, signal: deadline.signal });
-    if (!res.ok) throw new Error(`${res.status} ${url}`);
-    return await res.json();
-  } finally {
-    deadline.cleanup();
+  for (let attempt = 0; ; attempt += 1) {
+    const deadline = deadlineSignal(timeout, signal);
+    let status;
+    try {
+      const res = await fetch(url, { headers: HEADERS, signal: deadline.signal });
+      if (res.ok) return await res.json();
+      status = res.status;
+    } finally {
+      deadline.cleanup();
+    }
+    const retryable = status === 429 || status >= 500;
+    if (!retryable || attempt >= RETRY_PAUSES_MS.length || signal?.aborted) throw new Error(`${status} ${url}`);
+    await new Promise((resolve) => { setTimeout(resolve, RETRY_PAUSES_MS[attempt]); });
   }
 }
 
@@ -103,9 +114,65 @@ async function paged(path, params, { max = 20000, signal } = {}) {
 export const activity = (user, { signal } = {}) =>
   paged('/activity', { user }, { max: ACTIVITY_CEILING, signal });
 
-/** Currently held positions only — see the note at the top of this file. */
-export const positions = (user, { signal } = {}) =>
-  paged('/positions', { user, sortBy: 'CURRENT', sortDirection: 'DESC' }, { max: 3000, signal });
+/** Below this many rows a wallet's open positions are read in full. */
+const POSITIONS_READ_IN_FULL = 3000;
+/** The most open positions a profile reads. */
+export const POSITIONS_CEILING = 10_000;
+const POSITIONS_BATCH = 4;
+
+/** Currently held positions only — see the note at the top of this file.
+ *
+ *  The feed is sorted by current value. Some wallets hold thousands of
+ *  positions, nearly all worth $0: on 2026-10-21, 32 of the 181 wallets on the
+ *  7D board held more than 3,000, and the old cap at 3,000 failed every one of
+ *  their profiles. Up to 3,000 rows the list is still read in full. Past that,
+ *  reading stops at the first page that ends on a $0 position, since every
+ *  later one is worth $0 too; `rows.worthlessSkipped` records it, and the
+ *  profile counts those positions as lost bets. Pages after the first go out
+ *  four at a time. `rows.complete` is false when a read failed, and
+ *  `rows.overCeiling` holds the ceiling when the list still had value there:
+ *  past about 10,000 the feed repeats its last row for every offset. */
+export async function positions(user, { signal } = {}) {
+  const page = async (offset) => {
+    const qs = new URLSearchParams({
+      user, sortBy: 'CURRENT', sortDirection: 'DESC', limit: String(PAGE), offset: String(offset),
+    });
+    const rows = await j(`${DATA}/positions?${qs}`, { signal });
+    if (!Array.isArray(rows)) throw new Error('positions page is not a list');
+    return rows;
+  };
+  const out = [];
+  let complete = true;
+  let worthlessSkipped = false;
+  let overCeiling = null;
+  try {
+    const first = await page(0);
+    out.push(...first);
+    let done = first.length < PAGE;
+    let offset = PAGE;
+    while (!done) {
+      if (offset >= POSITIONS_CEILING) { complete = false; overCeiling = POSITIONS_CEILING; break; }
+      const offsets = [];
+      for (let o = offset; o < POSITIONS_CEILING && offsets.length < POSITIONS_BATCH; o += PAGE) offsets.push(o);
+      offset += offsets.length * PAGE;
+      for (const rows of await Promise.all(offsets.map(page))) {
+        out.push(...rows);
+        if (rows.length < PAGE) { done = true; break; }
+        if (out.length >= POSITIONS_READ_IN_FULL && Number(rows.at(-1)?.currentValue) <= 0) {
+          worthlessSkipped = true;
+          done = true;
+          break;
+        }
+      }
+    }
+  } catch {
+    complete = false;
+  }
+  out.complete = complete;
+  out.worthlessSkipped = worthlessSkipped;
+  out.overCeiling = overCeiling;
+  return out;
+}
 
 export async function portfolioValue(user, { signal } = {}) {
   try {

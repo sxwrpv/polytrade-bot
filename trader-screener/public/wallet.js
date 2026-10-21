@@ -15,6 +15,7 @@ const wallet = (location.pathname.match(/0x[a-fA-F0-9]{40}/) || [''])[0].toLower
 const page = document.getElementById('page');
 
 let data = null;
+let autoRetries = 0;   // a 429 waits its turn and loads by itself, up to three times
 const state = { chart: 'equity', window: 'all', tab: 'trades' };
 const CHART_WINDOWS = [['d7', '7D'], ['d30', '30D'], ['d90', '90D'], ['all', 'ALL']];
 
@@ -44,7 +45,25 @@ async function boot() {
   document.getElementById('pm-link').href = M.polymarketProfile(wallet);
   try {
     data = await api.trader(wallet);
+    autoRetries = 0;
   } catch (e) {
+    if (e.status === 429 && autoRetries < 3) {
+      autoRetries += 1;
+      const wait = Math.min(30, Math.max(2, e.retryAfter || 5));
+      page.replaceChildren(el('p', 'screener-state', /busy/.test(e.message)
+        ? `The screener is reading other wallets right now. This one loads in ${wait} s.`
+        : `Several wallets were opened in the last minute. This one loads in ${wait} s.`));
+      setTimeout(boot, wait * 1000);
+      return;
+    }
+    if (e.status === 422) {
+      page.replaceChildren(R.stateBlock({
+        title: 'This wallet is too big to profile.',
+        body: `${String(e.message).replace(/^./, (c) => c.toUpperCase()).replace(/\.$/, '')}. Its full history is on Polymarket.`,
+        actions: [backToBoard()],
+      }));
+      return;
+    }
     const retry = el('button', 'btn btn-primary', 'Try again');
     retry.type = 'button';
     retry.addEventListener('click', () => {
@@ -677,7 +696,12 @@ function openTable() {
     tb.append(tr);
   }
   t.append(tb);
-  return t;
+  if (!data.positions.openWorthlessSkipped) return t;
+  const box = el('div');
+  box.append(t, el('p', 'panel-note',
+    'This wallet holds thousands of positions. The list stops at the first one worth $0, since every one '
+    + 'after it is worth $0 as well, and those count as lost bets in this wallet’s results.'));
+  return box;
 }
 
 function finishedTable(rows) {

@@ -3,6 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as M from '../public/lib/screenerModel.js';
 import { buildEpisodes, buildProfile } from '../lib/metrics.mjs';
+import { positions, POSITIONS_CEILING } from '../lib/polymarket.mjs';
 import * as cs from '../lib/copyscore.mjs';
 import { queryWallets, project, enforceRateLimit, resetRateLimits } from '../lib/publicScreener.mjs';
 
@@ -161,6 +162,91 @@ test('an incomplete current-position feed fails closed before resolved metrics a
     wallet: '0x' + '1'.repeat(40), tape, open, rankRows: {}, value: null,
     cash: { usd: null, source: 'unavailable', asOf: null },
   }), /current positions are incomplete/);
+});
+
+test('a feed that stopped at worthless positions still builds a profile, and says so', () => {
+  const tape = [{ conditionId: 'D', type: 'TRADE', side: 'BUY', usdcSize: 40, size: 100, timestamp: 1, outcomeIndex: 0 }];
+  tape.complete = true;
+  const open = [{ conditionId: 'C', currentValue: 12, cashPnl: 2 }];
+  open.complete = true;
+  open.worthlessSkipped = true;
+  const out = buildProfile({
+    wallet: '0x' + '1'.repeat(40), tape, open, rankRows: {}, value: null,
+    cash: { usd: null, source: 'unavailable', asOf: null },
+  });
+  assert.equal(out.positions.openWorthlessSkipped, true);
+  assert.equal(out.summary.resolved, 1, 'D is past the list read, so it counts as a finished, lost bet');
+});
+
+// --- Polymarket positions feed ---------------------------------------------
+
+/** A fake /positions feed: `total` rows sorted by value, 500 a page. */
+function positionsFeed(total, valueAt, { failFirst = null } = {}) {
+  const calls = [];
+  let failed = false;
+  const fetchImpl = async (url) => {
+    const u = new URL(url);
+    const offset = Number(u.searchParams.get('offset'));
+    calls.push(offset);
+    if (failFirst && !failed) { failed = true; return { ok: false, status: failFirst, json: async () => ({}) }; }
+    const count = Math.max(0, Math.min(Number(u.searchParams.get('limit')), total - offset));
+    const rows = Array.from({ length: count }, (_, i) => ({ conditionId: `c${offset + i}`, currentValue: valueAt(offset + i) }));
+    return { ok: true, status: 200, json: async () => rows };
+  };
+  return { calls, fetchImpl };
+}
+
+async function withFetch(fetchImpl, work) {
+  const real = globalThis.fetch;
+  globalThis.fetch = fetchImpl;
+  try { return await work(); } finally { globalThis.fetch = real; }
+}
+
+const someWallet = '0x' + '2'.repeat(40);
+
+test('under 3,000 positions the whole list is read, $0 positions included', async () => {
+  const feed = positionsFeed(1200, (i) => (i < 400 ? 5 : 0));
+  const rows = await withFetch(feed.fetchImpl, () => positions(someWallet));
+  assert.equal(rows.length, 1200);
+  assert.equal(rows.complete, true);
+  assert.equal(rows.worthlessSkipped, false);
+});
+
+test('past 3,000 positions reading stops at the first page that ends on a $0 position', async () => {
+  // 32 of the 181 wallets on the 7D board held over 3,000 on 2026-10-21; the old cap failed them all.
+  const feed = positionsFeed(6600, (i) => (i < 2000 ? 100 - i * 0.04 : 0));
+  const rows = await withFetch(feed.fetchImpl, () => positions(someWallet));
+  assert.equal(rows.length, 3000);
+  assert.equal(rows.complete, true);
+  assert.equal(rows.worthlessSkipped, true);
+  assert.ok(Math.max(...feed.calls) < 6600, 'the $0 tail is never paged through');
+});
+
+test('a list that still has value at the ceiling is refused as too big, with no retry advice', async () => {
+  const feed = positionsFeed(POSITIONS_CEILING + 2000, () => 1);
+  const rows = await withFetch(feed.fetchImpl, () => positions(someWallet));
+  assert.equal(rows.length, POSITIONS_CEILING);
+  assert.equal(rows.complete, false);
+  assert.equal(rows.overCeiling, POSITIONS_CEILING);
+  const tape = [];
+  tape.complete = true;
+  assert.throws(() => buildProfile({
+    wallet: someWallet, tape, open: rows, rankRows: {}, value: null,
+    cash: { usd: null, source: 'unavailable', asOf: null },
+  }), (error) => error.status === 422 && /more than 10,000 open positions/.test(error.message));
+});
+
+test('a 429 is retried and a 400 ends the read as incomplete', async () => {
+  const throttled = positionsFeed(300, () => 3, { failFirst: 429 });
+  const rows = await withFetch(throttled.fetchImpl, () => positions(someWallet));
+  assert.equal(rows.length, 300);
+  assert.equal(rows.complete, true);
+  assert.deepEqual(throttled.calls, [0, 0]);
+
+  const refused = positionsFeed(300, () => 3, { failFirst: 400 });
+  const none = await withFetch(refused.fetchImpl, () => positions(someWallet));
+  assert.equal(none.complete, false);
+  assert.deepEqual(refused.calls, [0]);
 });
 
 // --- Copy Score ------------------------------------------------------------
