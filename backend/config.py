@@ -25,8 +25,8 @@ DATA_API = "https://data-api.polymarket.com"
 BRIDGE_API = "https://bridge.polymarket.com"
 
 # --- HTTP ---
-# data-api 403s library/default user-agents (see API_RECON.md gotcha #1); send a
-# browser-like UA on every request.
+# data-api 403s library/default user-agents; send a browser-like UA on every
+# request.
 HTTP_USER_AGENT = os.environ.get(
     "HTTP_USER_AGENT", "Mozilla/5.0 (compatible; polymarket-copybot/0.1)"
 )

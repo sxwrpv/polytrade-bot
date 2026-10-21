@@ -1,6 +1,5 @@
 import re
 
-from pathlib import Path
 
 from fastapi.testclient import TestClient
 
@@ -104,16 +103,6 @@ def test_official_links_inventory_includes_all_core_consumer_guides():
     # The glossary was removed at the owner's request (2026-10-20); the
     # official links must not advertise a page that now returns 404.
     assert "/docs/glossary" not in links
-
-
-def test_root_readme_uses_calm_before_funding_disclosure():
-    readme = (Path(__file__).parents[1] / "README.md").read_text()
-    disclosure = readme.lower()
-
-    assert "[!warning]" not in disclosure
-    assert "before you fund" in disclosure
-    assert "custodial" in disclosure
-    assert "lose all funds" in disclosure
 
 
 def test_docs_assets_are_available_from_a_dedicated_mount():

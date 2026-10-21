@@ -1,9 +1,9 @@
 """Polymarket read layer — all market-data / public-wallet API calls.
 
 Polymarket only. No other venues, no order placement (that lives in
-execution.py). Every response shape here is frozen against the live APIs in
-``backend/core/API_RECON.md`` — read that for endpoints, params, and parsing
-gotchas.
+execution.py). Every response shape here is frozen against the live APIs;
+the "Frozen response shapes" section below records the fields each parser
+relies on.
 
 Hosts (no auth for any of these):
   - data-api       : leaderboard, positions, activity
@@ -111,7 +111,7 @@ def _i(v: Any, default: int = 0) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Frozen response shapes (see API_RECON.md)
+# Frozen response shapes
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
