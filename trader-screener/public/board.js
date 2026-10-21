@@ -9,6 +9,8 @@ import * as R from './lib/render.js';
 import { loadUniverse, api, SOURCE } from './lib/dataSource.js';
 import { saved } from './lib/saved.js';
 import { saveButton, savedPill, savedDrawer } from './lib/savedUi.js';
+import { histogramFilter } from './lib/filterUi.js';
+import { cohortMap } from './lib/cohortMap.js';
 
 const { el } = R;
 const $ = (s) => document.querySelector(s);
@@ -68,7 +70,7 @@ async function changePeriod(period) {
     state.period = period;
     state.visible = 20;
     ds = next;
-    ceilingCache = null;
+    stopsCache.clear();
     syncUrl();
     renderProvenance();
     renderSidebar();
@@ -105,6 +107,10 @@ async function boot() {
     return;
   }
   renderProvenance();
+  if (!map) {
+    map = cohortMap({ onOpen: (w) => { location.href = M.traderPath(w); } });
+    $('#results').before(map.node);
+  }
   renderSidebar();
   renderAll();
   const drawer = savedDrawer({ lookup: () => new Map(ds.traders.map((t) => [t.w.toLowerCase(), t])) });
@@ -189,37 +195,56 @@ function segControl(label, options, current, onPick) {
   return wrap;
 }
 
-/* One numeric filter as a slider. Parked at the "off" end means no filter at
- * all, mirrored as the empty string the model already treats as inactive.
- * That distinction matters: a threshold of zero is a real filter that hides
- * everything below zero, which is not what an untouched control should do. */
-function rangeFilter({ key, label, min, max, step = 1, off = 'min', format }) {
-  const value = state.filters[key];
-  const numeric = Number(value);
-  const active = value !== '' && value != null && Number.isFinite(numeric);
-  const offValue = off === 'min' ? min : max;
-  const position = active ? Math.min(max, Math.max(min, numeric)) : offValue;
+/* Numeric filters. Parked at the "off" end means no filter at all, mirrored as
+ * the empty string the model already treats as inactive. That distinction
+ * matters: a threshold of zero is a real filter that hides everything below
+ * zero, which is not what an untouched control should do.
+ *
+ * The controls live across renders. A slider change re-renders the board, the
+ * count and the chips, never the sidebar: rebuilding the input under the
+ * pointer is what used to end a drag after one step. */
+const FILTER_UI = {
+  pnlMin: { name: 'PnL', label: (p) => `PnL ${p} at least`, format: M.money },
+  volumeMin: { name: 'volume', label: (p) => `Volume ${p} at least`, format: M.money },
+  roiMin: { name: 'ROI', label: (p) => `ROI ${p} at least`, format: (v) => `${v}%` },
+  copyNetMin: { name: 'Copy Score', label: () => 'Copy Score at least', format: (v) => M.scoreSigned(v) },
+  winrateMin: { name: 'win rate', label: () => 'Win rate at least', format: (v) => `${Math.round(v * 100)}%` },
+  activeDaysMin: { name: 'active days', label: () => 'Active days at least', format: (v) => `${v}d` },
+  avgSizeMax: { name: 'average fill', label: () => 'Average fill at most', format: M.money },
+};
 
-  const wrap = el('div', `range-filter${active ? ' is-active' : ''}`);
-  const lab = el('label');
-  lab.htmlFor = `f-${key}`;
-  lab.append(el('span', null, label), el('b', null, active ? format(numeric) : 'off'));
+const filterControls = new Map();
+const stopsCache = new Map();
+const filterCount = el('p', 'filter-count');
+const chipHost = el('div', 'chip-row');
 
-  const input = document.createElement('input');
-  input.id = `f-${key}`;
-  input.type = 'range';
-  input.min = min; input.max = max; input.step = step; input.value = position;
-  input.oninput = () => {
-    const next = Number(input.value);
-    state.filters[key] = next === offValue ? '' : String(next);
-    update();
-  };
-  // Scrolling the page must never drag a filter.
-  input.onwheel = (e) => e.currentTarget.blur();
-
-  wrap.append(lab, input);
-  return wrap;
+function filterControl(spec) {
+  if (!filterControls.has(spec.key)) {
+    filterControls.set(spec.key, histogramFilter({
+      key: spec.key,
+      cut: spec.cut,
+      onInput: (raw) => {
+        state.filters[spec.key] = raw;
+        state.visible = 20;
+        syncUrl();
+        renderBoard();
+        renderFilterSummary();
+      },
+    }));
+  }
+  return filterControls.get(spec.key);
 }
+
+/** A filter's steps, sized from every wallet in the window (not just the ones
+ *  on the board), so moving between views does not move the ladder. */
+function stopsFor(spec) {
+  const key = `${spec.key}|${state.period}`;
+  if (!stopsCache.has(key)) stopsCache.set(key, spec.stops(ds.traders.map((t) => spec.value(t, state.period))));
+  return stopsCache.get(key);
+}
+
+const joinWords = (words) => (words.length < 2 ? words.join('')
+  : `${words.slice(0, -1).join(', ')} and ${words.at(-1)}`);
 
 function renderSidebar() {
   const host = $('#sidebar');
@@ -263,106 +288,113 @@ function renderSidebar() {
   }
 
   host.append(el('div', 'rail-heading', 'Filters'));
+  host.append(filterCount);
 
-  // Ceilings are set from the cohort itself rather than hard-coded, so the
-  // slider range still means something after a snapshot refresh.
-  const ceil = filterCeilings();
-  host.append(rangeFilter({
-    key: 'pnlMin', label: `PnL ${M.PERIOD_LABEL[state.period]} at least`,
-    min: 0, max: ceil.pnl, step: Math.max(1, Math.round(ceil.pnl / 200)), format: M.money,
-  }));
-  host.append(rangeFilter({
-    key: 'volumeMin', label: `Volume ${M.PERIOD_LABEL[state.period]} at least`,
-    min: 0, max: ceil.volume, step: Math.max(1, Math.round(ceil.volume / 200)), format: M.money,
-  }));
-  host.append(rangeFilter({
-    key: 'roiMin', label: `ROI ${M.PERIOD_LABEL[state.period]} at least`,
-    min: -50, max: 100, step: 1, format: (v) => `${v}%`,
-  }));
-  host.append(rangeFilter({
-    key: 'winrateMin', label: 'Win rate at least',
-    min: 0, max: 0.9, step: 0.05, format: (v) => `${Math.round(v * 100)}%`,
-  }));
-  host.append(rangeFilter({
-    key: 'copyNetMin', label: 'Copy Score at least',
-    min: -20, max: 40, step: 1, format: (v) => M.scoreSigned(v),
-  }));
-  host.append(rangeFilter({
-    key: 'activeDaysMin', label: 'Active days at least',
-    min: 0, max: 365, step: 5, format: (v) => `${v}d`,
-  }));
-  // The ceiling filter, not a floor: a wallet whose average fill is $220K is
-  // one you cannot mirror at a retail budget, however good its score.
-  host.append(rangeFilter({
-    key: 'avgSizeMax', label: 'Average fill at most',
-    min: 50, max: ceil.avgSize, step: 50, off: 'max', format: M.money,
-  }));
+  // Each slider shows the wallets it acts on: the board before any numeric
+  // filter. Its steps are sized from the whole window (stopsFor).
+  const base = baseRows();
+  const missing = [];
+  for (const spec of M.FILTER_SPECS) {
+    const ui = FILTER_UI[spec.key];
+    if (!M.filterAvailable(spec, ds.traders, state.period)) {
+      // A threshold on a figure this board does not carry would hide every
+      // wallet, so the control is not offered and a stale one is dropped.
+      state.filters[spec.key] = M.DEFAULT_FILTERS[spec.key];
+      missing.push(ui.name);
+      continue;
+    }
+    const control = filterControl(spec);
+    control.update({
+      label: ui.label(M.PERIOD_LABEL[state.period]),
+      format: ui.format,
+      stops: stopsFor(spec),
+      values: base.map((t) => spec.value(t, state.period)),
+      value: state.filters[spec.key],
+    });
+    host.append(control.node);
+  }
 
-  const check = el('label', 'filter-check');
-  const box = document.createElement('input');
-  box.type = 'checkbox';
-  box.checked = Boolean(state.filters.excludeHardToMirror);
-  box.onchange = () => { state.filters.excludeHardToMirror = box.checked; update(); };
-  const text = el('span');
-  text.append(el('strong', null, 'Exclude hard to mirror'),
-              el('small', null, 'Drops market makers, arbitrage and very-high-frequency wallets — their edge lives somewhere a copy cannot follow.'));
-  check.append(box, text);
-  host.append(check);
+  // The ceiling filter (average fill at most) is the one that keeps a wallet
+  // mirrorable at a retail budget; the flags below need wallet research.
+  if (M.mirrorFlagsKnown(ds.traders)) {
+    const check = el('label', 'filter-check');
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.checked = Boolean(state.filters.excludeHardToMirror);
+    box.onchange = () => { state.filters.excludeHardToMirror = box.checked; update(); };
+    const text = el('span');
+    text.append(el('strong', null, 'Exclude hard to mirror'),
+                el('small', null, 'Drops market makers, arbitrage and very-high-frequency wallets — their edge lives somewhere a copy cannot follow.'));
+    check.append(box, text);
+    host.append(check);
+  } else {
+    state.filters.excludeHardToMirror = false;
+    missing.push('hard-to-mirror flags');
+  }
+  if (missing.length) {
+    const where = SOURCE === 'live' ? 'the live leaderboard' : 'this data';
+    host.append(el('p', 'rail-hint', `No ${joinWords(missing)} in ${where}, so ${missing.length === 1 ? 'that filter is' : 'those filters are'} hidden. A wallet’s own page shows its full record.`));
+  }
 
+  host.append(chipHost);
+  renderFilterSummary();
+}
+
+/** The board before any numeric filter: what the sliders act on. */
+function baseRows() {
+  return state.view === 'saved'
+    ? M.buildSaved(ds.traders, savedSet(), {
+        metric: state.metric, period: state.period, filters: M.DEFAULT_FILTERS, direction: state.direction,
+      })
+    : M.buildBoard(ds.traders, {
+        metric: state.metric, period: state.period, cat: state.cat, asOf: asOf(),
+        bands: state.bands, filters: M.DEFAULT_FILTERS, direction: state.direction,
+      });
+}
+
+/** How many wallets the filters keep, and a chip per active filter. Cheap
+ *  enough to run on every slider step, unlike the sidebar itself. */
+function renderFilterSummary() {
+  const total = baseRows().length;
+  const kept = rows().length;
+  filterCount.replaceChildren();
+  if (kept === total) {
+    filterCount.append(`${total.toLocaleString('en-US')} wallet${total === 1 ? '' : 's'}, unfiltered`);
+  } else {
+    filterCount.append(el('b', null, kept.toLocaleString('en-US')), ` of ${total.toLocaleString('en-US')} wallets match`);
+  }
+
+  chipHost.replaceChildren();
   const chips = M.activeFilterChips(state);
-  if (chips.length) {
-    const row = el('div', 'chip-row');
-    for (const chip of chips) {
-      if (!chip.clearable) {
-        const c = el('span', 'chip chip-static', chip.text);
-        c.title = 'Applied by the current ordering; not separately clearable.';
-        row.append(c);
-        continue;
-      }
-      const b = el('button', 'chip', `${chip.text}  ×`);
-      b.type = 'button';
-      b.title = 'Clear this filter';
-      b.onclick = () => { clearFilter(chip.key); update(); };
-      row.append(b);
+  chipHost.hidden = !chips.length;
+  for (const chip of chips) {
+    if (!chip.clearable) {
+      const c = el('span', 'chip chip-static', chip.text);
+      c.title = 'Applied by the current ordering; not separately clearable.';
+      chipHost.append(c);
+      continue;
     }
-    if (chips.some((c) => c.clearable)) {
-      const clear = el('button', 'chip chip-clear', 'Clear all');
-      clear.type = 'button';
-      clear.onclick = () => {
-        state.filters = { ...M.DEFAULT_FILTERS };
-        state.cat = 'all';
-        update();
-      };
-      row.append(clear);
-    }
-    host.append(row);
+    const b = el('button', 'chip', `${chip.text}  ×`);
+    b.type = 'button';
+    b.title = 'Clear this filter';
+    b.onclick = () => { clearFilter(chip.key); update(); };
+    chipHost.append(b);
+  }
+  if (chips.some((c) => c.clearable)) {
+    const clear = el('button', 'chip chip-clear', 'Clear all');
+    clear.type = 'button';
+    clear.onclick = () => {
+      state.filters = { ...M.DEFAULT_FILTERS };
+      state.cat = 'all';
+      update();
+    };
+    chipHost.append(clear);
   }
 }
 
 function clearFilter(key) {
   if (key === 'cat') { state.cat = 'all'; return; }
   if (key in M.DEFAULT_FILTERS) state.filters[key] = M.DEFAULT_FILTERS[key];
-}
-
-/** Slider ceilings taken from the cohort, rounded up to something readable. */
-let ceilingCache = null;
-function filterCeilings() {
-  if (ceilingCache) return ceilingCache;
-  const top = (pick) => {
-    const vals = ds.traders.map(pick).filter((v) => Number.isFinite(v) && v > 0).sort((a, b) => a - b);
-    if (!vals.length) return 1000;
-    // 95th percentile, not the max: one outlier wallet should not make the
-    // whole slider useless for everyone else.
-    const v = vals[Math.floor(vals.length * 0.95)];
-    const mag = 10 ** Math.floor(Math.log10(v));
-    return Math.ceil(v / mag) * mag;
-  };
-  ceilingCache = {
-    pnl: top((t) => t.pnl),
-    volume: top((t) => t.vol),
-    avgSize: top((t) => t.avgSize),
-  };
-  return ceilingCache;
 }
 
 // --- the board --------------------------------------------------------------
@@ -380,8 +412,16 @@ const COLUMNS = [
   { label: '', cls: 'num' },
 ];
 
+let map = null;
+
 function renderBoard() {
   const list = rows();
+  map?.render({
+    traders: state.view === 'saved' ? ds.traders : M.inCategory(ds.traders, state.cat),
+    period: state.period,
+    kept: new Set(list.map((t) => t.w)),
+    filters: state.filters,
+  });
   const host = $('#results');
   host.replaceChildren();
 

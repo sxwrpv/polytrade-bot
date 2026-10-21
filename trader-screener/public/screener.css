@@ -492,30 +492,135 @@
 .screener-table th .th-sort:focus-visible { outline: 2px solid var(--green-deep); outline-offset: 2px; }
 .screener-table th[aria-sort]:not([aria-sort="none"]) { background: var(--green-wash); }
 
-/* --- filters --------------------------------------------------------------- */
-.range-filter { margin-bottom: 18px; }
-.range-filter label {
-  display: flex; justify-content: space-between; align-items: baseline; gap: 10px;
-  margin-bottom: 8px; color: var(--muted); font-size: 12px;
+/* --- filters: histogram sliders ---------------------------------------------
+   Each slider sits under a histogram of the wallets it acts on, one bar per
+   step, so a threshold is picked by seeing where the wallets are. Bars the
+   filter keeps are green; a filter left on "Any" keeps everything and shows
+   its bars quietly. Steps follow a 1–2.5–5 ladder (screenerModel.js). */
+.filter-count { margin: -8px 0 16px; color: var(--muted); font: 500 11.5px var(--mono); grid-column: 1 / -1; }
+.filter-count b { color: var(--green-deep); font-weight: 600; }
+.hfilter { margin-bottom: 20px; }
+.hfilter-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 4px; }
+.hfilter-head label { color: var(--text); font-size: 12.5px; font-weight: 500; }
+.hfilter-head output { color: var(--muted); font: 500 11.5px var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.hfilter.is-active .hfilter-head output { color: var(--green-deep); font-weight: 600; }
+.hfilter-plot { --thumb: 18px; position: relative; height: 46px; }
+/* The bars span exactly the handle's travel, one per step, so the handle
+   rests on the boundary between what the filter drops and what it keeps. */
+.hfilter-bars {
+  position: absolute; top: 0; height: 30px;
+  left: calc(var(--thumb) / 2); right: calc(var(--thumb) / 2);
+  display: flex; align-items: flex-end; gap: 2px;
+  transition: opacity .25s ease;
 }
-.range-filter label b { color: var(--muted); font-family: var(--mono); font-size: 11px; font-weight: 500; }
-.range-filter.is-active label b { color: var(--green-deep); font-weight: 600; }
-.range-filter input[type='range'] {
+.hfilter:not(.is-active) .hfilter-bars { opacity: .55; }
+.hfilter-bars i {
+  flex: 1 1 0; min-width: 0; height: 100%;
+  border-radius: 2px 2px 0 0;
+  background: var(--border-strong);
+  transform: scaleY(var(--h, 0)); transform-origin: 50% 100%;
+  transition: transform .65s cubic-bezier(.16, 1, .3, 1) calc(var(--i, 0) * 12ms), background-color .2s ease;
+}
+.hfilter-bars i.in { background: var(--green); }
+.hfilter input[type='range'] {
   -webkit-appearance: none; appearance: none;
-  width: 100%; height: 4px; padding: 0; border: 0; border-radius: 999px;
-  background: rgba(20, 32, 26, 0.10); cursor: pointer;
+  position: absolute; left: 0; right: 0; bottom: 0;
+  width: 100%; height: 20px; margin: 0; padding: 0; border: 0;
+  background: transparent; cursor: pointer;
 }
-.range-filter input[type='range']::-webkit-slider-thumb {
+.hfilter input[type='range']:focus { outline: none; }
+.hfilter input[type='range']::-webkit-slider-runnable-track {
+  height: 3px; border-radius: 999px;
+  background: linear-gradient(to right,
+    var(--border-strong) calc(var(--thumb) / 2 + var(--pos, 0) * (100% - var(--thumb))),
+    var(--green) 0);
+}
+.hfilter.is-ceiling input[type='range']::-webkit-slider-runnable-track {
+  background: linear-gradient(to right,
+    var(--green) calc(var(--thumb) / 2 + var(--pos, 0) * (100% - var(--thumb))),
+    var(--border-strong) 0);
+}
+.hfilter:not(.is-active) input[type='range']::-webkit-slider-runnable-track { background: var(--border-strong); }
+.hfilter input[type='range']::-webkit-slider-thumb {
   -webkit-appearance: none; appearance: none;
-  width: 17px; height: 17px; border-radius: 50%;
-  background: var(--bg); border: 2px solid var(--green); cursor: pointer;
+  width: var(--thumb); height: var(--thumb); margin-top: calc((3px - var(--thumb)) / 2);
+  border-radius: 50%; background: #fff; border: 2px solid var(--green);
+  box-shadow: 0 1px 3px rgba(20, 32, 26, 0.22);
+  transition: transform .3s cubic-bezier(.2, 1.1, .3, 1), box-shadow .2s ease;
 }
-.range-filter input[type='range']::-moz-range-thumb {
-  width: 17px; height: 17px; border-radius: 50%;
-  background: var(--bg); border: 2px solid var(--green); cursor: pointer;
+.hfilter input[type='range']:active::-webkit-slider-thumb { transform: scale(1.15); }
+.hfilter input[type='range']:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px rgba(7, 96, 60, 0.3); }
+.hfilter input[type='range']::-moz-range-track { height: 3px; border-radius: 999px; background: var(--green); }
+.hfilter input[type='range']::-moz-range-progress { height: 3px; border-radius: 999px; background: var(--border-strong); }
+.hfilter.is-ceiling input[type='range']::-moz-range-track { background: var(--border-strong); }
+.hfilter.is-ceiling input[type='range']::-moz-range-progress { background: var(--green); }
+.hfilter:not(.is-active) input[type='range']::-moz-range-track,
+.hfilter:not(.is-active) input[type='range']::-moz-range-progress { background: var(--border-strong); }
+.hfilter input[type='range']::-moz-range-thumb {
+  width: 18px; height: 18px; border-radius: 50%;
+  background: #fff; border: 2px solid var(--green); box-shadow: 0 1px 3px rgba(20, 32, 26, 0.22);
 }
-.range-filter.is-active input[type='range'] { background: var(--pill-tint); }
-.range-filter input[type='range']:focus-visible { outline: 2px solid var(--green-deep); outline-offset: 4px; }
+.hfilter input[type='range']:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 3px rgba(7, 96, 60, 0.3); }
+.hfilter-scale { display: flex; justify-content: space-between; margin-top: 3px; color: var(--muted); font: 500 10.5px var(--mono); }
+
+/* --- the board as a map ------------------------------------------------------
+   Every wallet in the window by volume and PnL, coloured by verdict; dots the
+   filters remove are dimmed and the volume and PnL thresholds are drawn. */
+.cohort-map {
+  --map-proven: var(--green-deep);
+  --map-ahead: var(--green);
+  --map-caution: var(--yellow);
+  --map-losing: var(--red);
+  --map-other: var(--faint);
+  --map-dim: var(--border-strong);
+  --map-grid: rgba(20, 32, 26, 0.12);
+  --map-zero: rgba(20, 32, 26, 0.38);
+  --map-line: var(--green-deep);
+  margin: 16px 0 18px; padding: 16px 16px 12px;
+  border: 1px solid var(--border); border-radius: var(--r-lg);
+  background: rgba(255, 255, 255, 0.42);
+}
+.cmap-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 8px 18px; margin-bottom: 10px; }
+.cmap-head figcaption b { display: block; font-size: 14px; font-weight: 600; }
+.cmap-head figcaption span { color: var(--muted); font-size: 12px; }
+.cmap-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; color: var(--muted); font-size: 12px; }
+.cmap-key { display: inline-flex; align-items: center; gap: 6px; }
+.cmap-key i { width: 9px; height: 9px; border-radius: 50%; }
+.cmap-key b { color: var(--text); font: 600 11.5px var(--mono); font-variant-numeric: tabular-nums; }
+.cmap-plot { position: relative; height: 300px; }
+.cmap-plot canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+.cmap-plot canvas.is-pointing { cursor: pointer; }
+.cmap-axis span { position: absolute; color: var(--muted); font: 500 10.5px var(--mono); white-space: nowrap; pointer-events: none; }
+.cmap-x span { bottom: 4px; left: 0; transform: translateX(calc(var(--x, 0px) - 50%)); }
+.cmap-y span { top: 0; left: 0; width: 52px; text-align: right; transform: translateY(calc(var(--y, 0px) - 50%)); }
+.cmap-y span.is-zero { color: var(--text); }
+.cmap-tip {
+  position: absolute; left: 0; top: 0; z-index: 2;
+  display: grid; gap: 4px; min-width: 150px; max-width: 240px; padding: 9px 11px;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--bg);
+  box-shadow: 0 10px 24px -12px rgba(20, 32, 26, 0.35);
+  pointer-events: none; opacity: 0;
+  transform: translate(var(--tx, 0px), calc(var(--ty, 0px) - 50%)) scale(.96); transform-origin: left center;
+  transition: opacity .15s ease, transform .22s cubic-bezier(.16, 1, .3, 1);
+}
+.cmap-tip.is-flip { transform: translate(calc(var(--tx, 0px) - 100%), calc(var(--ty, 0px) - 50%)) scale(.96); transform-origin: right center; }
+.cmap-tip.on { opacity: 1; transform: translate(var(--tx, 0px), calc(var(--ty, 0px) - 50%)); }
+.cmap-tip.on.is-flip { transform: translate(calc(var(--tx, 0px) - 100%), calc(var(--ty, 0px) - 50%)); }
+.cmap-tip b { overflow: hidden; font-size: 12.5px; text-overflow: ellipsis; white-space: nowrap; }
+.cmap-tip-band { justify-self: start; padding: 1px 8px; border-radius: 999px; background: var(--pill-tint); color: var(--green-deep); font-size: 11px; font-weight: 600; }
+.cmap-tip-band.is-uneconomic { background: rgba(138, 93, 6, 0.1); color: #7a5205; }
+.cmap-tip-band.is-loss_making { background: rgba(179, 36, 47, 0.08); color: var(--red); }
+.cmap-tip-band.is-other { background: var(--surface2); color: var(--muted); }
+.cmap-tip-rows { display: grid; color: var(--text); font: 500 11.5px var(--mono); }
+.cmap-tip-out { color: var(--muted); font-size: 11px; }
+.cmap-note { margin-top: 6px; color: var(--muted); font-size: 11.5px; }
+@media (max-width: 560px) {
+  .cohort-map { padding: 12px 10px 10px; }
+  .cmap-plot { height: 240px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hfilter-bars, .hfilter-bars i, .hfilter input[type='range']::-webkit-slider-thumb, .cmap-tip { transition: none; }
+}
 
 .chip-static { border-style: dashed; cursor: default; opacity: .8; }
 .chip-clear { border-color: var(--border); background: transparent; color: var(--muted); }

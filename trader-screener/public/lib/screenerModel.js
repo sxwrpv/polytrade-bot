@@ -215,6 +215,115 @@ export function passesFilters(t, filters = DEFAULT_FILTERS, period = DEFAULT_PER
 
 export const isHardToMirror = (t) =>
   t.mm === 'market_maker' || t.arb === 'arb' || t.freq === 'vhft';
+/** The hard-to-mirror flags come from wallet research; the live leaderboard
+ *  carries none, and a checkbox that cannot remove anyone should not be shown. */
+export const mirrorFlagsKnown = (traders) => traders.some((t) => t.mm != null || t.arb != null || t.freq != null);
+
+// --- filter scales ----------------------------------------------------------
+// Money spreads over orders of magnitude: one week's volume can be $800 or
+// $37M. A linear slider spends its whole length on the largest wallets and
+// cannot say "at least $10K", so money thresholds sit on a 1–2.5–5 ladder, sized
+// from the selected window's own figures rather than the lifetime ones.
+
+const RUNGS = [1, 2.5, 5];
+
+/** Thresholds on a 1–2.5–5 ladder from `lo` up to the first rung at or above `hi`. */
+export function ladder(lo, hi) {
+  if (!(lo > 0) || !(hi >= lo)) return [];
+  const out = [];
+  for (let exp = Math.floor(Math.log10(lo)); out.length < 60; exp += 1) {
+    for (const m of RUNGS) {
+      const v = Number((m * 10 ** exp).toPrecision(3));
+      if (v < lo) continue;
+      out.push(v);
+      if (v >= hi) return out;
+    }
+  }
+  return out;
+}
+
+const upperTail = (values) => {
+  const v = values.filter((x) => Number.isFinite(x) && x > 0).sort((a, b) => a - b);
+  return v.length ? v[Math.min(v.length - 1, Math.floor(v.length * 0.99))] : 0;
+};
+
+/** No rung above every wallet in the window, so the slider's last step still
+ *  keeps someone; `floorTop` stays reachable however quiet the window is. */
+const withinReach = (stops, values, floorTop) => {
+  const top = values.reduce((m, v) => (Number.isFinite(v) && v > m ? v : m), floorTop);
+  return stops.filter((s) => s <= top);
+};
+
+/**
+ * Every numeric filter: what it reads from a wallet in a window, which way it
+ * cuts, and the thresholds its slider offers. Money ladders reach the busiest
+ * wallets in the window (99th percentile) and never stop short of a floor, so a
+ * quiet week still offers "volume at least $1M".
+ */
+export const FILTER_SPECS = [
+  { key: 'pnlMin', cut: 'min', value: (t, p) => pnlIn(t, p),
+    stops: (vals) => withinReach([0, ...ladder(100, Math.max(100_000, upperTail(vals)))], vals, 100_000) },
+  { key: 'volumeMin', cut: 'min', value: (t, p) => volumeIn(t, p),
+    stops: (vals) => withinReach(ladder(1_000, Math.max(1_000_000, upperTail(vals))), vals, 1_000_000) },
+  { key: 'roiMin', cut: 'min', value: (t, p) => roiIn(t, p),
+    stops: () => [-50, -25, -10, -5, 0, 5, 10, 25, 50, 100, 200] },
+  { key: 'copyNetMin', cut: 'min', value: (t) => t.copyNet,
+    stops: () => [-20, -10, -5, -2, 0, 2, 5, 10, 20, 40] },
+  { key: 'winrateMin', cut: 'min', value: (t) => t.winRate,
+    stops: () => [0.3, 0.4, 0.5, 0.55, 0.6, 0.65, 0.7, 0.8, 0.9] },
+  { key: 'activeDaysMin', cut: 'min', value: (t) => t.activeDays,
+    stops: () => [7, 14, 30, 60, 90, 180, 365] },
+  { key: 'avgSizeMax', cut: 'max', value: (t) => t.avgSize,
+    stops: (vals) => withinReach(ladder(50, Math.max(10_000, upperTail(vals))), vals, 10_000) },
+];
+export const filterSpec = (key) => FILTER_SPECS.find((s) => s.key === key);
+
+/** A filter is offered only when some wallet in the window carries its figure:
+ *  the live leaderboard has no win rate, so "win rate ≥ 60%" could only ever
+ *  empty the board. */
+export const filterAvailable = (spec, traders, period) =>
+  traders.some((t) => Number.isFinite(spec.value(t, period)));
+
+/**
+ * How many values fall in each slider interval. For a floor ('min'): below the
+ * first threshold, then [t0, t1), [t1, t2) … and at or above the last. For a
+ * ceiling ('max'): at or below the first, then (t0, t1] … and above the last.
+ * One bin per slider position; the slider draws one bar per step and folds
+ * the open-ended end bin into its neighbour. Absent values are left out: a
+ * wallet with no figure is in no bin.
+ */
+export function histogram(values, thresholds, cut = 'min') {
+  const bins = new Array(thresholds.length + 1).fill(0);
+  for (const v of values) {
+    if (v == null || !Number.isFinite(v)) continue;
+    let i = 0;
+    if (cut === 'max') while (i < thresholds.length && v > thresholds[i]) i += 1;
+    else while (i < thresholds.length && v >= thresholds[i]) i += 1;
+    bins[i] += 1;
+  }
+  return bins;
+}
+
+/** Slider position for a stored threshold: the rung at or below it (above it
+ *  for a ceiling), so a value from an old link lands on the nearest step. The
+ *  "off" position is 0 for a floor and the last position for a ceiling. */
+export function stopPosition(thresholds, raw, cut = 'min') {
+  const value = finiteFilter(raw);
+  if (value === null) return cut === 'max' ? thresholds.length : 0;
+  if (cut === 'max') {
+    const i = thresholds.findIndex((t) => t >= value);
+    return i === -1 ? thresholds.length - 1 : i;
+  }
+  let k = 0;
+  while (k < thresholds.length && thresholds[k] <= value) k += 1;
+  return Math.max(1, k);
+}
+
+/** The threshold a slider position stands for, or '' for the "off" end. */
+export function positionValue(thresholds, position, cut = 'min') {
+  if (cut === 'max') return position >= thresholds.length ? '' : String(thresholds[position]);
+  return position <= 0 ? '' : String(thresholds[position - 1]);
+}
 
 /** Rows for the Saved view keep the same ordering rules, no eligibility cut. */
 export function buildSaved(traders, savedWallets, {

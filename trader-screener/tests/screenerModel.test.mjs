@@ -286,6 +286,52 @@ test('hard-to-mirror wallets are dropped only when asked for', () => {
     [false, false, false, true]);
 });
 
+test('money thresholds sit on a 1–2.5–5 ladder', () => {
+  assert.deepEqual(M.ladder(1_000, 1_000_000),
+    [1_000, 2_500, 5_000, 10_000, 25_000, 50_000, 100_000, 250_000, 500_000, 1_000_000]);
+  assert.deepEqual(M.ladder(100, 300), [100, 250, 500], 'stops at the first rung at or above the top');
+  assert.deepEqual(M.ladder(0, 10), [], 'a ladder needs a positive floor');
+});
+
+test('the volume slider is sized from the selected window and reaches at least $1M', () => {
+  // The live leaderboard fills only the window's own fields: a 7D row has
+  // d7Vol and no lifetime vol. Sizing from the lifetime field left a slider
+  // that stopped at $1,000.
+  const live = [800, 4_500, 90_000].map((d7Vol) => trader({ vol: null, pnl: null, d7Vol }));
+  const spec = M.filterSpec('volumeMin');
+  const stops = spec.stops(live.map((t) => spec.value(t, 'd7')));
+  assert.equal(stops[0], 1_000);
+  assert.equal(stops.at(-1), 1_000_000, 'a quiet week still offers $1M');
+  const busy = [trader({ d7Vol: 37_000_000 }), ...Array.from({ length: 99 }, () => trader({ d7Vol: 30_000_000 }))];
+  assert.equal(spec.stops(busy.map((t) => spec.value(t, 'd7'))).at(-1), 25_000_000,
+    'and reaches the busiest wallets, without a last step that keeps nobody');
+});
+
+test('a filter with no figure in the window is not offered', () => {
+  const live = [trader({ winRate: null, activeDays: null, avgSize: null, mm: null, arb: null, freq: null })];
+  assert.equal(M.filterAvailable(M.filterSpec('winrateMin'), live, 'd7'), false);
+  assert.equal(M.filterAvailable(M.filterSpec('volumeMin'), live, 'd7'), true);
+  assert.equal(M.mirrorFlagsKnown(live), false);
+  assert.equal(M.mirrorFlagsKnown([trader({ mm: 'directional' })]), true);
+});
+
+test('histogram bars line up with slider positions, floor and ceiling alike', () => {
+  const t = [1_000, 2_500, 5_000];
+  // floor: below 1K | [1K, 2.5K) | [2.5K, 5K) | 5K and up
+  assert.deepEqual(M.histogram([0, 999, 1_000, 2_499, 2_500, 9_000, null, NaN], t, 'min'), [2, 2, 1, 1]);
+  // ceiling: up to 1K | (1K, 2.5K] | (2.5K, 5K] | above 5K
+  assert.deepEqual(M.histogram([1_000, 1_001, 2_500, 5_000, 5_001], t, 'max'), [1, 2, 1, 1]);
+  // Position 0 is off for a floor; the last position is off for a ceiling.
+  assert.equal(M.positionValue(t, 0, 'min'), '');
+  assert.equal(M.positionValue(t, 2, 'min'), '2500');
+  assert.equal(M.positionValue(t, 3, 'max'), '');
+  assert.equal(M.stopPosition(t, '', 'min'), 0);
+  assert.equal(M.stopPosition(t, '2500', 'min'), 2);
+  assert.equal(M.stopPosition(t, '3000', 'min'), 2, 'an off-ladder value from an old link lands on the rung below');
+  assert.equal(M.stopPosition(t, '', 'max'), 3);
+  assert.equal(M.stopPosition(t, '2000', 'max'), 1);
+});
+
 test('filters narrow the board and survive the ordering path', () => {
   const rows = [
     trader({ w: '0x' + 'a'.repeat(40), d7: 50, mm: 'market_maker' }),
