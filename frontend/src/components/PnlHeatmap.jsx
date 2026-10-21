@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState } from 'react'
+import { dollars } from '../money'
 
 /* Daily realised PnL for the last 30 days, as a calendar heat-map.
  *
@@ -20,7 +21,7 @@ const DAYS = 30
 const WEEKDAYS = ['M', 'T', 'W', 'T', 'F', 'S', 'S']
 
 const iso = (d) => d.toISOString().slice(0, 10)
-const money = (v) => `${v >= 0 ? '+' : '−'}$${Math.abs(v).toFixed(2)}`
+const money = (v) => `${v >= 0 ? '+' : '−'}$${dollars(Math.abs(v))}`
 
 export default function PnlHeatmap({ curve = [] }) {
   const [pinned, setPinned] = useState(null)

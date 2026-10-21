@@ -9,8 +9,9 @@ import Icon from '../components/Icon'
 import { FundingAccess } from '../components/DepositAddresses'
 import { Notice, StateBlock, describeError } from '../components/UiState'
 import { performLogout } from '../authBootstrap'
+import { dollars } from '../money'
 
-const usd = (v) => (v != null ? `$${v.toFixed(2)}` : '—')
+const usd = (v) => (v != null ? `$${dollars(v)}` : '—')
 const short = (a) => (a ? `${a.slice(0, 6)}…${a.slice(-4)}` : '')
 
 export default function User({ onLogout }) {
@@ -138,19 +139,19 @@ export default function User({ onLogout }) {
           <div className="stat-grid two account-balances">
             <div className="stat-cell">
               <div className="label">Cash balance</div>
-              <div className="value">{me == null && !meError ? <span className="sk sk-line" /> : usd(me?.balance)}</div>
+              <div className="value" style={{ '--len': usd(me?.balance).length }}>{me == null && !meError ? <span className="sk sk-line" /> : usd(me?.balance)}</div>
             </div>
             <div className="stat-cell">
               <div className="label">In positions</div>
-              <div className="value">{me == null && !meError ? <span className="sk sk-line" /> : usd(me?.positions_value)}</div>
+              <div className="value" style={{ '--len': usd(me?.positions_value).length }}>{me == null && !meError ? <span className="sk sk-line" /> : usd(me?.positions_value)}</div>
             </div>
             <div className="stat-cell">
               <div className="label" title="Resolved wins not yet redeemed — claim on polymarket.com">Claimable</div>
-              <div className="value">{me == null && !meError ? <span className="sk sk-line" /> : usd(me?.claimable)}</div>
+              <div className="value" style={{ '--len': usd(me?.claimable).length }}>{me == null && !meError ? <span className="sk sk-line" /> : usd(me?.claimable)}</div>
             </div>
             <div className="stat-cell">
               <div className="label">Equity (total)</div>
-              <div className="value">{me == null && !meError ? <span className="sk sk-line" /> : usd(me?.equity)}</div>
+              <div className="value" style={{ '--len': usd(me?.equity).length }}>{me == null && !meError ? <span className="sk sk-line" /> : usd(me?.equity)}</div>
             </div>
           </div>
           {meError && (
@@ -174,7 +175,7 @@ export default function User({ onLogout }) {
           )}
           {me?.claimable > 0 && (
             <Notice>
-              <b>${me.claimable.toFixed(2)} in resolved winnings</b> isn&apos;t auto-claimed yet —
+              <b>${dollars(me.claimable)} in resolved winnings</b> isn&apos;t auto-claimed yet —
               redeem it on polymarket.com to turn it into spendable cash.
             </Notice>
           )}
@@ -225,7 +226,7 @@ export default function User({ onLogout }) {
                     <small>{w.closed_trades} closed · {Math.round((w.win_rate || 0) * 100)}% won</small>
                   </span>
                   <span className={`mono ${w.realized_pnl >= 0 ? 'pos' : 'neg'}`}>
-                    {w.realized_pnl >= 0 ? '+' : '−'}${Math.abs(w.realized_pnl).toFixed(2)}
+                    {w.realized_pnl >= 0 ? '+' : '−'}${dollars(Math.abs(w.realized_pnl))}
                   </span>
                 </div>
               ))}

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api'
 import Icon from './Icon'
+import { dollars } from '../money'
 
 /* Total balance and its curve, at the top of Home.
  *
@@ -25,8 +26,8 @@ const H = 86                  // plot height
 const PAD = 3                 // keeps the 2px stroke off the clip edge
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
-const money = (v) => (v == null || !Number.isFinite(v) ? '—' : `$${v.toFixed(2)}`)
-const signed = (v) => `${v >= 0 ? '+' : '−'}$${Math.abs(v).toFixed(2)}`
+const money = (v) => (v == null || !Number.isFinite(v) ? '—' : `$${dollars(v)}`)
+const signed = (v) => `${v >= 0 ? '+' : '−'}$${dollars(Math.abs(v))}`
 
 export default function BalanceCard() {
   const [me, setMe] = useState(null)

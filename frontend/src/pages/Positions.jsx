@@ -19,8 +19,9 @@ import {
   reduceClosePosition,
   requestClosePosition,
 } from '../closePositionState'
+import { dollars } from '../money'
 
-const signed = (v) => `${v >= 0 ? '+' : '-'}$${Math.abs(v).toFixed(2)}`
+const signed = (v) => `${v >= 0 ? '+' : '-'}$${dollars(Math.abs(v))}`
 
 function summarize(rows, closed) {
   if (closed) {
@@ -37,7 +38,7 @@ function summarize(rows, closed) {
   const exposure = rows.reduce((a, r) => a + Number(r.notional_usd || 0), 0)
   const unrealized = rows.reduce((a, r) => a + Number(r.unrealized_pnl || 0), 0)
   return [
-    ['Open exposure', `$${exposure.toFixed(2)}`, ''],
+    ['Open exposure', `$${dollars(exposure)}`, ''],
     ['Unrealized P&L', signed(unrealized), unrealized >= 0 ? 'pos' : 'neg'],
     ['Open positions', rows.length, ''],
   ]
@@ -344,7 +345,7 @@ export default function Positions({ onNavigate }) {
               {cells.map(([label, value, c]) => (
                 <div className="stat-cell" key={label}>
                   <div className="label">{label}</div>
-                  <div className={`value ${c}`}>{value}</div>
+                  <div className={`value ${c}`} style={{ '--len': String(value).length }}>{value}</div>
                 </div>
               ))}
             </div>
@@ -437,7 +438,7 @@ export default function Positions({ onNavigate }) {
                 {closeTarget.current_price != null && (
                   <div>
                     <dt>Estimated value</dt>
-                    <dd>${((closeTarget.shares || 0) * closeTarget.current_price).toFixed(2)} at {(closeTarget.current_price * 100).toFixed(1)}¢</dd>
+                    <dd>${dollars((closeTarget.shares || 0) * closeTarget.current_price)} at {(closeTarget.current_price * 100).toFixed(1)}¢</dd>
                   </div>
                 )}
               </dl>

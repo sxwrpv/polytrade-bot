@@ -6,7 +6,7 @@ import { useId } from 'react'
 // user drags; the parent debounces the actual save. The track fills to the
 // thumb (--fill), and the number field opens a decimal keypad on phones.
 const formatValue = (v, unit) => {
-  if (unit === '$') return `$${v}`
+  if (unit === '$') return `$${v.toLocaleString('en-US')}`
   if (unit === '%') return `${v}%`
   if (unit === '¢') return `${Math.round(v * 100)}¢`
   return `${v}${unit}`

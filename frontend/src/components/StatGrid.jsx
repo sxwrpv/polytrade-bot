@@ -1,4 +1,6 @@
-const fmt = (v) => (v == null ? '—' : `${v >= 0 ? '+' : '−'}$${Math.abs(Number(v)).toFixed(2)}`)
+import { dollars } from '../money'
+
+const fmt = (v) => (v == null ? '—' : `${v >= 0 ? '+' : '−'}$${dollars(Math.abs(Number(v)))}`)
 const cls = (v) => (v == null ? '' : v >= 0 ? 'pos' : 'neg')
 
 export default function StatGrid({ pnl }) {
@@ -17,7 +19,9 @@ export default function StatGrid({ pnl }) {
       {cells.map(([label, value, c]) => (
         <div className="stat-cell" key={label}>
           <div className="label">{label}</div>
-          <div className={`value ${c}`}>{loading ? <span className="sk sk-line" /> : value}</div>
+          <div className={`value ${c}`} style={{ '--len': String(value).length }}>
+            {loading ? <span className="sk sk-line" /> : value}
+          </div>
         </div>
       ))}
     </div>

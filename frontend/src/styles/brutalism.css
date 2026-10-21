@@ -180,6 +180,16 @@ button { font: inherit; color: inherit; }
   font-variant-numeric: tabular-nums; letter-spacing: -.01em;
   overflow-wrap: anywhere;
 }
+/* A figure wider than its cell ($12,863.28 in a third of a phone) shrinks to
+   stay on one line instead of wrapping a digit. --len is its character count;
+   a JetBrains Mono character is .6em wide. */
+@supports (width: 1cqi) {
+  .stat-cell { container-type: inline-size; }
+  .stat-cell .value { font-size: clamp(11px, calc(100cqi / (var(--len, 1) * .6)), 17px); }
+}
+@media (max-width: 340px) {
+  .stat-cell { padding: 12px 8px; }
+}
 
 /* Buttons — tinted liquid glass.
  *

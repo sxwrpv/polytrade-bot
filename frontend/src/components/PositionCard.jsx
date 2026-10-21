@@ -1,8 +1,9 @@
 import Icon from './Icon'
+import { dollars } from '../money'
 
 const short = (a) => (a ? `${a.slice(0, 6)}…${a.slice(-4)}` : '')
 const cents = (v) => (v == null ? '—' : `${(v * 100).toFixed(1)}¢`)
-const usd = (v) => (v == null ? '—' : `${v >= 0 ? '+' : '−'}$${Math.abs(v).toFixed(2)}`)
+const usd = (v) => (v == null ? '—' : `${v >= 0 ? '+' : '−'}$${dollars(Math.abs(v))}`)
 
 /* One position: what it is, what it is doing to your money, and the one action
    it allows. The P&L sits top-right where the eye lands after the title; the
@@ -65,7 +66,7 @@ export default function PositionCard({ p, closed, onRequestClose }) {
         {closed
           ? <div><small>Exit</small><b>{cents(p.exit_price)}</b></div>
           : <div><small>Now</small><b>{cents(p.current_price)}</b></div>}
-        <div><small>Shares</small><b>{(p.shares || 0).toFixed(0)}</b></div>
+        <div><small>Shares</small><b>{Math.round(p.shares || 0).toLocaleString('en-US')}</b></div>
       </div>
 
       {needsReconciliation && (
@@ -75,7 +76,7 @@ export default function PositionCard({ p, closed, onRequestClose }) {
             <b>Reconciliation required.</b>{' '}
             Claim {String(p.claim_state || p.status)}
             {p.claim_action ? ` · ${p.claim_action} BUY` : ''}
-            {p.reserved_usd != null ? ` · $${Number(p.reserved_usd).toFixed(2)} reserved` : ''}
+            {p.reserved_usd != null ? ` · $${dollars(p.reserved_usd)} reserved` : ''}
             {p.claim_id ? ` · ${short(p.claim_id)}` : ''}. Close and retry are disabled until it settles.
             {p.claim_error && <div className="neg">{p.claim_error}</div>}
           </div>
