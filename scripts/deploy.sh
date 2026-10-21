@@ -147,8 +147,10 @@ log "Pre-flight"
 
 # The Caddyfile is validated against the real Caddy image, in a throwaway
 # container, before it can take the site down. A bad matcher here is a 100%
-# outage, and `caddy reload` reports success on a stale inode (see
-# docs/deployment.md), so this must happen before the container is recreated.
+# outage, and `caddy reload` cannot be trusted to catch it: the file is
+# bind-mounted, so after a sync replaces it (rsync and scp write a new inode)
+# a reload reports success while re-reading the stale copy. Validate first,
+# before the container is recreated.
 docker run --rm --network none \
   -v "$DEPLOY_DIR/Caddyfile:/tmp/Caddyfile:ro" \
   caddy:2.10.2-alpine caddy validate --config /tmp/Caddyfile --adapter caddyfile \

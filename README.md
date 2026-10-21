@@ -134,7 +134,6 @@ real database.
 - [API Reference](docs/api-reference.md)
 - [Operators hub](docs/operators.md)
 - [Configuration](docs/configuration.md)
-- [Deployment](docs/deployment.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Official Links](docs/links.md)
 

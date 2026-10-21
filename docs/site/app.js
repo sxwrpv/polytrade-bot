@@ -21,7 +21,6 @@ const groups = [
   { title: 'Operations', pages: [
     ['operators', 'Operators Hub', 'operators.md'],
     ['configuration', 'Configuration', 'configuration.md'],
-    ['deployment', 'Deployment', 'deployment.md'],
     ['troubleshooting', 'Troubleshooting', 'troubleshooting.md'],
   ]},
   { title: 'Reference', pages: [

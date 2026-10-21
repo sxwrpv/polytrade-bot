@@ -75,7 +75,6 @@ _DOCS_PAGES = {
     "risk-and-security.md",
     "api-reference.md",
     "configuration.md",
-    "deployment.md",
     "troubleshooting.md",
     "developers.md",
     "operators.md",

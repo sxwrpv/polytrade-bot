@@ -202,7 +202,6 @@ def test_existing_documentation_urls_remain_available():
         "risk-and-security",
         "api-reference",
         "configuration",
-        "deployment",
         "troubleshooting",
     }
     for slug in existing_slugs:
@@ -215,6 +214,10 @@ def test_unknown_documentation_page_returns_not_found():
     # Markdown is served any more.
     assert client.get("/docs/glossary").status_code == 404
     assert client.get("/docs/content/glossary.md").status_code == 404
+    # The deployment guide was removed the same way (2026-10-21); operators.md
+    # now carries its monitoring checklist.
+    assert client.get("/docs/deployment").status_code == 404
+    assert client.get("/docs/content/deployment.md").status_code == 404
     assert client.get("/docs/README").status_code == 404
     assert client.get("/docs/content/.env").status_code == 404
     assert client.get("/docs/content/not-a-real-page.md").status_code == 404
