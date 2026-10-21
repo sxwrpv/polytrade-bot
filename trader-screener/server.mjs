@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import * as pm from './lib/polymarket.mjs';
 import { buildProfile } from './lib/metrics.mjs';
 import * as screener from './lib/publicScreener.mjs';
-import { fetchLiveUniverse } from './lib/liveLeaderboard.mjs';
+import { createLastTradeLookup, fetchLiveUniverse } from './lib/liveLeaderboard.mjs';
 import {
   canonicalClientIdentity, ConcurrencyGate, createCoalescer, createRateLimiter, TtlLruCache,
 } from './lib/serviceGuards.mjs';
@@ -103,6 +103,8 @@ const profileGate = new ConcurrencyGate(2);
 const LIVE_PROFILE_DEADLINE_MS = 30_000;
 const liveLeaderboardCache = new TtlLruCache({ max: 3, ttlMs: 60 * 1000 });
 const liveLeaderboardInflight = createCoalescer();
+// One per process, so the per-wallet last-trade cache is shared by all three windows.
+const lastTradeDays = createLastTradeLookup();
 
 async function liveLeaderboard(period) {
   const hit = liveLeaderboardCache.get(period);
@@ -113,7 +115,7 @@ async function liveLeaderboard(period) {
     const deadline = new AbortController();
     const timer = setTimeout(() => deadline.abort(new Error('live leaderboard deadline exceeded')), 15_000);
     try {
-      const rows = await fetchLiveUniverse({ period, snapshot: dataset, signal: deadline.signal });
+      const rows = await fetchLiveUniverse({ period, snapshot: dataset, signal: deadline.signal, lastTradeDays });
       liveLeaderboardCache.set(period, rows);
       return rows;
     } finally {

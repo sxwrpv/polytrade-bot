@@ -50,6 +50,11 @@ test('the lifetime board hides wallets stale for 30 days', () => {
   assert.deepEqual(M.buildBoard([fresh, stale], opts).map((t) => t.w), [fresh.w]);
   // The 7-day board does not apply that cut; the window already does it.
   assert.equal(M.buildBoard([fresh, stale], { ...opts, period: 'd7' }).length, 2);
+  // An unknown last trade is never a reason to hide a wallet, and the board counts it.
+  const unknown = trader({ w: '0x' + 'f'.repeat(40), lastTradeDay: null });
+  assert.deepEqual(M.buildBoard([fresh, stale, unknown], opts).map((t) => t.w).sort(), [fresh.w, unknown.w].sort());
+  assert.equal(M.lastTradeUnknown([fresh, stale, unknown], { period: 'all' }), 1);
+  assert.equal(M.lastTradeUnknown([fresh, stale, unknown], { period: 'd7' }), 0);
 });
 
 test('an unsupported period or sort fails loudly', () => {

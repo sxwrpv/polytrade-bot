@@ -363,6 +363,13 @@ export function staleHeldBack(traders, { cat = 'all', period, asOf }) {
   return inCategory(traders, cat).filter((t) => !tradedRecently(t, asOf)).length;
 }
 
+/** Lifetime-board wallets whose last trade is unknown. The 30-day rule cannot
+ *  judge them, so they stay on the board, and the board says how many. */
+export function lastTradeUnknown(traders, { cat = 'all', period }) {
+  if (period !== 'all') return 0;
+  return inCategory(traders, cat).filter((t) => !t.lastTradeDay).length;
+}
+
 // --- angle boards -----------------------------------------------------------
 
 export const realAngles = (angles) => angles.filter((a) => a.kind !== 'niche');
