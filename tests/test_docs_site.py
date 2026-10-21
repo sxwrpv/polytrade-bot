@@ -1,9 +1,9 @@
+import mimetypes
 import re
-
 
 from fastapi.testclient import TestClient
 
-from backend.main import app
+from backend.main import _register_static_types, app
 
 
 client = TestClient(app)
@@ -103,6 +103,20 @@ def test_official_links_inventory_includes_all_core_consumer_guides():
     # The glossary was removed at the owner's request (2026-10-20); the
     # official links must not advertise a page that now returns 404.
     assert "/docs/glossary" not in links
+
+
+def test_homepage_webp_images_are_served_as_images(monkeypatch):
+    # The production image's Python had no .webp in its MIME table, so the
+    # homepage showcase went out as application/octet-stream. Rebuild that
+    # table here, whatever this host's Python knows, and check the app's fix.
+    table = mimetypes.MimeTypes(filenames=())
+    for types in table.types_map:
+        types.pop(".webp", None)
+    monkeypatch.setattr(mimetypes, "_db", table)
+    assert mimetypes.guess_type("positions.webp")[0] is None
+
+    _register_static_types()
+    assert mimetypes.guess_type("positions.webp")[0] == "image/webp"
 
 
 def test_docs_assets_are_available_from_a_dedicated_mount():

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import mimetypes
 import os
 from contextlib import asynccontextmanager
 
@@ -596,6 +597,18 @@ if os.path.isfile(_DOCS_INDEX):
             raise HTTPException(status_code=404, detail="Documentation page not found")
         return FileResponse(_DOCS_INDEX)
 
+
+def _register_static_types() -> None:
+    """Name the types the built frontend ships that Python may not know.
+
+    The production image's Python has no .webp entry in its MIME table (it
+    answered None there), so StaticFiles sent the homepage's showcase images as
+    application/octet-stream.
+    """
+    mimetypes.add_type("image/webp", ".webp")
+
+
+_register_static_types()
 
 # SPA — mount last so it doesn't shadow /api or /docs. /screener/* never
 # reaches this app: Caddy routes it to the trader-screener service.
