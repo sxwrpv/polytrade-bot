@@ -77,6 +77,55 @@ export class ConcurrencyGate {
   }
 }
 
+/** A shared budget of requests per second, handed out in arrival order.
+ *  `take(signal)` resolves when a request may go out: up to `burst` at once,
+ *  then one every 1/perSecond seconds. Background waiters get a slot only
+ *  while no foreground waiter is queued, so work nobody is watching uses idle
+ *  capacity. A waiter whose signal aborts leaves its queue without spending a
+ *  slot. */
+export function createRateGate({ perSecond, burst = perSecond, now = Date.now }) {
+  let tokens = burst;
+  let last = now();
+  let timer = null;
+  const foreground = [];
+  const background = [];
+  const waiting = () => foreground.length + background.length;
+  const pump = () => {
+    timer = null;
+    const time = now();
+    tokens = Math.min(burst, tokens + ((time - last) / 1000) * perSecond);
+    last = time;
+    while (waiting() && tokens >= 1) {
+      tokens -= 1;
+      (foreground.length ? foreground : background).shift().release();
+    }
+    if (waiting()) timer = setTimeout(pump, Math.ceil(((1 - tokens) / perSecond) * 1000));
+  };
+  return {
+    take(signal, { background: later = false } = {}) {
+      if (signal?.aborted) return Promise.reject(signal.reason ?? new Error('aborted'));
+      const queue = later ? background : foreground;
+      return new Promise((resolve, reject) => {
+        const onAbort = () => {
+          const at = queue.indexOf(waiter);
+          if (at >= 0) queue.splice(at, 1);
+          reject(signal.reason ?? new Error('aborted'));
+        };
+        const waiter = {
+          release() {
+            signal?.removeEventListener('abort', onAbort);
+            resolve();
+          },
+        };
+        signal?.addEventListener('abort', onAbort, { once: true });
+        queue.push(waiter);
+        if (!timer) pump();
+      });
+    },
+    get queued() { return waiting(); },
+  };
+}
+
 export function createRateLimiter({ limit, windowMs = 60_000, maxClients = 4096, now = Date.now }) {
   const buckets = new Map();
   return {

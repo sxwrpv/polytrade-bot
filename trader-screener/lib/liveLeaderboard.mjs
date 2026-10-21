@@ -1,4 +1,4 @@
-import { deadlineSignal } from './polymarket.mjs';
+import { deadlineSignal, polymarketFetch } from './polymarket.mjs';
 import { TtlLruCache } from './serviceGuards.mjs';
 
 const WINDOWS = { d7: 'WEEK', d30: 'MONTH', all: 'ALL' };
@@ -104,7 +104,7 @@ export function buildLiveUniverse({ period, pnlRows = [], volumeRows = [], snaps
  *   server's createLastTradeLookup; without it every last trade stays unknown.
  */
 export async function fetchLiveUniverse({
-  period, snapshot, fetchImpl = fetch, fetchedAt = new Date().toISOString(), signal, lastTradeDays,
+  period, snapshot, fetchImpl = polymarketFetch, fetchedAt = new Date().toISOString(), signal, lastTradeDays,
 }) {
   const timePeriod = periodToLeaderboardWindow(period);
   const getPage = async (orderBy, offset) => {
@@ -136,7 +136,9 @@ export async function fetchLiveUniverse({
  * copies. So lookups go out one at a time and at most `perSecond` a second,
  * however many boards ask at once: two a second is a tenth of the 200 per 10 s
  * Polymarket publishes for /v2/activity (v1's own limit is unpublished), and
- * the engine keeps the rest. A cold cache therefore fills over minutes.
+ * they draw on the screener's shared budget (polymarketGate) as background
+ * work, after any board or wallet page that is waiting. A cold cache therefore
+ * fills over minutes.
  *
  * Built once per server. A wallet's day is kept for a day and served at once;
  * one older than `refreshAfterMs` is renewed behind the board (a last trade
@@ -147,7 +149,7 @@ export async function fetchLiveUniverse({
  * that wallet is not asked again for two minutes.
  */
 export function createLastTradeLookup({
-  fetchImpl = fetch,
+  fetchImpl = polymarketFetch,
   perSecond = 2,
   timeoutMs = 8_000,
   budgetMs = 6_000,
@@ -166,7 +168,7 @@ export function createLastTradeLookup({
     const deadline = deadlineSignal(timeoutMs);
     try {
       const query = new URLSearchParams({ user: wallet, type: 'TRADE', limit: '1' });
-      const response = await fetchImpl(`${ACTIVITY}?${query}`, { headers: HEADERS, signal: deadline.signal });
+      const response = await fetchImpl(`${ACTIVITY}?${query}`, { headers: HEADERS, signal: deadline.signal, background: true });
       if (!response.ok) throw new Error(`Polymarket activity ${response.status}`);
       const rows = await response.json();
       if (!Array.isArray(rows)) throw new Error('Polymarket activity returned an invalid payload');

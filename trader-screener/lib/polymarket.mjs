@@ -13,6 +13,8 @@
  *   rows carry all three. /activity is therefore the primary fill source; it
  *   also carries the REDEEM, REWARD and REBATE rows the return math needs.
  */
+import { createRateGate } from './serviceGuards.mjs';
+
 const DATA = 'https://data-api.polymarket.com';
 const LB = 'https://lb-api.polymarket.com';
 const RPC = process.env.POLYGON_RPC || 'https://polygon-bor-rpc.publicnode.com';
@@ -29,6 +31,26 @@ const PAGE = 500;
  *  lifetime one. */
 export const ACTIVITY_CEILING = 5500;
 const HEADERS = { accept: 'application/json', 'user-agent': 'polytrade-screener/1.0' };
+
+/* One budget for everything this service asks Polymarket. Polymarket limits
+ * requests per IP, and the copy engine on the same server needs most of that
+ * budget for the trades it copies, so the screener as a whole sends at most
+ * SCREENER_POLYMARKET_RPS requests a second (default 5, in bursts of up to
+ * 10): a third of the 150 per 10 s Polymarket publishes for /positions, its
+ * tightest data endpoint. Boards and wallet pages wait here in arrival order;
+ * last-trade lookups take what they leave. The Polygon RPC is a separate
+ * service and does not count. */
+export const polymarketGate = createRateGate({
+  perSecond: Number(process.env.SCREENER_POLYMARKET_RPS) || 5,
+  burst: 10,
+});
+
+/** fetch for Polymarket's hosts, through the shared gate. `background: true`
+ *  marks work no visitor is waiting on; it uses only idle capacity. */
+export async function polymarketFetch(url, { background = false, ...init } = {}) {
+  await polymarketGate.take(init.signal, { background });
+  return fetch(url, init);
+}
 
 /* Per-request deadline, composed rather than wired by hand.
  *
@@ -71,7 +93,7 @@ async function j(url, { timeout = 25000, signal } = {}) {
     const deadline = deadlineSignal(timeout, signal);
     let status;
     try {
-      const res = await fetch(url, { headers: HEADERS, signal: deadline.signal });
+      const res = await polymarketFetch(url, { headers: HEADERS, signal: deadline.signal });
       if (res.ok) return await res.json();
       status = res.status;
     } finally {

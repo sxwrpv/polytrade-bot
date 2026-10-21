@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  canonicalClientIdentity, ConcurrencyGate, createCoalescer, createRateLimiter, TtlLruCache,
+  canonicalClientIdentity, ConcurrencyGate, createCoalescer, createRateGate, createRateLimiter, TtlLruCache,
 } from '../lib/serviceGuards.mjs';
 import { deadlineSignal } from '../lib/polymarket.mjs';
 
@@ -73,4 +73,42 @@ test('upstream deadlines inherit parent cancellation and clean up safely', () =>
   assert.equal(deadline.signal.aborted, true);
   assert.match(String(deadline.signal.reason), /profile deadline/);
   assert.doesNotThrow(() => deadline.cleanup());
+});
+
+test('the rate gate lets a burst through, then one request per interval, in arrival order', async () => {
+  const gate = createRateGate({ perSecond: 50, burst: 2 });
+  const t0 = Date.now();
+  const order = [];
+  await Promise.all([0, 1, 2, 3, 4].map((i) => gate.take().then(() => order.push([i, Date.now() - t0]))));
+  assert.deepEqual(order.map(([i]) => i), [0, 1, 2, 3, 4]);
+  assert.ok(order[1][1] < 15, 'the burst goes at once');
+  for (let k = 2; k < 5; k += 1) {
+    assert.ok(order[k][1] >= (k - 1) * 20 - 5, `request ${k} waited its turn (${order[k][1]} ms)`);
+  }
+});
+
+test('a waiter whose signal aborts leaves the queue without spending a slot', async () => {
+  const gate = createRateGate({ perSecond: 20, burst: 1 });
+  await gate.take();
+  const controller = new AbortController();
+  const dropped = gate.take(controller.signal);
+  const next = gate.take();
+  controller.abort(new Error('gone'));
+  await assert.rejects(dropped, /gone/);
+  const t0 = Date.now();
+  await next;
+  assert.ok(Date.now() - t0 < 80, 'the next waiter gets the slot the aborted one gave up');
+  assert.equal(gate.queued, 0);
+});
+
+test('background waiters get a slot only while no foreground waiter is queued', async () => {
+  const gate = createRateGate({ perSecond: 50, burst: 1 });
+  await gate.take();
+  const order = [];
+  await Promise.all([
+    gate.take(undefined, { background: true }).then(() => order.push('background')),
+    gate.take().then(() => order.push('page 1')),
+    gate.take().then(() => order.push('page 2')),
+  ]);
+  assert.deepEqual(order, ['page 1', 'page 2', 'background']);
 });

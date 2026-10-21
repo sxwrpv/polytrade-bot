@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   buildLiveUniverse, createLastTradeLookup, fetchLiveUniverse, periodToLeaderboardWindow,
 } from '../lib/liveLeaderboard.mjs';
+import { polymarketFetch } from '../lib/polymarket.mjs';
 
 const wallet = '0x' + 'a'.repeat(40);
 const other = '0x' + 'b'.repeat(40);
@@ -234,4 +235,26 @@ test('wallets nobody knows yet are looked up before old days are renewed', async
   await new Promise((resolve) => setTimeout(resolve, 20));
   // a's renewal was already under way when c arrived; c then goes before b.
   assert.deepEqual(order, [a, b, a, c, b]);
+});
+
+test('boards and every other Polymarket read share one budget: ten at once, then five a second', async () => {
+  const real = globalThis.fetch;
+  const sent = [];
+  const t0 = Date.now();
+  globalThis.fetch = async () => {
+    sent.push(Date.now() - t0);
+    return { ok: true, status: 200, json: async () => [] };
+  };
+  try {
+    await Promise.all([
+      fetchLiveUniverse({ period: 'd7', snapshot }),
+      ...Array.from({ length: 8 }, () => polymarketFetch('https://data-api.polymarket.com/value?user=x')),
+    ]);
+  } finally {
+    globalThis.fetch = real;
+  }
+  sent.sort((a, b) => a - b);
+  assert.equal(sent.length, 12, 'four leaderboard pages and eight other reads');
+  assert.ok(sent[9] < 50, 'a burst of ten goes at once');
+  assert.ok(sent[10] >= 150 && sent[11] >= 350, `then one every 200 ms (${sent.slice(10).join(', ')} ms)`);
 });
