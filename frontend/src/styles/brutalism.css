@@ -1006,70 +1006,13 @@ a { color: inherit; }
 }
 .site-switcher a:focus-visible { outline: 2px solid var(--green-deep); outline-offset: 2px; }
 
-/* ===== consumer public site ===== */
-.public-site { min-height: 100vh; font-size: 16px; }
-.public-wrap { width: min(1080px, calc(100% - 48px)); margin-inline: auto; }
-
-/* Navigation — flat paper supports a centered glass site switcher. */
-.public-nav {
-  position: sticky; top: 0; z-index: 30;
-  display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-  align-items: center; gap: 24px;
-  width: 100%; padding: 10px max(24px, calc((100% - 1240px) / 2));
-  background: color-mix(in srgb, var(--bg) 88%, transparent);
-  border-bottom: 1px solid var(--border);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
-}
-@supports not (background: color-mix(in srgb, red 50%, transparent)) {
-  .public-nav { background: rgba(238, 242, 239, 0.94); }
-}
-.public-brand { display: inline-flex; align-items: center; gap: 10px; min-height: var(--tap); font-size: 17px; font-weight: 700; letter-spacing: -.01em; text-decoration: none; color: var(--text); }
-.public-brand .brand-logo { box-shadow: 0 0 0 1px var(--border); }
-.public-nav > .public-brand { justify-self: start; }
-.public-nav-actions { display: flex; align-items: center; justify-self: end; gap: 20px; }
-.public-nav-link { color: var(--muted); text-decoration: none; font-size: 14px; font-weight: 600; }
-.public-nav-link:hover, .public-text-link:hover { color: var(--green-deep); }
-.public-small-cta { min-height: 40px; padding: 8px 14px; font-size: 14px; }
-
-/* Hero — editorial spacing, one primary action, no product mock-up glow. */
-.public-hero { padding: 96px 0 78px; display: grid; grid-template-columns: 1.08fr .92fr; gap: 68px; align-items: start; }
+/* ===== consumer public site =====
+   The homepage's layout, sections and motion live in public-landing.css,
+   which ships in the homepage's own lazily loaded chunk. Two rules stay here
+   because other screens share them: the mono eyebrow label (onboarding uses
+   it) and the editorial serif for public headings. */
 .eyebrow { font-family: var(--mono); color: var(--muted); font-size: 11px; line-height: 1.3; letter-spacing: .14em; font-weight: 500; text-transform: uppercase; margin-bottom: 16px; }
 .public-site h1, .public-site h2 { font-family: var(--serif); letter-spacing: -.02em; line-height: 1.04; font-weight: 400; }
-.public-site h1 { font-size: clamp(44px, 5.6vw, 72px); }
-.public-site h1 span { color: var(--green-deep); }
-.public-site h2 { font-size: clamp(32px, 3.6vw, 46px); }
-.public-site h3 { font-size: 17px; line-height: 1.35; font-weight: 600; letter-spacing: -.005em; }
-.hero-lede { margin-top: 24px; max-width: 52ch; color: var(--muted); font-size: 18px; line-height: 1.65; }
-.hero-actions { display: flex; align-items: center; gap: 24px; margin: 32px 0 18px; }
-.public-primary { min-height: 48px; padding: 12px 22px; font-size: 15px; }
-.public-text-link { display: inline-flex; align-items: center; min-height: var(--tap); color: var(--muted); text-decoration: none; font-size: 15px; font-weight: 600; }
-.hero-footnote { max-width: 60ch; color: var(--muted); font-size: 13px; line-height: 1.6; }
-
-.product-preview { position: relative; }
-.preview-label { margin: 0 0 10px 2px; font: 500 11px var(--mono); letter-spacing: .12em; color: var(--muted); text-transform: uppercase; }
-.avatar { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 50%; border: 1px solid var(--border); background: var(--surface); color: var(--green-deep); font: 600 11px var(--mono); }
-
-/* Sections — separated by whitespace and hairlines, not by card edges. */
-.benefits, .know { padding-block: 92px; }
-.benefits > div:first-child { display: flex; justify-content: space-between; align-items: end; gap: 40px; margin-bottom: 40px; }
-.benefits .eyebrow { margin: 0 0 10px; }
-
-.know { display: grid; grid-template-columns: .7fr 1.3fr; gap: 76px; }
-.know-list article { display: grid; grid-template-columns: 200px 1fr; gap: 24px; padding: 22px 0; border-top: 1px solid var(--border); }
-.know-list article:last-child { border-bottom: 1px solid var(--border); }
-.know-list strong { font-size: 15px; }
-.know-list p { color: var(--muted); line-height: 1.7; }
-
-.public-final { margin-top: 64px; padding: 84px 0; border-block: 1px solid var(--border); background: var(--surface); }
-.final-inner { display: flex; justify-content: space-between; align-items: center; gap: 40px; }
-.final-inner .eyebrow { margin-bottom: 15px; }
-.public-footer { padding: 48px 0 30px; display: grid; grid-template-columns: 1fr 1.5fr auto; gap: 25px; align-items: center; color: var(--muted); font-size: 14px; }
-.public-footer div { display: flex; gap: 6px 18px; flex-wrap: wrap; }
-.public-footer div a { display: inline-flex; align-items: center; min-height: var(--tap); }
-.public-footer a { text-decoration: none; }
-.public-footer a:hover { color: var(--green-deep); }
-.public-footer small { grid-column: 1/-1; border-top: 1px solid var(--border); padding-top: 20px; color: var(--muted); font-size: 13px; }
 
 /* Telegram onboarding, launch states and funding notices */
 .onboard {
@@ -1116,30 +1059,6 @@ a { color: inherit; }
 @keyframes logo-in { from { opacity: 0; transform: scale(.92); filter: blur(4px); } }
 .launch-state .state-icon { width: 48px; height: 48px; }
 
-@media (max-width: 760px) {
-  .public-wrap { width: min(100% - 32px, 620px); }
-  .public-nav {
-    position: relative; top: 0;
-    grid-template-columns: minmax(0, 1fr) auto; gap: 10px 12px; padding: 10px 16px 12px;
-  }
-  .public-nav > .site-switcher { grid-column: 1 / -1; grid-row: 2; justify-self: stretch; display: grid; grid-template-columns: repeat(3, 1fr); }
-  .site-switcher a { min-height: 40px; padding: 0 10px; }
-  .public-nav-actions { gap: 8px; }
-  .public-nav-link { display: none; }
-  .public-hero { grid-template-columns: 1fr; min-height: 0; padding: 48px 0 64px; gap: 48px; }
-  .public-site h1 { font-size: clamp(44px, 13vw, 60px); }
-  .hero-lede { font-size: 17px; }
-  .hero-actions { align-items: stretch; flex-direction: column; gap: 6px; }
-  .hero-actions .public-primary { width: 100%; }
-  .benefits, .know { padding-block: 64px; }
-  .benefits > div:first-child { display: block; }
-  .benefits-lede { margin-top: 14px; }
-  .know { grid-template-columns: 1fr; gap: 32px; }
-  .know-list article { grid-template-columns: 1fr; gap: 6px; }
-  .final-inner { align-items: stretch; flex-direction: column; }
-  .public-footer { grid-template-columns: 1fr; }
-  .public-footer small { grid-column: auto; }
-}
 @media (min-width: 561px) {
   .onboard-terms { grid-template-columns: 1fr 1fr; }
 }
@@ -1160,6 +1079,5 @@ a { color: inherit; }
     animation-iteration-count: 1 !important;
     transition-duration: .01ms !important;
   }
-  .product-preview { animation: none; }
   .sk::after, .launch-progress::after { animation: none; }
 }

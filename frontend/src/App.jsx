@@ -1,7 +1,6 @@
-import { useState, useEffect, useCallback } from 'react'
+import { Component, Suspense, lazy, useState, useEffect, useCallback } from 'react'
 import { api, clearWallet, getSession, saveSession } from './api'
 import { bootstrapLaunch } from './authBootstrap'
-import PublicHome from './pages/PublicHome'
 import Onboarding from './pages/Onboarding'
 import LegacyLink from './pages/LegacyLink'
 import Home from './pages/Home'
@@ -11,6 +10,40 @@ import Icon from './components/Icon'
 
 const TABS = [['home', 'Home', 'home'], ['positions', 'Positions', 'positions'], ['user', 'Account', 'account']]
 const tg = window.Telegram?.WebApp
+
+// The public homepage is its own chunk, stylesheet included, so a Mini App
+// launch inside Telegram never downloads it. Outside Telegram the visitor is
+// almost always headed there, so the download starts now, alongside the
+// session check, instead of after it.
+const loadPublicHome = () => import('./pages/PublicHome')
+const PublicHome = lazy(loadPublicHome)
+if (!tg?.initData) loadPublicHome().catch(() => { /* the boundary below reports it */ })
+
+/* A chunk that fails to download (a dropped connection, or a deploy that
+   replaced it mid-visit) would otherwise unmount the app to a blank page. */
+class ChunkBoundary extends Component {
+  state = { failed: false }
+
+  static getDerivedStateFromError() { return { failed: true } }
+
+  render() {
+    if (!this.state.failed) return this.props.children
+    return (
+      <div className="onboard launch-state" role="alert">
+        <div className="logo"><img className="brand-logo" src="/brand/polytrade-mark.png" alt="" /> PolyTrade</div>
+        <span className="state-icon is-error"><Icon name="alert" /></span>
+        <h1>This page didn’t load.</h1>
+        <p className="muted">Check your connection and reload. You can also go straight to @cpolytrade_bot.</p>
+        <div className="launch-actions">
+          <button className="btn btn-block" onClick={() => window.location.reload()}>
+            <Icon name="refresh" />Reload
+          </button>
+          <a className="btn btn-ghost btn-block" href="https://t.me/cpolytrade_bot">Open the bot</a>
+        </div>
+      </div>
+    )
+  }
+}
 
 function selectionHaptic() {
   try {
@@ -32,8 +65,12 @@ export default function App() {
     tg.ready()
     tg.expand()
     try {
-      tg.setHeaderColor('#eef2ef')
-      tg.setBackgroundColor('#eef2ef')
+      // Colour control arrived in Bot API 6.1; outside Telegram the SDK reports
+      // 6.0 and only logs a warning on every page load, so skip it there.
+      if (tg.isVersionAtLeast?.('6.1')) {
+        tg.setHeaderColor('#eef2ef')
+        tg.setBackgroundColor('#eef2ef')
+      }
     } catch { /* older Telegram clients */ }
   }, [])
 
@@ -66,7 +103,13 @@ export default function App() {
   }, [tab])
 
   if (launch.mode === 'loading') return <LaunchLoading />
-  if (launch.mode === 'public') return <PublicHome />
+  if (launch.mode === 'public') {
+    return (
+      <ChunkBoundary>
+        <Suspense fallback={<LaunchLoading />}><PublicHome /></Suspense>
+      </ChunkBoundary>
+    )
+  }
   if (launch.mode === 'telegram-error') {
     return (
       <div className="onboard launch-state">
