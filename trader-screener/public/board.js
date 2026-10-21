@@ -482,7 +482,7 @@ function renderBoard() {
     const notes = [];
     if (held > 0) notes.push(`Lifetime totals never decay, so ${held.toLocaleString('en-US')} ${held === 1 ? 'wallet that has' : 'wallets that have'} not traded in ${M.STALE_DAYS} days ${held === 1 ? 'is' : 'are'} held back here. They still rank on Polymarket's all-time board. This one answers who you could copy today.`);
     // A failed lookup must not quietly bring dormant wallets back.
-    if (unknown > 0) notes.push(`${unknown.toLocaleString('en-US')} ${unknown === 1 ? 'wallet’s last trade' : 'wallets’ last trades'} could not be checked, so ${unknown === 1 ? 'it stays' : 'they stay'} on the board.`);
+    if (unknown > 0) notes.push(`${unknown.toLocaleString('en-US')} ${unknown === 1 ? 'wallet’s last trade is' : 'wallets’ last trades are'} not known yet, so ${unknown === 1 ? 'it stays' : 'they stay'} on the board.`);
     host.append(el('p', 'screener-state', notes.join(' ')));
   }
 

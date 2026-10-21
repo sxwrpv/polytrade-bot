@@ -145,7 +145,7 @@ test('last trades come from TRADE rows only, once per wallet, and a failed looku
     if (user === broken) return { ok: false, status: 429, json: async () => ({}) };
     return { ok: true, json: async () => rows[user] || [] };
   };
-  const lookup = createLastTradeLookup({ fetchImpl });
+  const lookup = createLastTradeLookup({ fetchImpl, perSecond: 1000 });
   const days = await lookup([wallet, other, broken, wallet]);
   assert.equal(days.get(wallet), '2026-08-22');
   assert.equal(days.get(other), null, 'a redemption is not a trade');
@@ -153,10 +153,10 @@ test('last trades come from TRADE rows only, once per wallet, and a failed looku
   assert.equal(calls.length, 3);
   assert.ok(calls.every((u) => u.searchParams.get('type') === 'TRADE' && u.searchParams.get('limit') === '1'));
   await lookup([wallet, other, broken]);
-  assert.equal(calls.length, 3, 'cached days and recent failures are not asked again');
+  assert.equal(calls.length, 3, 'known days and recent failures are not asked again');
 });
 
-test('the board waits for last trades only up to its budget; late answers land in the cache', async () => {
+test('the board waits for unknown wallets only up to its budget; late answers land in the cache', async () => {
   let release;
   const gate = new Promise((resolve) => { release = resolve; });
   const fetchImpl = async () => {
@@ -168,4 +168,70 @@ test('the board waits for last trades only up to its budget; late answers land i
   release();
   await new Promise((resolve) => setTimeout(resolve, 10));
   assert.equal((await lookup([wallet])).get(wallet), '2026-10-20');
+});
+
+test('lookups go out one at a time and at most perSecond a second, however many boards ask', async () => {
+  // The copy engine shares this server's IP and Polymarket's per-IP limits,
+  // so a burst from the screener could delay the trades it copies.
+  let clock = 0;
+  const started = [];
+  let inFlight = 0;
+  let mostInFlight = 0;
+  const fetchImpl = async () => {
+    started.push(clock);
+    inFlight += 1;
+    mostInFlight = Math.max(mostInFlight, inFlight);
+    await Promise.resolve();
+    clock += 100;
+    inFlight -= 1;
+    return { ok: true, json: async () => [{ type: 'TRADE', timestamp: Date.UTC(2026, 9, 1) / 1000 }] };
+  };
+  const lookup = createLastTradeLookup({
+    fetchImpl, perSecond: 2, now: () => clock, sleep: async (ms) => { clock += ms; },
+  });
+  const wallets = Array.from({ length: 6 }, (_, i) => '0x' + String(i).repeat(40));
+  const [first, second] = await Promise.all([lookup(wallets.slice(0, 4)), lookup(wallets.slice(2))]);
+  assert.equal(started.length, 6, 'a wallet two boards share is asked once');
+  assert.equal(mostInFlight, 1);
+  for (let i = 1; i < started.length; i += 1) {
+    assert.ok(started[i] - started[i - 1] >= 500, `request ${i} went out ${started[i] - started[i - 1]} ms after the last`);
+  }
+  assert.equal(first.get(wallets[2]), '2026-10-01');
+  assert.equal(second.get(wallets[5]), '2026-10-01');
+});
+
+test('a known day is served at once and renewed behind the board once it is old', async () => {
+  let clock = 0;
+  let traded = Date.UTC(2026, 8, 1) / 1000;
+  let calls = 0;
+  const fetchImpl = async () => {
+    calls += 1;
+    return { ok: true, json: async () => [{ type: 'TRADE', timestamp: traded }] };
+  };
+  const lookup = createLastTradeLookup({ fetchImpl, perSecond: 1000, refreshAfterMs: 60_000, now: () => clock });
+  assert.equal((await lookup([wallet])).get(wallet), '2026-09-01');
+  traded = Date.UTC(2026, 9, 21) / 1000;
+  clock += 30_000;
+  assert.equal((await lookup([wallet])).get(wallet), '2026-09-01');
+  assert.equal(calls, 1, 'a fresh day is not asked again');
+  clock += 40_000;
+  assert.equal((await lookup([wallet])).get(wallet), '2026-09-01', 'an old day is still answered at once');
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(calls, 2, 'and renewed behind the board');
+  assert.equal((await lookup([wallet])).get(wallet), '2026-10-21');
+});
+
+test('wallets nobody knows yet are looked up before old days are renewed', async () => {
+  const [a, b, c] = ['a', 'b', 'c'].map((ch) => '0x' + ch.repeat(40));
+  const order = [];
+  const fetchImpl = async (url) => {
+    order.push(new URL(url).searchParams.get('user'));
+    return { ok: true, json: async () => [{ type: 'TRADE', timestamp: Date.UTC(2026, 9, 1) / 1000 }] };
+  };
+  const lookup = createLastTradeLookup({ fetchImpl, perSecond: 1000, refreshAfterMs: 0 });
+  await lookup([a, b]);
+  await lookup([a, b, c]);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  // a's renewal was already under way when c arrived; c then goes before b.
+  assert.deepEqual(order, [a, b, a, c, b]);
 });

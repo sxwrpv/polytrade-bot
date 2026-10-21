@@ -314,4 +314,9 @@ server.listen(PORT, () => {
   console.log(`  snapshot ${dataset.meta.generatedAt}  ·  ${dataset.traders.length.toLocaleString()} traders`);
   console.log(`  data dir ${DATA_DIR}  ·  reload every ${RELOAD_SECONDS}s`);
   console.log(`  trader pages pull live from data-api.polymarket.com\n`);
+  // Queue every window's wallets now, so the paced last-trade lookups are under
+  // way before the first visitor asks instead of starting with them.
+  if (DATA_MODE === 'live') {
+    for (const period of ['d7', 'd30', 'all']) liveLeaderboard(period).catch(() => {});
+  }
 });

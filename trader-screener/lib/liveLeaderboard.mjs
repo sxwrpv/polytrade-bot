@@ -1,5 +1,5 @@
 import { deadlineSignal } from './polymarket.mjs';
-import { createCoalescer, TtlLruCache } from './serviceGuards.mjs';
+import { TtlLruCache } from './serviceGuards.mjs';
 
 const WINDOWS = { d7: 'WEEK', d30: 'MONTH', all: 'ALL' };
 const LEADERBOARD = 'https://data-api.polymarket.com/v1/leaderboard';
@@ -100,9 +100,8 @@ export function buildLiveUniverse({ period, pnlRows = [], volumeRows = [], snaps
 }
 
 /**
- * @param {(wallets: string[], o: { signal?: AbortSignal }) => Promise<Map>} [o.lastTradeDays]
- *   the server's cached createLastTradeLookup; without it every last trade
- *   stays unknown.
+ * @param {(wallets: string[]) => Promise<Map>} [o.lastTradeDays]  the
+ *   server's createLastTradeLookup; without it every last trade stays unknown.
  */
 export async function fetchLiveUniverse({
   period, snapshot, fetchImpl = fetch, fetchedAt = new Date().toISOString(), signal, lastTradeDays,
@@ -121,7 +120,7 @@ export async function fetchLiveUniverse({
   const getRows = async (orderBy) => (await Promise.all(OFFSETS.map((offset) => getPage(orderBy, offset)))).flat();
   const [pnlRows, volumeRows] = await Promise.all([getRows('PNL'), getRows('VOL')]);
   const wallets = [...new Set([...pnlRows, ...volumeRows].map(addressOf).filter(isWallet))];
-  const lastTrades = lastTradeDays ? await lastTradeDays(wallets, { signal }) : undefined;
+  const lastTrades = lastTradeDays ? await lastTradeDays(wallets) : undefined;
   return buildLiveUniverse({ period, pnlRows, volumeRows, snapshot, fetchedAt, lastTrades });
 }
 
@@ -132,24 +131,39 @@ export async function fetchLiveUniverse({
  * leader had redeemed the day before but last traded eight weeks earlier),
  * and none of them is a trade anyone could copy.
  *
- * Built once per server. Days are cached per wallet for half an hour, which
- * is plenty for a 30-day rule; concurrent boards share one request per
- * wallet; at most `concurrency` requests run at once. A failed lookup is left
- * out of the result rather than guessed, and that wallet is not asked again
- * for two minutes. The board waits at most `budgetMs` for lookups; slower ones
- * finish in the background and land in the cache for the next refresh.
+ * Polymarket limits requests per IP, and this service shares the server's IP
+ * with the copy engine, which polls the same data API for the trades it
+ * copies. So lookups go out one at a time and at most `perSecond` a second,
+ * however many boards ask at once: two a second is a tenth of the 200 per 10 s
+ * Polymarket publishes for /v2/activity (v1's own limit is unpublished), and
+ * the engine keeps the rest. A cold cache therefore fills over minutes.
+ *
+ * Built once per server. A wallet's day is kept for a day and served at once;
+ * one older than `refreshAfterMs` is renewed behind the board (a last trade
+ * only moves forward, so the cost is that a wallet resuming after 30 days is
+ * held back that much longer), after every wallet nobody knows yet. A board
+ * waits at most `budgetMs` for unknown wallets and the rest land in the cache
+ * for the next refresh. A failed lookup is left out rather than guessed, and
+ * that wallet is not asked again for two minutes.
  */
 export function createLastTradeLookup({
   fetchImpl = fetch,
-  concurrency = 8,
+  perSecond = 2,
   timeoutMs = 8_000,
   budgetMs = 6_000,
-  cache = new TtlLruCache({ max: 2048, ttlMs: 30 * 60_000 }),
-  failures = new TtlLruCache({ max: 2048, ttlMs: 2 * 60_000 }),
+  refreshAfterMs = 30 * 60_000,
+  now = Date.now,
+  sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); }),
+  cache = new TtlLruCache({ max: 4096, ttlMs: 24 * 60 * 60_000, now }),
+  failures = new TtlLruCache({ max: 4096, ttlMs: 2 * 60_000, now }),
 } = {}) {
-  const inflight = createCoalescer();
-  const lastTradeDay = (wallet, signal) => inflight.run(wallet, async () => {
-    const deadline = deadlineSignal(timeoutMs, signal);
+  const unknown = [];          // wallets no board has a day for, oldest first
+  const stale = [];            // known wallets whose day is due for renewal
+  const pending = new Map();   // wallet -> { promise, resolve }: one request per wallet
+  let draining = false;
+
+  async function fetchDay(wallet) {
+    const deadline = deadlineSignal(timeoutMs);
     try {
       const query = new URLSearchParams({ user: wallet, type: 'TRADE', limit: '1' });
       const response = await fetchImpl(`${ACTIVITY}?${query}`, { headers: HEADERS, signal: deadline.signal });
@@ -158,39 +172,69 @@ export function createLastTradeLookup({
       if (!Array.isArray(rows)) throw new Error('Polymarket activity returned an invalid payload');
       // Trust the row, not the filter: anything that is not a trade counts as no trade.
       const seconds = Number(rows.find((row) => row?.type === 'TRADE')?.timestamp);
-      const day = Number.isFinite(seconds) && seconds > 0 ? new Date(seconds * 1000).toISOString().slice(0, 10) : null;
-      cache.set(wallet, day);
-      return day;
+      return Number.isFinite(seconds) && seconds > 0 ? new Date(seconds * 1000).toISOString().slice(0, 10) : null;
     } finally {
       deadline.cleanup();
     }
-  });
+  }
 
-  return async function lastTradeDays(wallets, { signal } = {}) {
-    const days = new Map();
-    const queue = [];
-    for (const wallet of new Set(wallets)) {
-      const hit = cache.get(wallet);
-      if (hit !== undefined) days.set(wallet, hit);
-      else if (failures.get(wallet) === undefined) queue.push(wallet);
-    }
-    const worker = async () => {
-      while (queue.length && !signal?.aborted) {
-        const wallet = queue.shift();
-        try {
-          days.set(wallet, await lastTradeDay(wallet, signal));
-        } catch {
-          if (!signal?.aborted) failures.set(wallet, true);
-        }
-      }
-    };
-    const work = Promise.all(Array.from({ length: Math.min(concurrency, queue.length) }, worker));
-    let timer;
-    const budget = new Promise((resolve) => { timer = setTimeout(resolve, budgetMs); });
+  // The only place a lookup leaves the process: one at a time, spaced to perSecond.
+  async function drain() {
+    if (draining) return;
+    draining = true;
     try {
-      await Promise.race([work, budget]);
+      while (unknown.length || stale.length) {
+        const wallet = unknown.length ? unknown.shift() : stale.shift();
+        const started = now();
+        let answer = null;
+        try {
+          const day = await fetchDay(wallet);
+          cache.set(wallet, { day, at: now() });
+          answer = { day };
+        } catch {
+          failures.set(wallet, true);
+        }
+        pending.get(wallet)?.resolve(answer);
+        pending.delete(wallet);
+        const gap = 1000 / perSecond - (now() - started);
+        if (gap > 0 && (unknown.length || stale.length)) await sleep(gap);
+      }
     } finally {
-      clearTimeout(timer);
+      draining = false;
+    }
+  }
+
+  function enqueue(wallet, queue) {
+    if (!pending.has(wallet)) {
+      let resolve;
+      const promise = new Promise((done) => { resolve = done; });
+      pending.set(wallet, { promise, resolve });
+      queue.push(wallet);
+      drain();
+    }
+    return pending.get(wallet).promise;
+  }
+
+  return async function lastTradeDays(wallets) {
+    const days = new Map();
+    const waits = [];
+    for (const wallet of new Set(wallets)) {
+      const known = cache.get(wallet);
+      if (known) {
+        days.set(wallet, known.day);
+        if (now() - known.at >= refreshAfterMs && failures.get(wallet) === undefined) enqueue(wallet, stale);
+      } else if (failures.get(wallet) === undefined) {
+        waits.push(enqueue(wallet, unknown).then((answer) => { if (answer) days.set(wallet, answer.day); }));
+      }
+    }
+    if (waits.length) {
+      let timer;
+      const budget = new Promise((resolve) => { timer = setTimeout(resolve, budgetMs); });
+      try {
+        await Promise.race([Promise.all(waits), budget]);
+      } finally {
+        clearTimeout(timer);
+      }
     }
     return new Map(days);
   };
