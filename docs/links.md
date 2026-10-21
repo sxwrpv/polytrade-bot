@@ -26,7 +26,7 @@ Use this inventory when sharing PolyTrade publicly. `polytradebot.live` is the c
 - **Operators hub:** [https://polytradebot.live/docs/operators](https://polytradebot.live/docs/operators)
 - **Configuration:** [https://polytradebot.live/docs/configuration](https://polytradebot.live/docs/configuration)
 - **Troubleshooting:** [https://polytradebot.live/docs/troubleshooting](https://polytradebot.live/docs/troubleshooting)
-- **Public health endpoint:** [https://polytradebot.live/api/health](https://polytradebot.live/api/health) — process liveness only, not trading readiness.
+- **Public health endpoint:** [https://polytradebot.live/api/health](https://polytradebot.live/api/health) — reports process liveness only.
 
 ## GitHub
 

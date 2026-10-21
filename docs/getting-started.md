@@ -65,9 +65,9 @@ Defaults are deliberately small. No default and no limit makes trading safe or p
 
 ## 7. Monitor existing copied wallets
 
-Following aligns you toward the source wallet's *current* holdings, not only its future trades: fast detection starts immediately, and reconciliation can pick up positions the source already held.
+Following copies the source wallet's trades from that moment: fast detection starts immediately, and positions the source already held are left out.
 
-Watch **Home**, **Positions → Open**, **Positions → Activity**, and **User**. The display refreshes periodically and is not a tick-by-tick terminal. Check the skipped, failed, uncertain, closed, resolved, and claimable states rather than assuming every source change was copied.
+Watch **Home**, **Positions → Open**, **Positions → Activity**, and **User**. The display refreshes periodically. Check the skipped, failed, uncertain, closed, resolved, and claimable states to see which source changes were copied.
 
 ## 8. Pause or exit deliberately
 

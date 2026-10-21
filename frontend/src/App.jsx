@@ -14,7 +14,7 @@ const tg = window.Telegram?.WebApp
 // The public homepage is its own chunk, stylesheet included, so a Mini App
 // launch inside Telegram never downloads it. Outside Telegram the visitor is
 // almost always headed there, so the download starts now, alongside the
-// session check, instead of after it.
+// session check.
 const loadPublicHome = () => import('./pages/PublicHome')
 const PublicHome = lazy(loadPublicHome)
 if (!tg?.initData) loadPublicHome().catch(() => { /* the boundary below reports it */ })

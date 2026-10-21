@@ -5,7 +5,7 @@
  * dimmed, and the volume and PnL filters are drawn as the lines they are, so
  * dragging a slider shows what it removes. Both axes are logarithmic because
  * money here spans five orders of magnitude; PnL uses a signed log so a loss
- * sits below the zero line instead of falling off the chart.
+ * sits below the zero line on a mirrored scale.
  *
  * Dots go on a canvas (the research snapshot holds thousands of wallets);
  * every label is DOM, so text stays crisp. The table below the map is the

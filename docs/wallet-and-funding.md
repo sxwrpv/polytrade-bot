@@ -56,7 +56,7 @@ Blockchain transfers generally cannot be reversed. PolyTrade cannot guarantee re
 - **Claimable:** resolved winning value that has not been redeemed.
 - **Equity:** combined account value.
 
-Conversion, public indexing, and displayed values can lag. These balances are operational views, not audited statements. If values disagree, compare the source transaction and live wallet state before attempting another transfer or trade.
+Conversion, public indexing, and displayed values can lag. These balances are operational views and are unaudited. If values disagree, compare the source transaction and live wallet state before attempting another transfer or trade.
 
 ## Withdrawals and direct control
 

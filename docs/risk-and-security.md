@@ -29,7 +29,7 @@ These controls reject or limit new orders. They do not protect against loss, adv
 
 Pause, disable, unfollow, and the daily-loss limit block new buys and increases. They never sell holdings: existing positions continue through reductions, manual closes, resolution, and redemption.
 
-A manual close can also fail — it is a fill-or-kill order with a price floor. Confirm the resulting position state instead of assuming the button liquidated anything.
+A manual close can also fail — it is a fill-or-kill order with a price floor. Confirm the resulting position state after pressing it.
 
 ## Funding, withdrawal, and redemption boundaries
 
@@ -65,7 +65,7 @@ Key export requires a linked Telegram identity and verification no older than fi
 | Daily loss | none |
 | Copying | enabled |
 
-Defaults are product behavior, not investment advice or a safety guarantee. Review every setting before following a wallet.
+Defaults are starting values, and they are neither investment advice nor a safety guarantee. Review every setting before following a wallet.
 
 ## Authentication details
 

@@ -141,7 +141,7 @@ function renderProvenance() {
   }
   if (SOURCE !== 'polytrade' && ds.meta.boardsFrozen) {
     const date = ds.meta.boardsAsOf || 'an unknown date';
-    warnings.push(`Category and event rankings are an archived snapshot frozen as of ${date}; they are historical research, not current rankings.`);
+    warnings.push(`Category and event rankings are an archived snapshot frozen as of ${date}; they are historical research from that date.`);
   }
   if (warnings.length) {
     banner.hidden = false;
@@ -201,8 +201,8 @@ function segControl(label, options, current, onPick) {
  * zero, which is not what an untouched control should do.
  *
  * The controls live across renders. A slider change re-renders the board, the
- * count and the chips, never the sidebar: rebuilding the input under the
- * pointer is what used to end a drag after one step. */
+ * count and the chips only: rebuilding the input under the pointer is what
+ * used to end a drag after one step. */
 const FILTER_UI = {
   pnlMin: { name: 'PnL', label: (p) => `PnL ${p} at least`, format: M.money },
   volumeMin: { name: 'volume', label: (p) => `Volume ${p} at least`, format: M.money },
@@ -235,8 +235,8 @@ function filterControl(spec) {
   return filterControls.get(spec.key);
 }
 
-/** A filter's steps, sized from every wallet in the window (not just the ones
- *  on the board), so moving between views does not move the ladder. */
+/** A filter's steps, sized from every wallet in the window, including those
+ *  off the board, so moving between views does not move the ladder. */
 function stopsFor(spec) {
   const key = `${spec.key}|${state.period}`;
   if (!stopsCache.has(key)) stopsCache.set(key, spec.stops(ds.traders.map((t) => spec.value(t, state.period))));
@@ -620,7 +620,7 @@ function renderTrending() {
   host.replaceChildren();
 
   host.append(sectionHead('Momentum', 'Who got hot this week',
-    `Wallets that were already making money and made more of it this week, ranked by how much they added. Everyone here had a profitable week before this one, so the jump is acceleration rather than a first week on the board, and everyone here clears copy costs on their own tape. Week ending ${ds.wowAnchor}.`));
+    `Wallets that were already making money and made more of it this week, ranked by how much they added. Everyone here had a profitable week before this one, so each jump builds on a record that was already profitable, and everyone here clears copy costs on their own tape. Week ending ${ds.wowAnchor}.`));
 
   const grid = el('div', 'trend-grid');
   for (const { trader: t, last7, prev7, diff } of picks) {
@@ -774,7 +774,7 @@ function angleCard(a) {
   card.append(el('div', 'angle-name', `${M.stripGeneral(a.nicheLabel)} · ${a.dimLabel}`));
   const lost = a.cohort - a.winners;
   card.append(el('p', 'angle-blurb',
-    `${a.blurb}. Measured on resolved trades in this exact slice, not on overall profit. ${lost.toLocaleString('en-US')} of the ${a.cohort.toLocaleString('en-US')} wallets here lost money doing it.`));
+    `${a.blurb}. Measured on resolved trades in this exact slice only. ${lost.toLocaleString('en-US')} of the ${a.cohort.toLocaleString('en-US')} wallets here lost money doing it.`));
 
   const stats = el('div', 'angle-stats');
   for (const [label, value] of [
@@ -899,7 +899,7 @@ function renderEvents() {
   host.hidden = false;
   host.replaceChildren();
   host.append(sectionHead('Event trading', 'The next big events, and who is proven in that category',
-    `A big event is coming and you want in. The useful question is not who is winning overall, it is who has traded this kind of market well before. Each card pairs an event with the wallets that lead our board for its category. Matching is by category, not by the individual event.${archivedBoardsNote()}`));
+    `A big event is coming and you want in. The useful question is who has traded this kind of market well before. Each card pairs an event with the wallets that lead our board for its category. Matching is by category.${archivedBoardsNote()}`));
 
   const byId = new Map(ds.angles.map((a) => [a.id, a]));
   const grid = el('div', 'event-grid');

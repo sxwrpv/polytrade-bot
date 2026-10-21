@@ -7,10 +7,10 @@
 
 export const CLASS_DEF = {
   strong: { chip: 'Proven', line: 'Copying them has worked on their finished trades.', tone: 'clear', bot: 'allow' },
-  marginal: { chip: 'Ahead', line: 'They finish ahead of what copying costs — but only just.', tone: 'ahead', bot: 'allow_caution' },
-  uneconomic: { chip: 'Caution', line: "They make money. It doesn't survive being copied.", tone: 'negative', bot: 'refuse' },
+  marginal: { chip: 'Ahead', line: 'They finish just ahead of what copying costs.', tone: 'ahead', bot: 'allow_caution' },
+  uneconomic: { chip: 'Caution', line: 'They make money, and copying costs take all of it.', tone: 'negative', bot: 'refuse' },
   loss_making: { chip: 'Losing', line: "They've been losing on their own trades, before copying costs even start.", tone: 'negative', bot: 'warn' },
-  not_measurable: { chip: 'Not comparable', line: 'They close out early, so we can warn about them but never rank them alongside hold-to-the-end traders.', tone: 'neutral', bot: 'grey' },
+  not_measurable: { chip: 'Not comparable', line: 'They close out early, so we can warn about them, and they stay out of the ranking of traders who hold to the end.', tone: 'neutral', bot: 'grey' },
   unproven: { chip: 'Thin history', line: 'Too few finished trades to stand behind. A big return either way can still be one bet that came in.', tone: 'unknown', bot: 'refuse' },
 };
 export const NONE_DEF = {

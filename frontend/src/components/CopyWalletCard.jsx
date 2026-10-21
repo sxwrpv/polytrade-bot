@@ -136,7 +136,7 @@ export default function CopyWalletCard({ onAdded }) {
             max={500}
             step={1}
             unit="$"
-            hint="A hard ceiling. A trade the ratio sizes above this is capped, not skipped."
+            hint="A hard ceiling: a trade the ratio sizes above it is copied at the cap."
           />
 
           {!ratioOk && <p className="copy-wallet-err">Copy ratio must be between 0.5% and 20%.</p>}
@@ -172,8 +172,7 @@ export default function CopyWalletCard({ onAdded }) {
           MAX_LEADER_TRADE_AGE_SECONDS drops trades detected too late. */}
       <p className="copy-wallet-note">
         Copying starts from their next trade. Positions they already hold are not
-        back-filled, and a trade found more than a few minutes late is skipped rather
-        than chased.
+        back-filled, and a trade found more than a few minutes late is skipped.
       </p>
     </div>
   )

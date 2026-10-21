@@ -46,7 +46,7 @@ export function copyChip(copyClass, netReturnPct, { variant = 'board', showState
   n.style.setProperty('--tone', TONE_COLOR[def.tone]);
   n.title = `${def.chip} — ${def.line}`;
   n.setAttribute('aria-label',
-    `Copy Score: ${numeric ? `${M.scoreSigned(netReturnPct)}. ${def.chip}` : def.chip}. A read on the trader, not on this trade.`);
+    `Copy Score: ${numeric ? `${M.scoreSigned(netReturnPct)}. ${def.chip}` : def.chip}. This rates the trader's whole record.`);
   if (showState) n.append(el('span', 'cchip-state', def.chip));
   if (numeric) {
     n.append(el('span', 'cchip-num',
@@ -68,7 +68,7 @@ export function scoreMove(delta) {
 }
 
 const HARD_TO_MIRROR = {
-  market_making: { label: 'Market maker', why: 'They earn mainly from the buy/sell spread, so copying means paying that spread instead of collecting it.' },
+  market_making: { label: 'Market maker', why: 'They earn mainly from the buy/sell spread, which a copier pays.' },
   arb: { label: 'Arbitrage', why: 'They profit by holding both sides of a market at once; a bot mirrors one side, which leaves the risk without the locked-in profit.' },
   frequency: { label: 'Very high frequency', why: 'They place 90+ orders a day, so their edge is often gone before a copy can fill.' },
 };

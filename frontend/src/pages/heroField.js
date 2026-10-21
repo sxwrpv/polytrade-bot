@@ -137,7 +137,7 @@ export function mountHeroField(canvas, { still = false } = {}) {
   let shown = false
 
   // The rings start at the sizer's top-right corner, where they travel through
-  // open paper instead of behind the opaque panel; without one, right of centre.
+  // open paper clear of the opaque panel; without a sizer, right of centre.
   let origin = [0, 0]
   function placeOrigin() {
     const anchor = stage.querySelector('.sizer')

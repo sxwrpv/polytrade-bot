@@ -153,7 +153,7 @@ function truncationNotice() {
     `Polymarket's public API serves at most 5,500 activity rows per wallet, and this one has more. ` +
     `Everything below is computed over the most recent ${data.trades.length >= 200 ? '5,500 rows' : 'available rows'} ` +
     `— ${data.summary.trades.toLocaleString('en-US')} fills across ${data.summary.markets.toLocaleString('en-US')} markets, ` +
-    `back to ${data.series.length ? data.series[0].date : 'an unknown date'}. Read the totals as "over this window", not "lifetime".`));
+    `back to ${data.series.length ? data.series[0].date : 'an unknown date'}. Every total here covers this window only.`));
   return box;
 }
 
@@ -245,7 +245,7 @@ function copyScore() {
 
   if (cs.status === 'thin') {
     body.append(el('p', 'sec-lede',
-      `Only ${cs.resolved} finished trade${cs.resolved === 1 ? '' : 's'} on the loaded tape — too few to separate a margin from noise. That is the absence of a verdict, not a negative one.`));
+      `Only ${cs.resolved} finished trade${cs.resolved === 1 ? '' : 's'} on the loaded tape — too few to separate a margin from noise, so there is no verdict yet.`));
     return panel('Copy Score', 'What a copier would have kept', body);
   }
 
@@ -278,10 +278,10 @@ function copyScore() {
   }
   if (cs.class === 'not_measurable') {
     body.append(el('p', 'panel-note',
-      `${(data.holdTime.soldBeforeResolution * 100).toFixed(0)}% of their realised value arrived by selling out rather than by the market resolving, across ${(data.holdTime.soldEpisodeShare * 100).toFixed(0)}% of finished markets. Copy Score measures what is left for someone who mirrors a buy and holds to the result, so for this wallet it is not measuring the same thing. The threshold above which that applies is our reading, not a published constant.`));
+      `${(data.holdTime.soldBeforeResolution * 100).toFixed(0)}% of their realised value arrived by selling out before the market resolved, across ${(data.holdTime.soldEpisodeShare * 100).toFixed(0)}% of finished markets. Copy Score measures what is left for someone who mirrors a buy and holds to the result, so for this wallet it is not measuring the same thing. The threshold above which that applies is our own reading.`));
   }
   body.append(el('p', 'panel-note',
-    'Based on their finished trades to date, not a forecast. It assumes every one of their trades was copied exactly; your filters, budget and timing will change it. The spread and fee rates, and the shrinkage applied to thin records, are reconstructed from published examples rather than published constants.'));
+    'Based on their finished trades to date. It assumes every one of their trades was copied exactly; your filters, budget and timing will change it. The spread and fee rates, and the shrinkage applied to thin records, are reconstructed from published examples.'));
 
   if (data.board && data.board.copyNet != null) {
     body.append(el('p', 'panel-note',
@@ -444,7 +444,7 @@ function edge() {
     }
     t.append(tb);
     niches.append(t);
-    niches.append(el('p', 'panel-note', 'Niche is read from the market slug and title — the public tape carries no category field, so this is a classification, not a label from the venue.'));
+    niches.append(el('p', 'panel-note', 'Niche is read from the market slug and title — the public tape carries no category field, so this is our own classification.'));
   } else {
     niches.append(el('p', 'panel-note', 'No finished positions to classify yet.'));
   }
@@ -519,7 +519,7 @@ function edge() {
   addRow(dl3, 'Net deposited', '—');
   addRow(dl3, 'True ROI (PnL ÷ deposited)', '—');
   bal.append(dl3);
-  bal.append(el('p', 'panel-note', 'Deposits and withdrawals are not exposed by the public tape, so true ROI stays unavailable rather than being guessed at.'));
+  bal.append(el('p', 'panel-note', 'Deposits and withdrawals are not exposed by the public tape, so true ROI stays unavailable.'));
   cols2.append(bal);
   body.append(cols2);
 
@@ -579,7 +579,7 @@ function behaviour() {
   body.append(cols);
 
   body.append(el('p', 'panel-note',
-    'Maker/taker and risk ratios need order-level chain logs, which the public read API does not expose. They stay unavailable rather than being estimated from fills.'));
+    'Maker/taker and risk ratios need order-level chain logs, which the public read API does not expose. They stay unavailable.'));
 
   if (data.board) {
     const cohort = el('div');
@@ -594,7 +594,7 @@ function behaviour() {
     addRow(dl3, 'Average fill size', M.money(bd.avgSize));
     addRow(dl3, 'Lifetime fills', bd.fills == null ? '—' : bd.fills.toLocaleString('en-US'));
     cohort.append(dl3);
-    cohort.append(el('p', 'panel-note', 'These come from the cached cohort snapshot, computed over the full chain history rather than the tape loaded here.'));
+    cohort.append(el('p', 'panel-note', 'These come from the cached cohort snapshot, computed over the full chain history, which reaches further back than the tape loaded here.'));
     body.append(cohort);
   }
 

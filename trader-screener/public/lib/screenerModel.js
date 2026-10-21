@@ -40,10 +40,10 @@ export const STALE_DAYS = 30;
 
 export const CLASS_DEF = {
   strong: { chip: 'Proven', line: 'Copying them has worked on their finished trades.', tone: 'clear' },
-  marginal: { chip: 'Ahead', line: 'They finish ahead of what copying costs — but only just.', tone: 'ahead' },
-  uneconomic: { chip: 'Caution', line: "They make money. It doesn't survive being copied.", tone: 'negative' },
+  marginal: { chip: 'Ahead', line: 'They finish just ahead of what copying costs.', tone: 'ahead' },
+  uneconomic: { chip: 'Caution', line: 'They make money, and copying costs take all of it.', tone: 'negative' },
   loss_making: { chip: 'Losing', line: "They've been losing on their own trades, before copying costs even start.", tone: 'negative' },
-  not_measurable: { chip: 'Not comparable', line: 'They close out early, so we can warn about them but never rank them alongside hold-to-the-end traders.', tone: 'neutral' },
+  not_measurable: { chip: 'Not comparable', line: 'They close out early, so we can warn about them, and they stay out of the ranking of traders who hold to the end.', tone: 'neutral' },
   unproven: { chip: 'Thin history', line: 'Too few finished trades to stand behind. A big return either way can still be one bet that came in.', tone: 'unknown' },
 };
 export const NONE_DEF = {
@@ -223,7 +223,7 @@ export const mirrorFlagsKnown = (traders) => traders.some((t) => t.mm != null ||
 // Money spreads over orders of magnitude: one week's volume can be $800 or
 // $37M. A linear slider spends its whole length on the largest wallets and
 // cannot say "at least $10K", so money thresholds sit on a 1–2.5–5 ladder, sized
-// from the selected window's own figures rather than the lifetime ones.
+// from the selected window's own figures (live rows carry no lifetime totals).
 
 const RUNGS = [1, 2.5, 5];
 

@@ -13,7 +13,7 @@ const prefersReducedMotion = () =>
   window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
 
 /* Reveal-on-scroll. The `js-reveal` root class gates the hidden state, so if
-   this effect never runs the page renders fully visible instead of blank.
+   this effect never runs the page still renders fully visible.
    Children marked `.rise` stagger in by their `--i` once their section is in. */
 function useReveal() {
   useEffect(() => {
@@ -38,7 +38,8 @@ function useReveal() {
 }
 
 /** True once the element has been on screen (at once under reduced motion),
- *  for pieces that animate from a React value rather than a class. */
+ *  for pieces whose animation starts from a React value (useReveal covers
+ *  the class-driven ones). */
 function useInView(ref, threshold = 0.3) {
   const [seen, setSeen] = useState(false)
   useEffect(() => {
@@ -104,7 +105,7 @@ const PIPELINE = [
 ]
 
 /* Simplified from System Design diagram 04 (risk surfaces) for a consumer
-   audience: four enforcement points in order, not the full six-layer stack.
+   audience: four of its six enforcement layers, in order.
    Every line is a real control; nothing here is a live reading. */
 const GATES = [
   { tag: 'SETTINGS', title: 'You set the limits', detail: 'Copy ratio, max per position, price band and exposure caps, for each wallet you follow.' },
@@ -121,11 +122,11 @@ const COHORT = {
   asOf: '25 Aug 2026',
   rows: [
     ['Proven', 'proven', 114, 'Copying them has worked on their finished trades.'],
-    ['Ahead', 'ahead', 461, 'They finish ahead of what copying costs, but only just.'],
-    ['Caution', 'caution', 1266, 'They make money. It does not survive being copied.'],
+    ['Ahead', 'ahead', 461, 'They finish just ahead of what copying costs.'],
+    ['Caution', 'caution', 1266, 'They make money, and copying costs take all of it.'],
     ['Losing', 'losing', 1084, 'Losing on their own trades, before copying costs start.'],
     ['Not comparable', 'other', 386, 'They close out early, so they are not ranked against holders.'],
-    ['Not scored', 'other', 455, 'No verdict yet. That is an absence of a score, not a middling one.'],
+    ['Not scored', 'other', 455, 'No verdict yet: the research has no score for them.'],
   ],
 }
 COHORT.total = COHORT.rows.reduce((sum, [, , n]) => sum + n, 0)
@@ -135,7 +136,7 @@ COHORT.total = COHORT.rows.reduce((sum, [, , n]) => sum + n, 0)
 const SHOWCASE = [
   {
     img: 'copy-wallet', step: 'COPY', title: 'Paste a wallet, set its limits',
-    body: 'An address or a Polymarket profile link, then this wallet’s copy ratio and caps. Copying starts from their next trade; what they already hold is not back-filled.',
+    body: 'An address or a Polymarket profile link, then this wallet’s copy ratio and caps. Copying starts with their next trade, and positions they already hold are left alone.',
     alt: 'The Copy a wallet screen: a wallet address field, then copy ratio and max per trade sliders.',
   },
   {
@@ -225,11 +226,11 @@ export default function PublicHome() {
           <div className="speed-head reveal">
             <div className="rise" style={{ '--i': 0 }}>
               <div className="eyebrow">BUILT FOR THE GAP</div>
-              <h2 id="speed-title">Seconds, not minutes.</h2>
+              <h2 id="speed-title">Checked every two seconds.</h2>
             </div>
             <p className="rise" style={{ '--i': 1 }}>
               The window between a leader's trade and yours is where copy trading is won or lost.
-              These are the cadences the engine actually runs at, not marketing round numbers.
+              These are the intervals the engine runs at in production.
             </p>
           </div>
           <figure ref={cadence} className="cadence-figure reveal">
@@ -247,11 +248,11 @@ export default function PublicHome() {
             </div>
             <div className="rise" style={{ '--i': 2 }}>
               <dt><span className="speed-metric">FOK</span>All or nothing</dt>
-              <dd>Orders fill completely or not at all, under a signed price ceiling. No partial fills, no chasing a worse entry.</dd>
+              <dd>Orders fill completely or not at all, under a signed price ceiling.</dd>
             </div>
             <div className="rise" style={{ '--i': 3 }}>
               <dt><span className="speed-metric">3</span>Tries, then stop</dt>
-              <dd>An order that does not fill is tried at most three times, then dropped. A missed copy beats a copy at the wrong price.</dd>
+              <dd>An order that does not fill is tried at most three times, then dropped, which keeps every copy inside your price band.</dd>
             </div>
           </dl>
         </section>
@@ -283,11 +284,10 @@ export default function PublicHome() {
         <section className="public-wrap benefits" aria-labelledby="benefits-title">
           <div className="benefits-head reveal">
             <div className="eyebrow rise" style={{ '--i': 0 }}>WHERE YOUR LIMITS APPLY</div>
-            <h2 id="benefits-title" className="rise" style={{ '--i': 1 }}>Control without the clutter.</h2>
+            <h2 id="benefits-title" className="rise" style={{ '--i': 1 }}>Your limits apply at every step.</h2>
             <p className="benefits-lede rise" style={{ '--i': 2 }}>
-              Your settings are not a suggestion the interface makes. They are re-read inside the
-              database transaction that reserves your money, and checked once more immediately
-              before the order is signed.
+              Your settings are re-read inside the database transaction that reserves your money,
+              and checked once more immediately before the order is signed.
             </p>
             <p className="benefits-footnote rise" style={{ '--i': 3 }}>
               Simplified from the full enforcement diagram in the{' '}
@@ -322,8 +322,8 @@ export default function PublicHome() {
               </p>
               <div className="feature-list rise" style={{ '--i': 3 }}>
                 <span>No account or Telegram login required</span>
-                <span>Unavailable data stays unavailable, never displayed as zero</span>
-                <span>Past activity is context, not a prediction</span>
+                <span>Missing data is marked as missing</span>
+                <span>Past results do not predict future ones</span>
               </div>
               <a className="btn public-primary screener-spotlight-cta rise" style={{ '--i': 4 }} href="/screener">
                 Open Wallet Screener <Arrow />
@@ -346,8 +346,8 @@ export default function PublicHome() {
           <div className="feature-row">
             <Lifecycle />
             <div className="feature-copy reveal">
-              <h3 className="rise" style={{ '--i': 0 }}>Nothing is dropped quietly</h3>
-              <p className="rise" style={{ '--i': 1 }}>Open, closing, resolved, claimable, uncertain — positions are never quietly dropped. When a submission outcome is unknown, the wallet itself settles the question.</p>
+              <h3 className="rise" style={{ '--i': 0 }}>Every position stays on the list</h3>
+              <p className="rise" style={{ '--i': 1 }}>Open, closing, resolved, claimable and uncertain positions all stay on the list. When a submission outcome is unknown, the wallet itself settles the question.</p>
               <div className="feature-list rise" style={{ '--i': 2 }}>
                 <span>Live position and exposure view</span>
                 <span>Persisted activity log with realised PnL</span>
@@ -446,8 +446,8 @@ function Roll({ text, className = '' }) {
   )
 }
 
-/* A label whose width changes eases to its new size instead of snapping
-   (the kit's multi-state badge). */
+/* A label whose width changes eases to its new size (the kit's multi-state
+   badge). */
 function useWidthMorph(ref, key) {
   const last = useRef(0)
   useLayoutEffect(() => {
@@ -598,7 +598,7 @@ function Sizer() {
             : `≈ ${(result.order / EXAMPLE_PRICE).toLocaleString('en-US', { maximumFractionDigits: 0 })} YES shares at an example 42¢, as a fill-or-kill order.`}
         </p>
       </div>
-      <p className="demo-note">Example figures, not a quote. The app’s max per position goes up to $500; real copies also stay within your balance and exposure caps.</p>
+      <p className="demo-note">Example figures. The app’s max per position goes up to $500, and real copies also stay within your balance and exposure caps.</p>
     </aside>
   )
 }
@@ -606,8 +606,8 @@ function Sizer() {
 /* The rule as a curve: your order for every size of their position, from $100
    to $10M on a log scale, with the example above marked. Under the minimum it
    is skipped, then it rises with your ratio, then it flattens at your cap. A
-   control change morphs the curve instead of redrawing it (the kit's chart
-   rule: data changes morph, never redraw). */
+   control change morphs the curve from its previous shape (the kit's chart
+   rule for data changes). */
 const CURVE_STEPS = 96
 const CURVE_FLOOR = 38   // baseline, in viewBox units (0..40, y down)
 const CURVE_SPAN = 33    // how far above the baseline the cap sits
@@ -680,8 +680,8 @@ function SizerChart({ position, ratio, cap, live }) {
 }
 
 /* The cadence timeline. Fifteen seconds, four lanes, drawn twice: wide for
-   desktop and tall for phones, so the labels stay legible instead of the
-   figure shrinking or scrolling sideways. Positions are illustrative; the
+   desktop and tall for phones, so the labels keep a legible size at every
+   width. Positions are illustrative; the
    cadences (2s, 5s) and the three-try budget are the engine's own. */
 const CADENCE_DESC = 'Fifteen seconds in four lanes. The wallet you follow trades. '
   + 'Detection checks every two seconds, and the first check that shows the trade sends your '
@@ -954,7 +954,7 @@ function Showcase() {
           </div>
           <p className="rise" style={{ '--i': 1 }}>
             After sign-up, everything happens in the Telegram Mini App. These are its real
-            screens, shown with a sample account; the figures in them are not results.
+            screens, shown with a sample account and its sample figures.
           </p>
         </div>
         <ol ref={track} className="showcase-track">
@@ -979,8 +979,8 @@ function Showcase() {
    ripple as the page opens (a trade) and a smaller one after it (the copy),
    then still. It redraws only when something changes, the pointer near it or
    the page scrolling it away, so nothing loops. It is its own chunk, loaded
-   after the page, never on a phone, and only where WebGL2 exists; without it
-   the paper behind the hero is the whole design. */
+   after the page, on desktop widths only, and only where WebGL2 exists; without
+   it the paper behind the hero is the whole design. */
 function HeroField() {
   const canvas = useRef(null)
   useEffect(() => {

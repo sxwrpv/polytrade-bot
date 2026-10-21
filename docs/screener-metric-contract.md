@@ -14,9 +14,9 @@ Each activity page requests 1,000 rows. Refreshes fetch at most four TRADE pages
 
 The scheduled refresh loop is enabled by default, runs immediately at startup, and then defaults to one pass every 900 seconds. Each pass refreshes only the 200 stalest wallets by default. Set `STATS_REFRESH_AUTOSTART=0` to disable this scheduled loop. Both budget values are configurable, and stale-first population rotation means there is no per-wallet 15-minute freshness guarantee. Independently of that schedule and toggle, authenticated `GET /traders/{address}` performs an immediate on-demand refresh before returning the wallet profile.
 
-Cache storage uses `null` for metrics that have not been fetched or cannot be computed, except for the schema's legacy `open_positions DEFAULT 0`; that default is unavailable while `stats_refreshed_at` is null. After a complete fetch, a computed zero can be a genuine observation (for example, zero SELL rows). Page-budget shortfalls are partial observations, not zeroes. A failed refresh leaves the prior cache row stale rather than manufacturing a new value.
+Cache storage uses `null` for metrics that have not been fetched or cannot be computed, except for the schema's legacy `open_positions DEFAULT 0`; that default is unavailable while `stats_refreshed_at` is null. After a complete fetch, a computed zero can be a genuine observation (for example, zero SELL rows). Page-budget shortfalls are recorded as partial observations. A failed refresh keeps the prior cache row, which then goes stale.
 
-The standalone public screener preserves unavailable metrics rather than coercing them to zero. The authenticated followed-wallet API still maps a missing `consistency_score` to the legacy bronze tier; that tier is not shown as a public screener metric.
+The standalone public screener preserves unavailable metrics as `null`. The authenticated followed-wallet API still maps a missing `consistency_score` to the legacy bronze tier; that tier is not shown as a public screener metric.
 
 **Legacy transition:** cache rows written before nullable ratio metrics may still contain numeric zero sentinels indistinguishable from genuine observed zero until each wallet is refreshed. Stale-first rotation has no per-wallet completion SLA, so those legacy rows remain a temporary sorting/filtering limitation and a stored zero alone must not be interpreted as a confirmed observation.
 
@@ -52,7 +52,7 @@ Basis that predates fetched activity can be unknown, so these figures are estima
 
 ## Fetch-bounded summary metrics
 
-All metrics in this section are reconstructed, use the shared limits/cadence, become partial when a source truncates, and must be unavailable rather than zero before enrichment.
+All metrics in this section are reconstructed, use the shared limits/cadence, become partial when a source truncates, and must read as unavailable (`null`) until enrichment.
 
 ### `win_rate` — **Observed Win Rate**
 
@@ -71,7 +71,7 @@ All metrics in this section are reconstructed, use the shared limits/cadence, be
 ### `consistency_score` — **Consistency**
 
 - **Formula:** with fewer than seven observed PnL days, `0`; otherwise `0.4 × positive_day_fraction + 0.4 × clamp((mean / sample_stdev) / 3, 0, 1) + 0.2 × clamp(mean / 100, 0, 1)`, rounded to four decimals. When standard deviation is zero, its component is zero.
-- **Window:** observed realized-PnL dates in the fetched walk. Calendar dates with no closing event are omitted, not inserted as zeroes.
+- **Window:** observed realized-PnL dates in the fetched walk. Calendar dates with no closing event are omitted.
 - **Sort/filter:** neither is exposed by the public screener.
 - **Tooltip:** “Reconstructed steadiness score over observed PnL days; 0 can mean fewer than 7 observed days, not poor performance.”
 
@@ -131,7 +131,7 @@ Every metric below exists for `7d`, `30d`, and `90d`. TRADE rows use an exact ro
 ### `fills_7d`, `fills_30d`, `fills_90d`
 
 - **Labels:** **7d/30d/90d Buy Fills**.
-- **Formula:** count fetched TRADE activity rows in the window where `side == BUY`. This is an activity-row count, not a unique order or position count.
+- **Formula:** count fetched TRADE activity rows in the window where `side == BUY`. This counts activity rows, and one order or position can produce several.
 - **Sort/filter:** neither is currently supported.
 - **Tooltip:** “Fetched BUY activity-row count, not order or position count.”
 
@@ -172,8 +172,8 @@ Every metric below exists for `7d`, `30d`, and `90d`. TRADE rows use an exact ro
 - **Sort/filter:** neither.
 - **Tooltip:** “When reconstructed screener statistics were last computed; discovery-only cache writes do not change it.”
 
-## Copy Score — a third party's metric, not PolyTrade's
+## Copy Score, a third-party metric
 
 Copy Score is **not** a PolyTrade metric and is deliberately absent from every entry above. `backend.core.trader_stats.SCREENER_METRIC_CONTRACT` does not define it, `/api/public/screener/*` does not publish it, and `tests/test_public_screener.py::test_no_opaque_composite_score_is_published` keeps it that way. PolyTrade publishes no composite score of its own because its inputs are partial by construction and a single number would conceal that.
 
-The Wallet Screener at `/screener/` (the `trader-screener` service) does show Copy Score, taken from Polycopy's public discover dataset and attributed to Polycopy. Its snapshot is refreshed by `scripts/refresh-screener-data.sh`, and `trader-screener/lib/copyscore.mjs` marks which of its constants are `INFERRED` rather than taken from Polycopy's client.
+The Wallet Screener at `/screener/` (the `trader-screener` service) does show Copy Score, taken from Polycopy's public discover dataset and attributed to Polycopy. Its snapshot is refreshed by `scripts/refresh-screener-data.sh`, and `trader-screener/lib/copyscore.mjs` marks the constants it had to infer as `INFERRED`.

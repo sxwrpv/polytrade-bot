@@ -25,7 +25,7 @@ A reduction of at least 95% is treated as a full exit. Smaller reductions are co
 
 The default detector polls activity frequently while a slower full reconcile runs separately. Timing depends on indexing, network latency, engine load, and maker/taker attribution.
 
-Following starts activity polling from that time, but reconciliation can discover positions already open. Following is permission to align with current holdings, not only future trades.
+Following starts activity polling from that time. Copying starts with the wallet's next trade; positions it already holds when you follow are left out.
 
 ## Sizing
 
@@ -46,13 +46,13 @@ raw target = $2,000 × 1% = $20
 final target = min($20, $15, other active limits) = at most $15
 ```
 
-Maximum position is an aggregate outcome cap, not a fresh allowance on every resize.
+Maximum position caps your whole position in an outcome, resizes included.
 
 ## Risk validation
 
 Before a buy, the engine re-reads account and follow settings, counts positions and claims, reserves exposure, checks actual holdings, and fences the operation with a risk revision.
 
-Daily loss is per followed trader from realized PnL since `00:00 UTC`. It blocks buys and increases, not risk-reducing exits.
+Daily loss is per followed trader from realized PnL since `00:00 UTC`. It blocks buys and increases; risk-reducing exits still go through.
 
 ## Order behavior
 
@@ -64,7 +64,7 @@ An order can be skipped or rejected due to liquidity, minimum-size rules, price 
 
 A durable claim reserves the user/outcome pair before submission. Database uniqueness prevents more than one active position or claim for that pair.
 
-Ambiguous exchange responses become uncertain instead of being retried blindly. Reconciliation checks live holdings later. This favors preventing duplicate real-money orders over availability.
+An ambiguous exchange response marks the order uncertain, and reconciliation checks live holdings later. Preventing duplicate real-money orders comes first, even when that delays a copy.
 
 ## Pause, disable, and unfollow
 

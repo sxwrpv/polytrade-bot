@@ -4,11 +4,11 @@
  * The public homepage. This sheet ships in the homepage's own lazily loaded
  * chunk, so the Mini App never downloads it. Tokens, buttons, the segmented
  * control, the slider and the badges come from brutalism.css: the homepage
- * reuses the app's own controls rather than drawing look-alikes.
+ * reuses the app's own controls.
  *
  * The visual language is the documentation's: paper surfaces, hairline rules,
- * one restrained green. Figures and panels sit on the lighter paper, a tone
- * step rather than a shadow. Nothing here reintroduces a frosted panel, a neon
+ * one restrained green. Figures and panels sit on the lighter paper, set apart
+ * by a tone step. Nothing here reintroduces a frosted panel, a neon
  * fill or a heavy drop shadow.
  *
  * Motion is the sxwrpv motion kit's: the headline rises from a mask word by
@@ -227,7 +227,7 @@
 
 /* ---------- cadence timeline ---------------------------------------------
    Drawn twice in the markup, wide and tall; one shows per width so the
-   labels stay legible instead of shrinking or scrolling sideways. */
+   labels keep a legible size. */
 .cadence-figure {
   margin: 0; padding: clamp(20px, 3vw, 36px);
   border: 1px solid var(--border); border-radius: 16px;
@@ -242,7 +242,7 @@
    labels can afford a size more than the tall one's. */
 .cadence-wide .cad-note, .cadence-wide .cad-cadence { font-size: 13px; }
 /* A halo in the figure's own paper, so a lane that runs behind a label
-   breaks around it instead of striking through the words. */
+   breaks around the words. */
 .cad-note, .cad-cadence { paint-order: stroke; stroke: var(--paper-hi); stroke-width: 5px; stroke-linejoin: round; }
 .cad-note.is-green { fill: var(--green-deep); }
 .cad-num { font-family: var(--mono); font-size: 11px; font-weight: 600; fill: var(--green-deep); }

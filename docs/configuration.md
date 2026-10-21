@@ -54,8 +54,8 @@ Existing follows persist their own settings; changing an environment default doe
 
 ## Server and browser
 
-The listen address and port are uvicorn command-line flags (`--host`,
-`--port`; see the Dockerfile `CMD`), not environment variables.
+The listen address and port are set only by uvicorn's command-line flags
+(`--host`, `--port`; see the Dockerfile `CMD`).
 
 - `LOG_LEVEL`
 - `HTTP_LOG_LEVEL`

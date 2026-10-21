@@ -1,10 +1,10 @@
 /* Numeric filters as histogram sliders.
  *
  * Each filter shows where the board's wallets sit on its scale: one bar per
- * slider step, the bars it keeps in green. A threshold is chosen by
- * looking at the wallets rather than by guessing a number. Thresholds come from
- * a ladder (FILTER_SPECS in screenerModel.js), so "$10K" and "$1M" are each one
- * step from their neighbours instead of lost at either end of a linear track.
+ * slider step, the bars it keeps in green, so a threshold is chosen by looking
+ * at the wallets. Thresholds come from a ladder (FILTER_SPECS in
+ * screenerModel.js), so "$10K" and "$1M" are each one step from their
+ * neighbours and both ends of the range stay in reach.
  *
  * The control is built once and updated in place. Replacing the input while it
  * is being dragged ends the drag, which is how the old sliders lost the pointer
@@ -115,7 +115,7 @@ export function histogramFilter({ key, cut = 'min', onInput }) {
     while (bars.children.length < counts.length) bars.append(el('i'));
     while (bars.children.length > counts.length) bars.lastElementChild.remove();
     // Square-root heights keep a bar of three wallets visible next to one of
-    // three hundred; the exact count is in the filter header, not the bars.
+    // three hundred; the exact count is in the filter header.
     heights = counts.map((c) => (c ? Math.max(0.1, Math.sqrt(c / peak)) : 0));
     [...bars.children].forEach((bar, i) => {
       bar.style.setProperty('--i', String(i));

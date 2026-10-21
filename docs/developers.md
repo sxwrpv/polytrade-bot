@@ -1,6 +1,6 @@
 # Developers
 
-Use this hub for PolyTrade architecture and API contracts. Consumer onboarding belongs in the Telegram Mini App and the [Help Center](README.md), not in direct API calls.
+Use this hub for PolyTrade architecture and API contracts. Consumer onboarding belongs in the Telegram Mini App and the [Help Center](README.md).
 
 ## API resources
 

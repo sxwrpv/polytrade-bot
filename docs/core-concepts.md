@@ -66,7 +66,7 @@ Without them, PolyTrade falls back to a plain EOA. That path can require MATIC f
 
 ## Balances and PnL
 
-The app separates available cash, open-position value, resolved claimable value, equity, and PnL. Equity history is periodically sampled and downsampled for longer periods; it is an operational view, not an audited statement.
+The app separates available cash, open-position value, resolved claimable value, equity, and PnL. Equity history is periodically sampled and downsampled for longer periods; it is an operational view and is unaudited.
 
 ## Resolved versus redeemed
 

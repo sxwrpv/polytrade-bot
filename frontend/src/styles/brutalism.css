@@ -181,7 +181,7 @@ button { font: inherit; color: inherit; }
   overflow-wrap: anywhere;
 }
 /* A figure wider than its cell ($12,863.28 in a third of a phone) shrinks to
-   stay on one line instead of wrapping a digit. --len is its character count;
+   stay on one line. --len is its character count;
    a JetBrains Mono character is .6em wide. */
 @supports (width: 1cqi) {
   .stat-cell { container-type: inline-size; }

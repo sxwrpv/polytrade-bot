@@ -24,7 +24,7 @@ node_modules/
 frontend/dist/
 # local dev/preview config (machine-specific absolute paths)
 .claude/
-# AI assistant instructions stay on each machine, not in the repository
+# AI assistant instructions stay on each machine.
 CLAUDE.md
 AGENTS.md
 
