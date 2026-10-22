@@ -23,7 +23,7 @@ class TelegramAlertTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Will Spain win?", text)
         self.assertIn("$10.00", text)
         self.assertIn("50.0¢", text)
-        self.assertIn("https://polymarket.com/event/spain-win", text)
+        self.assertIn("https://polymarket.com/market/spain-win", text)
 
     def test_formats_close_alert_with_signed_pnl(self):
         text = format_position_alert({
