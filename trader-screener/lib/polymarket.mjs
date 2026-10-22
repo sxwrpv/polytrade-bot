@@ -20,6 +20,8 @@ const LB = 'https://lb-api.polymarket.com';
 const RPC = process.env.POLYGON_RPC || 'https://polygon-bor-rpc.publicnode.com';
 const USDC_BRIDGED = '0x2791bca1f2de4661ed88a30c99a7a9449aa84174';
 const USDC_NATIVE = '0x3c499c542cef5e3811e1192ce70d8cc03d5c3359';
+/** pUSD, Polymarket's collateral: deposits mint it and trades settle in it. */
+const PUSD = '0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb';
 
 /** The API caps a page at 500 rows regardless of what `limit` asks for. */
 const PAGE = 500;
@@ -57,7 +59,7 @@ export async function polymarketFetch(url, { background = false, ...init } = {})
  * The previous version attached its own 'abort' listener to the PARENT signal
  * for every nested request. One board request fans out well past ten
  * concurrent upstream calls -- ranks() alone issues eight (four windows x two
- * rank types), plus activity, positions, portfolioValue and two balanceOf
+ * rank types), plus activity, positions, portfolioValue and three balanceOf
  * calls -- so the parent crossed Node's ten-listener threshold and emitted
  * MaxListenersExceededWarning for days in production. Cleanup was correct;
  * the peak was the problem, and raising the cap would only have hidden it.
@@ -239,14 +241,18 @@ async function balanceOf(token, wallet, { signal } = {}) {
   }
 }
 
-/** Spendable USDC on Polygon. Unavailable is reported as null, not as zero. */
+/** Spendable cash on Polygon: pUSD plus bridged and native USDC. Leaders hold
+ *  nearly all of theirs as pUSD (22 top 7D/30D PnL wallets on 2026-10-22), so
+ *  the two USDCs alone read about $0 for them. A failed read of any of the
+ *  three gives usd: null. */
 export async function cashBalance(wallet, { signal } = {}) {
   try {
-    const [bridged, native] = await Promise.all([
+    const [pusd, bridged, native] = await Promise.all([
+      balanceOf(PUSD, wallet, { signal }),
       balanceOf(USDC_BRIDGED, wallet, { signal }),
       balanceOf(USDC_NATIVE, wallet, { signal }),
     ]);
-    return { usd: bridged + native, asOf: new Date().toISOString(), source: 'polygon rpc' };
+    return { usd: pusd + bridged + native, asOf: new Date().toISOString(), source: 'polygon rpc' };
   } catch {
     return { usd: null, asOf: null, source: 'unavailable' };
   }
