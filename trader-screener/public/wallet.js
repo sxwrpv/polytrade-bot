@@ -213,7 +213,7 @@ function numbers() {
 
   const live = el('div', 'kpis');
   live.append(kpi('Cash available', M.money(data.balance.cashUsd),
-    data.balance.cashSource === 'unavailable' ? 'chain read unavailable' : 'USDC on Polygon, read now'));
+    data.balance.cashSource === 'unavailable' ? 'chain read unavailable' : 'pUSD and USDC on Polygon, read now'));
   live.append(kpi('In open positions', M.money(s.openValue),
     `${s.openMarkets.toLocaleString('en-US')} open market${s.openMarkets === 1 ? '' : 's'}`));
   const allRank = data.ranks?.all?.pnl?.rank;
