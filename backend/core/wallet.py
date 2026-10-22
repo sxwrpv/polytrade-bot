@@ -13,7 +13,9 @@ py-clob-client or py-clob-client-v2, both of which have real, currently-open,
 upstream-unfixed bugs for anything beyond plain EOA: py-clob-client is archived
 and signs a rejected order format; py-clob-client-v2's L1 auth always binds the
 API key to the EOA regardless of signature_type/funder, breaking
-POLY_1271/deposit-wallet order placement (see requirements.txt).
+POLY_1271/deposit-wallet order placement (see requirements.txt). Every client is
+an ``execution.TradingClient``, the same client with market BUY amounts signed
+on the exchange's grid (``execution.market_buy_amounts``).
 
 With a Builder API key configured (``POLYMARKET_BUILDER_API_KEY`` etc., from
 polymarket.com/settings?tab=builder), ``make_clob_client(funder=None)`` derives
@@ -128,15 +130,17 @@ def _builder_api_key():
 
 
 async def make_clob_client(private_key_hex: str, *, funder: str | None = None):
-    """Build an authenticated AsyncSecureClient.
+    """Build an authenticated execution.TradingClient: an AsyncSecureClient that
+    signs market BUY amounts on the exchange's grid.
 
     funder=None with a Builder key configured -> derive+deploy the gasless
     Deposit Wallet (first call for a new signer). Pass the known deposit/funder
     address on subsequent calls to skip re-derivation. Without a Builder key,
     funder=None falls back to plain EOA mode (signer's own address).
     """
-    from polymarket import AsyncSecureClient
     from polymarket.errors import RateLimitError
+
+    from backend.core.execution import TradingClient
 
     api_key = _builder_api_key()
     wallet_arg = funder
@@ -149,7 +153,7 @@ async def make_clob_client(private_key_hex: str, *, funder: str | None = None):
     delay = 2.0
     for attempt in range(3):
         try:
-            return await AsyncSecureClient.create(
+            return await TradingClient.create(
                 private_key=private_key_hex, wallet=wallet_arg, api_key=api_key)
         except RateLimitError:
             if attempt == 2:
