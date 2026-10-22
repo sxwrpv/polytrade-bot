@@ -1,4 +1,4 @@
-"""Redeem resolved winnings back into spendable pUSD.
+"""Redeem resolved winnings back into spendable pUSD, and clear lost positions.
 
 A copied position that wins does not turn back into cash by itself. The market
 resolves, the outcome tokens stay in the custodial deposit wallet as
@@ -36,9 +36,12 @@ Safety, in the order the checks run:
      on one, leaves the market alone until the engine has finished with it.
      Rows already 'resolved' are read, never written: this job turns tokens
      into pUSD and books nothing.
-  4. Resolution is proven ON-CHAIN (CTF payoutDenominator > 0) rather than
-     taken from the data-api flag, and the payout of what the wallet holds
-     on-chain must be positive. Losing tokens are not worth a transaction.
+  4. Resolution must be proven ON-CHAIN (CTF payoutDenominator > 0); the
+     data-api flag is only a hint. A market that pays something on what the
+     wallet holds is redeemed for that. One that pays nothing is redeemed only
+     with `redeem_losses` (REDEEM_LOSSES=1, main.py's default): that burns the
+     lost tokens for $0, so a dead holding leaves the wallet and the
+     dashboard. Winners always go first in a transaction.
   5. The adapter is picked from two sources that must agree: the data-api's
      negativeRisk and Gamma's negRisk (the SDK's own source for this routing).
   6. One relayer transaction per user per pass, waited to a terminal state.
@@ -228,7 +231,8 @@ def _condition_bytes(condition_id: str) -> bytes:
 
 @dataclass(frozen=True)
 class Candidate:
-    """A resolved market the data-api says the wallet can redeem for value."""
+    """A resolved market the data-api says the wallet holds: for value, or a
+    loss to clear."""
     condition_id: str             # lower-case
     neg_risk: bool                # data-api negativeRisk; Gamma must agree
     token_ids: tuple[str, str]    # (outcome 0, outcome 1); "" where unknown
@@ -238,9 +242,11 @@ class Candidate:
 
 def select_candidates(positions, *, blocked_tokens: set[str],
                       blocked_conditions: set[str], cooling: set[str],
-                      limit: int = MAX_CONDITIONS_PER_TX) -> tuple[list[Candidate], int]:
-    """Group the wallet's resolved, valuable holdings by market and drop every
-    market this job must leave alone. Returns (candidates, fenced): fenced
+                      limit: int = MAX_CONDITIONS_PER_TX,
+                      include_losses: bool = False) -> tuple[list[Candidate], int]:
+    """Group the wallet's resolved holdings by market (the valuable ones, and
+    lost ones too with include_losses) and drop every market this job must
+    leave alone. Returns (candidates, fenced): fenced
     counts the markets held back because the copy ledger still manages them.
 
     Pure, so the gate can be tested without a wallet. Everything that passes
@@ -268,7 +274,7 @@ def select_candidates(positions, *, blocked_tokens: set[str],
     candidates: list[Candidate] = []
     fenced = 0
     for cid, entry in grouped.items():
-        if entry["value"] < MIN_PAYOUT_UNITS / UNITS_PER_USD:
+        if entry["value"] < MIN_PAYOUT_UNITS / UNITS_PER_USD and not include_losses:
             continue          # a losing side: nothing to collect
         tokens = {t for t in entry["tokens"] if t} | entry["held"]
         if cid in blocked_conditions or tokens & blocked_tokens:
@@ -299,7 +305,8 @@ def _is_policy_rejection(exc: pm_errors.RequestRejectedError) -> bool:
 
 @dataclass(frozen=True)
 class Redemption:
-    """A candidate proven on-chain: resolved, held, and paying out."""
+    """A candidate proven on-chain: resolved and held. payout_units is 0 for a
+    lost market being cleared."""
     condition_id: str
     adapter: str
     token_ids: tuple[str, str]
@@ -311,6 +318,7 @@ class Redemption:
 class PassSummary:
     users: int = 0          # wallets whose positions were read
     redeemed: int = 0       # markets redeemed and seen empty on-chain afterwards
+    cleared: int = 0        # lost markets redeemed for $0 and seen empty afterwards
     payout_units: int = 0   # pUSD those paid, from the on-chain payout vectors
     fenced: int = 0         # markets the copy ledger still manages
     skipped: int = 0        # markets refused by an on-chain or routing check
@@ -319,7 +327,8 @@ class PassSummary:
 
     def describe(self) -> str:
         text = (f"{self.users} wallet(s) read, {self.redeemed} market(s) redeemed "
-                f"for ${self.payout_units / UNITS_PER_USD:.2f}, {self.fenced} held by "
+                f"for ${self.payout_units / UNITS_PER_USD:.2f}, {self.cleared} lost "
+                f"market(s) cleared, {self.fenced} held by "
                 f"the copy ledger, {self.skipped} skipped, {self.failed} failed")
         if self.halted:
             text += f"; HALTED: {self.halted}"
@@ -337,6 +346,7 @@ class Redeemer:
     def __init__(self, db, pm, client_for, chain, *,
                  retry_seconds: float = DEFAULT_RETRY_SECONDS,
                  max_per_tx: int = MAX_CONDITIONS_PER_TX,
+                 redeem_losses: bool = False,
                  clock=time.monotonic) -> None:
         self.db = db
         self.pm = pm
@@ -344,6 +354,7 @@ class Redeemer:
         self.chain = chain
         self.retry_seconds = float(retry_seconds)
         self.max_per_tx = max(1, int(max_per_tx))
+        self.redeem_losses = bool(redeem_losses)
         self._clock = clock
         # (user_id, condition_id) -> monotonic time it may be tried again.
         self._cooldown: dict[tuple[str, str], float] = {}
@@ -391,7 +402,7 @@ class Redeemer:
         candidates, fenced = select_candidates(
             positions, blocked_tokens=blocked_tokens,
             blocked_conditions=blocked_conditions, cooling=self._cooling(user_id),
-            limit=self.max_per_tx)
+            limit=self.max_per_tx, include_losses=self.redeem_losses)
         summary.fenced += fenced
         if not candidates:
             return
@@ -460,7 +471,8 @@ class Redeemer:
     async def _prove(self, user_id: str, wallet: str, contracts: Contracts,
                      c: Candidate, market) -> Redemption | None:
         """Turn a data-api candidate into a redemption only if the chain agrees:
-        resolved, routed consistently, and paying out on what the wallet holds."""
+        resolved, routed consistently, and paying out on what the wallet holds,
+        or, with redeem_losses, still holding a lost position to clear."""
         short = c.condition_id[:12]
         if market is None:
             log.info("redeem skip %s %s: Gamma does not list the market as closed",
@@ -494,7 +506,7 @@ class Redeemer:
         balances = [await self.chain.balance_of(ctf, wallet, t) for t in tokens]
         # The CTF pays each outcome separately: stake * numerator // denominator.
         payout = sum(b * n // denominator for b, n in zip(balances, numerators))
-        if payout < MIN_PAYOUT_UNITS:
+        if payout < MIN_PAYOUT_UNITS and not (self.redeem_losses and any(balances)):
             log.info("redeem skip %s %s: on-chain payout $%.4f is below the floor",
                      user_id[:10], short, payout / UNITS_PER_USD)
             return None
@@ -582,6 +594,11 @@ class Redeemer:
                 log.warning("redeem tx %s confirmed but %s still holds %s's tokens on "
                             "this RPC; re-checked after %.1fh", tx, user_id[:10],
                             r.condition_id[:12], self.retry_seconds / 3600)
+                continue
+            if r.payout_units < MIN_PAYOUT_UNITS:
+                summary.cleared += 1
+                log.info("CLEARED LOSS %s %s tx=%s (%s)%s", user_id[:10],
+                         r.condition_id[:12], tx, r.title[:60], note)
                 continue
             summary.redeemed += 1
             summary.payout_units += r.payout_units

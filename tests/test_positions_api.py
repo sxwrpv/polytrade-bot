@@ -317,7 +317,9 @@ class CloseClaimSafetyTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await second.close()
 
-    async def test_open_positions_shows_pending_uncertain_buy_without_live_shares(self):
+    async def test_open_positions_hides_a_pending_buy_with_nothing_in_the_wallet(self):
+        # An order that has not filled is not a position. The engine keeps its
+        # fence; the dashboard lists only what the wallet holds.
         ts = now_iso()
         await self.db.execute(
             "INSERT INTO copy_open_claims(user_id,token_id,trader_address,claim_id,action,state,"
@@ -328,16 +330,10 @@ class CloseClaimSafetyTests(unittest.IsolatedAsyncioTestCase):
         rows = await open_positions(
             user={"id": "user"}, db=self.db,
             pmc=SimpleNamespace(get_positions=AsyncMock(return_value=[])))
-        self.assertEqual(1, len(rows))
-        pending = rows[0]
-        self.assertEqual("pending-token", pending["token_id"])
-        self.assertEqual("reconciliation_required", pending["status"])
-        self.assertTrue(pending["reconciliation_required"])
-        self.assertEqual("claim-token", pending["claim_id"])
-        self.assertEqual("uncertain", pending["claim_state"])
-        self.assertEqual("submission timed out", pending["claim_error"])
-        self.assertEqual(7.25, pending["reserved_usd"])
-        self.assertEqual(0, pending["shares"])
+        self.assertEqual([], rows)
+        claim = await self.db.fetchone(
+            "SELECT state FROM copy_open_claims WHERE claim_id='claim-token'")
+        self.assertEqual("uncertain", claim["state"], "the fence itself stays")
 
     async def test_open_positions_merges_live_shares_into_buy_claim_not_external(self):
         ts = now_iso()

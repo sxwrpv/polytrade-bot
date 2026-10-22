@@ -47,7 +47,9 @@ async def open_positions(user=Depends(get_current_user), db=Depends(get_db), pmc
         "AND state IN ('reserved','submitting','uncertain') ORDER BY updated_at DESC",
         (user["id"],))
     # Enrich with the wallet snapshot, then overlay every active BUY fencing
-    # claim.  A claim is visible even before shares appear on-chain/indexer.
+    # claim that has shares in the wallet behind it. A claim with nothing there
+    # is an order that has not filled: the engine keeps its fence, and the
+    # dashboard lists only what the wallet holds.
     # A failed snapshot degrades to the tracked rows without live prices
     # (every consumer below already handles a missing holding) instead of
     # failing the whole dashboard on one data-api hiccup.
@@ -84,6 +86,8 @@ async def open_positions(user=Depends(get_current_user), db=Depends(get_db), pmc
             })
             continue
         if r is None:
+            if p is None or p.size <= 0.01:
+                continue
             r = {
                 "id": None, "external": False, "origin": "pending_buy",
                 "token_id": token,

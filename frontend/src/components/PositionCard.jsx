@@ -73,12 +73,8 @@ export default function PositionCard({ p, closed, onRequestClose }) {
         <div className="notice" role="note">
           <Icon name="alert" />
           <div>
-            <b>Reconciliation required.</b>{' '}
-            Claim {String(p.claim_state || p.status)}
-            {p.claim_action ? ` · ${p.claim_action} BUY` : ''}
-            {p.reserved_usd != null ? ` · $${dollars(p.reserved_usd)} reserved` : ''}
-            {p.claim_id ? ` · ${short(p.claim_id)}` : ''}. Close and retry are disabled until it settles.
-            {p.claim_error && <div className="neg">{p.claim_error}</div>}
+            <b>Settling.</b>{' '}
+            The last order on this position is being confirmed, so Close is paused until it settles.
           </div>
         </div>
       )}
@@ -91,7 +87,9 @@ export default function PositionCard({ p, closed, onRequestClose }) {
       {!closed && !needsReconciliation && p.redeemable && (
         <div className="notice" role="note">
           <Icon name="info" />
-          <div><b>Resolved.</b> Winnings must be redeemed on polymarket.com — there is nothing to sell.</div>
+          {Number(p.current_price) === 0
+            ? <div><b>Resolved.</b> This bet lost and is worth $0.</div>
+            : <div><b>Resolved.</b> Winnings must be redeemed on polymarket.com — there is nothing to sell.</div>}
         </div>
       )}
       {!closed && !needsReconciliation && !p.redeemable && (

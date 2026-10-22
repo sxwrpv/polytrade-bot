@@ -287,6 +287,13 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(candidates[0].token_ids, (YES, NO))
         self.assertEqual(fenced, 0)
 
+    def test_lost_holdings_join_only_when_losses_are_cleared(self):
+        lost = "0x" + "ef" * 32
+        positions = [position(COND, YES), position(lost, "3001", opposite="3002", value=0.0)]
+        self.assertEqual([c.condition_id for c in self.select(positions)[0]], [COND])
+        both, _ = self.select(positions, include_losses=True)
+        self.assertEqual([c.condition_id for c in both], [COND, lost], "winners go first")
+
     def test_both_sides_of_one_market_make_one_candidate(self):
         candidates, _ = self.select([
             position(COND, YES, opposite=NO, index=0, value=10.0),
@@ -400,6 +407,15 @@ class RedeemTests(RedeemDb):
         summary = await self.redeemer().run_pass()
         self.assertEqual(self.batches(), [])
         self.assertEqual(summary.skipped, 1)
+
+    async def test_a_lost_market_is_cleared_for_zero_with_losses_on(self):
+        """REDEEM_LOSSES burns a resolved loss, so the dead holding leaves the wallet."""
+        self.resolved(winner=1)                 # the wallet holds YES, which lost
+        summary = await self.redeemer(redeem_losses=True).run_pass()
+        self.assertEqual(len(self.batches()), 1)
+        self.assertEqual((summary.redeemed, summary.cleared, summary.payout_units), (0, 1, 0))
+        self.assertNotIn((USER.lower(), YES), self.chain.balances)
+        self.assertIn("1 lost market(s) cleared", summary.describe())
 
     async def test_markets_the_copy_ledger_still_manages_are_left_alone(self):
         for status in ("open", "closing", "reconciliation_required"):

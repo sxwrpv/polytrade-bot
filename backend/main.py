@@ -8,6 +8,8 @@ Env toggles (useful for tests/dev):
   TRADER_STATS_REFRESH_LIMIT   how many cached traders to refresh per pass (default 200)
   REDEEM_AUTOSTART=1           start the opt-in loop that redeems resolved winnings
                                into pUSD (default off; see backend/core/redeem.py)
+  REDEEM_LOSSES=0              with that loop on, leave resolved losses in the
+                               wallet (default 1: clear them for $0)
 """
 from __future__ import annotations
 
@@ -222,10 +224,13 @@ async def _redeem_loop(app, stop: asyncio.Event) -> None:
     concurrency = int(os.environ.get("REDEEM_CONCURRENCY", "2"))
     retry_seconds = float(os.environ.get(
         "REDEEM_RETRY_SECONDS", str(redeem.DEFAULT_RETRY_SECONDS)))
+    # Lost markets are redeemed for $0 as well, so a dead holding leaves the wallet.
+    redeem_losses = os.environ.get("REDEEM_LOSSES", "1").strip() == "1"
     heartbeats.register("redeem", interval)
     chain = redeem.ChainReader(POLYGON_RPC_URL or redeem.default_rpc_url())
     redeemer = redeem.Redeemer(app.state.db, app.state.pm, _shared_client_factory(app),
-                               chain, retry_seconds=retry_seconds)
+                               chain, retry_seconds=retry_seconds,
+                               redeem_losses=redeem_losses)
     try:
         while not stop.is_set():
             try:
