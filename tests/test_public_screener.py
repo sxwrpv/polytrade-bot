@@ -191,8 +191,10 @@ class PrivacyTests(PublicScreenerTestBase):
     async def test_daily_series_is_trimmed_to_the_requested_window(self):
         """A 7d response must not carry 90 days of points. Labelling one
         window's data with another window's heading is the failure mode."""
-        from datetime import date, timedelta
-        today = date.today()
+        from datetime import datetime, timedelta, timezone
+        # Same clock as the endpoint, which trims by the UTC date. Built from
+        # the local date, 7d returned 8 points between local and UTC midnight.
+        today = datetime.now(timezone.utc).date()
         blob = {(today - timedelta(days=n)).isoformat(): float(n) for n in range(90)}
         import json as _json
         await self.db.execute(
