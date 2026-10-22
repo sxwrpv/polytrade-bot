@@ -136,8 +136,19 @@ MAX_MINIMUM_SHORTFALL_BP = 50
 # Two unresolved withdrawals in 'attention' pause withdrawals for everyone.
 ATTENTION_BRAKE = 2
 STATUS_POLL_SECONDS = 12.0
-# How far past the submit block a transfer is searched for (about 11 hours).
-LOG_SEARCH_BLOCKS = 20_000
+# How far past the submit block the pUSD transfer is searched for (about 35
+# minutes; the batch deadline is under 500 blocks).
+LOG_SEARCH_BLOCKS = 1_000
+# How far past the submit block the bridge's USDC payment is searched for
+# (about an hour).
+DELIVERY_SEARCH_BLOCKS = 1_800
+# Blocks per eth_getLogs call: the SDK's public Polygon endpoint (drpc's free
+# plan) answers a 100-block range and refuses 500.
+LOG_CHUNK_BLOCKS = 100
+# A withdrawal in 'attention' that the bridge had not reported failed is checked
+# again this often, for a day: its USDC payment may still show up on-chain.
+ATTENTION_RECHECK_SECONDS = 300.0
+ATTENTION_RECHECK_FOR_SECONDS = 24 * 3600
 BRIDGE_PAGE_LIMIT = 100
 BRIDGE_MAX_PAGES = 10
 SUPPORTED_ASSETS_CACHE_SECONDS = 600.0
@@ -415,12 +426,21 @@ class PolygonReader:
         result = await self._rpc("eth_getTransactionReceipt", [tx_hash])
         return result if isinstance(result, dict) else None
 
-    async def transfer_logs(self, token: str, sender: str, recipient: str,
+    async def transfer_logs(self, token: str, sender: str | None, recipient: str,
                             from_block: int, to_block: int) -> list[dict]:
-        result = await self._rpc("eth_getLogs", [{
-            "address": token, "fromBlock": hex(max(0, from_block)), "toBlock": hex(to_block),
-            "topics": [TRANSFER_TOPIC, _topic(sender), _topic(recipient)]}])
-        return result if isinstance(result, list) else []
+        """`token` Transfer logs to `recipient` from `sender` (anyone when None),
+        oldest first, asked for LOG_CHUNK_BLOCKS blocks at a time."""
+        topics = [TRANSFER_TOPIC, _topic(sender) if sender else None, _topic(recipient)]
+        out: list[dict] = []
+        start = max(0, from_block)
+        while start <= to_block:
+            end = min(to_block, start + LOG_CHUNK_BLOCKS - 1)
+            result = await self._rpc("eth_getLogs", [{
+                "address": token, "fromBlock": hex(start), "toBlock": hex(end), "topics": topics}])
+            if isinstance(result, list):
+                out.extend(result)
+            start = end + 1
+        return out
 
 
 # ---------------------------------------------------------------------------
@@ -617,6 +637,8 @@ class Withdrawer:
         # them alone. After a restart the set is empty, so it takes them all.
         self._busy: set[str] = set()
         self._tasks: dict[str, asyncio.Task] = {}
+        # When each 'attention' withdrawal is next checked for a late delivery.
+        self._recheck_at: dict[str, float] = {}
         # Set once the relayer refuses on policy: no send after that.
         self.halted: str | None = None
 
@@ -758,6 +780,13 @@ class Withdrawer:
         refusal = destination_refusal(dest, user, self._protocol)
         if refusal:
             raise WithdrawRefused(400, refusal)
+        # Another account's deposit wallet or signer: native USDC sent there sits
+        # beside its pUSD and never shows up as cash.
+        if await self.db.fetchval(
+                "SELECT COUNT(*) FROM users WHERE lower(id)=? OR lower(signer_address)=?",
+                (dest.lower(), dest.lower())):
+            raise WithdrawRefused(400, "That is a PolyTrade wallet, and USDC sent there does not "
+                                       "show up as cash. Enter an address outside PolyTrade.")
         minimum = await self._minimum_units()
         if units < minimum:
             raise WithdrawRefused(400, f"The minimum withdrawal is ${usd(minimum)}.")
@@ -1025,17 +1054,34 @@ class Withdrawer:
 
     # --- moving open withdrawals forward -------------------------------------
     async def reconcile(self) -> None:
-        """One pass over every open withdrawal no task here is moving."""
+        """One pass over every open withdrawal no task here is moving, and over
+        the 'attention' ones still waiting on a delivery the bridge has not
+        reported failed."""
         rows = await self.db.fetchall(
             "SELECT * FROM withdrawals WHERE status IN "
-            "('requested','submitting','submitted','bridging') ORDER BY requested_at")
+            "('requested','submitting','submitted','bridging') "
+            "OR (status='attention' AND delivery_tx_hash IS NULL AND bridge_address IS NOT NULL "
+            "AND COALESCE(bridge_status,'')<>'FAILED') ORDER BY requested_at")
         for row in rows:
-            if row["id"] in self._busy:
+            if row["id"] in self._busy or not self._recheck_due(row):
                 continue
             try:
                 await self._advance(row)
             except Exception:
                 log.exception("withdraw %s: reconcile step failed", row["id"][:8])
+
+    def _recheck_due(self, row: dict) -> bool:
+        """Every pass for the ones in progress; an 'attention' one every
+        ATTENTION_RECHECK_SECONDS during its first day there."""
+        if row["status"] != "attention":
+            return True
+        if self._age(row.get("attention_at") or row["updated_at"]) > ATTENTION_RECHECK_FOR_SECONDS:
+            return False
+        now = self._clock()
+        if now < self._recheck_at.get(row["id"], 0.0):
+            return False
+        self._recheck_at[row["id"]] = now + ATTENTION_RECHECK_SECONDS
+        return True
 
     async def _advance(self, row: dict) -> None:
         status = row["status"]
@@ -1045,7 +1091,7 @@ class Withdrawer:
                                                       "sending. Nothing left your wallet.")
         elif status in ("submitting", "submitted"):
             await self._check_send(row)
-        elif status == "bridging":
+        elif status in ("bridging", "attention"):
             await self._check_bridge(row)
 
     async def _check_send(self, row: dict) -> None:
@@ -1095,6 +1141,9 @@ class Withdrawer:
             await self._alert("bridging", await self._row(row["id"]))
 
     async def _check_bridge(self, row: dict) -> None:
+        """Follow the bridge for a 'bridging' withdrawal, or for an 'attention'
+        one it had not finished in time: a delivery proven on-chain confirms
+        either."""
         units = int(row["amount_units"])
         try:
             transactions = await self.bridge.transactions(row["bridge_address"])
@@ -1107,18 +1156,55 @@ class Withdrawer:
             if state != (row.get("bridge_status") or ""):
                 await self._annotate(row["id"], bridge_status=state)
             if state == "COMPLETED":
-                tx_hash = str(match.get("txHash") or "")
-                if _BYTES32.match(tx_hash):
-                    receipt = await self.chain.receipt(tx_hash)
-                    if receipt is not None:
-                        await self._settle_delivery(row, tx_hash, receipt)
-                        return
+                found = await self._delivery(row, str(match.get("txHash") or ""))
+                if found:
+                    await self._settle_delivery(row, *found)
+                    return
             elif state == "FAILED":
                 await self._attention(row, "The bridge reported the transfer as failed.")
                 return
-        if self._age(row.get("bridging_at") or row["requested_at"]) > self.limits.bridge_timeout:
+        if (row["status"] == "bridging"
+                and self._age(row.get("bridging_at") or row["requested_at"]) > self.limits.bridge_timeout):
             minutes = round(self.limits.bridge_timeout / 60)
             await self._attention(row, f"The bridge has not delivered after {minutes} minutes.")
+
+    async def _delivery(self, row: dict, bridge_tx: str) -> tuple[str, dict] | None:
+        """The delivery transaction and its receipt. The bridge's txHash counts
+        when it is a Polygon transaction paying the destination; the ones it
+        reported on 2026-10-22 were no Polygon transactions at all, so the
+        payment is otherwise looked up on-chain."""
+        if _BYTES32.match(bridge_tx):
+            receipt = await self.chain.receipt(bridge_tx)
+            if delivered_to(receipt, row["destination"]) > 0:
+                return bridge_tx, receipt
+        return await self._find_delivery(row)
+
+    async def _find_delivery(self, row: dict) -> tuple[str, dict] | None:
+        """A native USDC transfer to the destination after the submit block
+        that can be this withdrawal's delivery: at least the quoted minimum, at
+        most the amount plus 1%, in a transaction no other withdrawal claims."""
+        start = int(row.get("submit_block") or 0)
+        if start <= 0:
+            return None
+        head = await self.chain.block_number()
+        units = int(row["amount_units"])
+        minimum = int(row.get("min_out_units") or units)
+        logs = await self.chain.transfer_logs(USDC, None, row["destination"], start,
+                                              min(head, start + DELIVERY_SEARCH_BLOCKS))
+        for entry in logs:
+            data = str(entry.get("data") or "0x")
+            amount = int(data, 16) if len(data) > 2 else 0
+            tx_hash = str(entry.get("transactionHash") or "")
+            if not minimum <= amount <= units + units // 100 or not _BYTES32.match(tx_hash):
+                continue
+            if await self.db.fetchval(
+                    "SELECT COUNT(*) FROM withdrawals WHERE delivery_tx_hash=? AND id<>?",
+                    (tx_hash, row["id"])):
+                continue
+            receipt = await self.chain.receipt(tx_hash)
+            if delivered_to(receipt, row["destination"]) >= minimum:
+                return tx_hash, receipt
+        return None
 
     async def _settle_delivery(self, row: dict, tx_hash: str, receipt: dict) -> None:
         got = delivered_to(receipt, row["destination"])
@@ -1127,14 +1213,22 @@ class Withdrawer:
             log.critical("WITHDRAW DELIVERY SHORT %s id=%s delivered %s USDC, quoted minimum %s, "
                          "tx=%s", row["user_id"][:10], row["id"][:8], usd(got), usd(minimum),
                          tx_hash)
-            await self._attention(row, f"The bridge's delivery paid {usd(got)} USDC, below the "
-                                       f"quoted minimum of {usd(minimum)}.",
-                                  delivery_tx_hash=tx_hash, delivered_units=got)
+            reason = (f"The bridge's delivery paid {usd(got)} USDC, below the quoted minimum "
+                      f"of {usd(minimum)}.")
+            if row["status"] == "attention":
+                # Recorded, so the late-delivery check leaves it to the operator.
+                await self._annotate(row["id"], error=reason, delivery_tx_hash=tx_hash,
+                                     delivered_units=got)
+            else:
+                await self._attention(row, reason, delivery_tx_hash=tx_hash, delivered_units=got)
             return
-        if await self._move(row["id"], ("bridging",), "confirmed",
-                            delivery_tx_hash=tx_hash, delivered_units=got, error=None):
-            log.info("WITHDRAW CONFIRMED %s id=%s %s USDC -> %s tx=%s", row["user_id"][:10],
-                     row["id"][:8], usd(got), short(row["destination"]), tx_hash)
+        late = row["status"] == "attention"
+        extra = {"operator_note": "delivery found after the bridge timeout"} if late else {}
+        if await self._move(row["id"], (row["status"],), "confirmed",
+                            delivery_tx_hash=tx_hash, delivered_units=got, error=None, **extra):
+            log.info("WITHDRAW CONFIRMED %s id=%s %s USDC -> %s tx=%s%s", row["user_id"][:10],
+                     row["id"][:8], usd(got), short(row["destination"]), tx_hash,
+                     " (after attention)" if late else "")
             await self._alert("confirmed", await self._row(row["id"]))
 
     # --- state changes ---------------------------------------------------------

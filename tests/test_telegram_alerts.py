@@ -23,7 +23,7 @@ class WithdrawalAlertTests(unittest.TestCase):
 
     def test_each_step_has_its_own_status_line(self):
         expected = {"requested": "WITHDRAWAL REQUESTED", "bridging": "WITHDRAWAL ON ITS WAY",
-                    "confirmed": "WITHDRAWAL DELIVERED", "failed": "WITHDRAWAL NOT SENT",
+                    "confirmed": "WITHDRAWAL COMPLETE", "failed": "WITHDRAWAL NOT SENT",
                     "attention": "WITHDRAWAL NEEDS A CHECK"}
         for kind, status in expected.items():
             text = format_alert(self.event(kind, tx_hash="0x" + "f7" * 32,

@@ -62,14 +62,14 @@ Conversion, public indexing, and displayed values can lag. These balances are op
 
 **Account → Withdraw** sends cash from your PolyTrade wallet to an address you enter. It arrives as native USDC on Polygon: Polymarket's bridge converts the wallet's pUSD and pays the address you gave.
 
-1. Enter a Polygon address you control and an amount. The panel shows what you can withdraw: your cash, minus money held for open copy orders, fills still settling on-chain, and any withdrawal in progress.
+1. Enter a Polygon address you control and an amount. The panel shows what you can withdraw: your cash, minus money held for open copy orders, fills still settling on-chain, and any withdrawal in progress. PolyTrade wallets, yours or another account's, are refused: USDC sent to one does not show up as cash.
 2. Review it. PolyTrade asks the bridge for a quote and shows the USDC you receive, with the quoted minimum.
 3. Retype the last 4 characters of the address and confirm. A fresh Telegram check, no older than five minutes, authorizes the withdrawal.
 4. Follow it: sending from your wallet, converting on the bridge, delivered. Telegram messages you at each step, with a Polygonscan link once the USDC arrives.
 
 Limits: from the bridge minimum ($2) to $500 per withdrawal, and up to $1,000 and three withdrawals per 24 hours, one at a time. Exchanges list native USDC as USDC on the Polygon network; check that network before you paste an exchange deposit address. A transfer that has reached the chain cannot be reversed.
 
-If the bridge has not confirmed delivery within 30 minutes, the withdrawal shows **Needs a check**, and PolyTrade follows it up with the bridge provider. If **Account** has no Withdraw section, withdrawals are switched off on this server.
+If the bridge has not confirmed delivery within 30 minutes, the withdrawal shows **Needs a check**, and PolyTrade follows it up with the bridge provider. When the USDC arrives later, it turns to **Delivered** and Telegram tells you the withdrawal is complete. If **Account** has no Withdraw section, withdrawals are switched off on this server.
 
 ## Direct control
 
