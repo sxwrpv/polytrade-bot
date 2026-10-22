@@ -52,7 +52,9 @@ Statistics are estimates from public history and may be delayed or incomplete. P
 
 Review each one:
 
+- **Size copies by** — *Their position* sizes each copy with the copy ratio; *Their cash share* gives each copy the share of your free cash that the source's bet took of theirs, times the multiplier.
 - **Copy ratio** — percentage of the source position used to size yours.
+- **Multiplier** — for cash share: `1×` takes the same share of your free cash.
 - **Maximum position** — cap for a single copied outcome.
 - **Ignore below** — skip copies too small to be worth placing.
 - **Entry price range** — reject entries outside your share-price band.

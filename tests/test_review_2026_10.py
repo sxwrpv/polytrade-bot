@@ -7,9 +7,11 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import sqlite3
 import tempfile
 import time
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -649,6 +651,56 @@ class FollowGuardTests(EngineDb):
             self.assertEqual(409, ctx.exception.status_code)
             # Updating an existing active follow is not a new follow.
             await self.follow_route("0x" + "a" * 40)
+
+
+class SizingSettingsTests(EngineDb):
+    """Capital-share sizing settings, from the API to what the engine reads."""
+    USER_ROW = {"id": USER, "signer_address": "0x" + "9" * 40}
+
+    def request(self):
+        return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
+            copy_risk_lock=KeyedLocks())))
+
+    async def test_capital_share_settings_persist_and_list(self):
+        await self.follow()
+        body = routes_traders.FollowSettings(sizing_mode="capital_share", capital_multiplier=12)
+
+        result = await routes_traders.update_follow_settings(
+            TRADER, body, self.request(), user=self.USER_ROW, db=self.db)
+
+        self.assertEqual({"sizing_mode", "capital_multiplier"}, set(result["updated"]))
+        [listed] = await routes_traders.following(user=self.USER_ROW, db=self.db)
+        self.assertEqual(("capital_share", 12.0),
+                         (listed["sizing_mode"], listed["capital_multiplier"]))
+        stored = await self.db.fetchone("SELECT * FROM followed_traders WHERE id='f1'")
+        risk = CopyEngine._follow_risk(stored)
+        self.assertEqual((ce.CAPITAL_SHARE, 12.0), (risk["sizing_mode"], risk["multiplier"]))
+        self.assertEqual(1, await self.db.fetchval(
+            "SELECT risk_revision FROM users WHERE id=?", (USER,)),
+            "a sizing change fences BUYs reserved under the old one")
+
+    async def test_a_follow_sizes_by_position_share_until_switched(self):
+        await self.follow()
+        row = await self.db.fetchone("SELECT * FROM followed_traders WHERE id='f1'")
+        self.assertEqual((None, None), (row["sizing_mode"], row["capital_multiplier"]))
+        self.assertEqual(ce.POSITION_SHARE, CopyEngine._follow_risk(row)["sizing_mode"])
+
+    async def test_the_schema_refuses_an_unknown_mode(self):
+        await self.follow()
+        with self.assertRaises(sqlite3.IntegrityError):
+            await self.db.execute(
+                "UPDATE followed_traders SET sizing_mode='equity' WHERE id='f1'")
+
+    def test_postgres_boot_schema_and_migration_add_the_same_columns(self):
+        migration = (Path(__file__).resolve().parents[1] / "supabase" / "migrations"
+                     / "0013_capital_share_sizing.sql").read_text()
+        for column in ("sizing_mode TEXT", "capital_multiplier DOUBLE PRECISION"):
+            with self.subTest(column=column):
+                self.assertIn(f"followed_traders ADD COLUMN IF NOT EXISTS {column}",
+                              PG_SCHEMA_SQL)
+                self.assertIn(f"followed_traders ADD COLUMN IF NOT EXISTS {column}",
+                              migration)
+        self.assertIn("'position_share', 'capital_share'", migration)
 
 
 class OpenPositionsResilienceTests(EngineDb):

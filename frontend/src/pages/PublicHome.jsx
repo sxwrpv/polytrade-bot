@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import SiteSwitcher from '../components/SiteSwitcher'
+import { CAPITAL_SHARE, MULTIPLIER_STOPS, POSITION_SHARE, capitalShareCopy } from '../copySizing'
 import { redeemMinutes, useRedeemStatus } from '../redeemStatus'
 import { useWithdrawStatus } from '../withdrawStatus'
 // The homepage's own styles travel in this lazily loaded chunk, so a Mini App
@@ -101,7 +102,7 @@ function useTimelineScrub(ref) {
 
 const PIPELINE = [
   { title: 'Leader trade detected', detail: 'OrderFilled log or activity poll', time: 'every 2s' },
-  { title: 'Your limits checked', detail: 'ratio, caps, price band, exposure', time: 'one transaction' },
+  { title: 'Your limits checked', detail: 'sizing, caps, price band, exposure', time: 'one transaction' },
   { title: 'Order submitted', detail: 'market fill-or-kill', time: 'all or nothing' },
   { title: 'Recorded and alerted', detail: 'position stored, Telegram ping', time: 'then reconciled' },
 ]
@@ -110,7 +111,7 @@ const PIPELINE = [
    audience: four of its six enforcement layers, in order.
    Every line is a real control; nothing here is a live reading. */
 const GATES = [
-  { tag: 'SETTINGS', title: 'You set the limits', detail: 'Copy ratio, max per position, price band and exposure caps, for each wallet you follow.' },
+  { tag: 'SETTINGS', title: 'You set the limits', detail: 'Copy ratio or cash share, max per position, price band and exposure caps, for each wallet you follow.' },
   { tag: 'RESERVE', title: 'Checked when reserved', detail: 'Re-read inside the database transaction that reserves your money.' },
   { tag: 'SUBMIT', title: 'Re-checked at submit', detail: 'Read again just before the order is signed, so a limit you tightened still applies to an order already in flight.' },
   { tag: 'ORDER', title: 'Bounded in the order', detail: 'The price ceiling is encoded into the signed order itself, so the exchange cannot fill it above your band.' },
@@ -485,6 +486,12 @@ const CAP_MIN = 1
 const CAP_MAX = 500
 const MIN_COPY = 2          // the app's default "Min copy size"
 const EXAMPLE_PRICE = 0.42  // an example YES price inside the default 10¢–98¢ band
+// The cash-share example: the share of their free cash a bet took, from 0.1%
+// to 100% on the chart's own axis, and your free cash, as round values.
+const BET_SHARES = [0.001, 0.002, 0.005, 0.01, 0.02, 0.03, 0.05, 0.1, 0.2, 0.3, 0.5, 0.75, 1]
+const YOUR_CASH = [10, 20, 50, 100, 150, 200, 300, 500, 1000, 2000, 5000, 10000]
+/** 0.2 -> "20%", 0.0133 -> "1.3%", 0.00133 -> "0.13%". */
+const pct = (share) => `${+(share * 100).toFixed(share < 0.01 ? 2 : share < 0.1 ? 1 : 0)}%`
 
 const usd = (value, digits = 2) => `$${value.toLocaleString('en-US', {
   minimumFractionDigits: digits, maximumFractionDigits: digits,
@@ -506,18 +513,29 @@ function sizeCopy(position, ratioPct, cap) {
 
 const OUTCOME = {
   copied: ['pos', () => 'Copied in full'],
-  capped: ['warn', (cap) => `Capped at your ${usd(cap, 0)} max`],
+  capped: ['warn', (limit) => `Capped at your ${limit}`],
   skipped: ['quiet', () => `Skipped · under ${usd(MIN_COPY, 0)}`],
 }
+
+// The chart's x-axes, both log scale: their position from $100 to $10M, or
+// the share of their free cash a bet took, from 0.1% to 100%.
+const POSITION_AXIS = { from: 100, decades: 5, ticks: ['$100', '$1K', '$10K', '$100K', '$1M', '$10M'] }
+const SHARE_AXIS = { from: 0.001, decades: 3, ticks: ['0.1%', '1%', '10%', '100%'] }
 
 /* Hero: the copy-sizing rule as something to try, in place of a looping
    animation. The controls are the Mini App's own slider: Max per position
    keeps its $1–$500 range, and Their position snaps to round values on the
-   chart's log axis. */
+   chart's log axis. Their cash share is the Mini App's other sizing mode
+   (copySizing.js): the bet's share of their free cash, of yours, times the
+   multiplier. */
 function Sizer() {
+  const [mode, setMode] = useState(POSITION_SHARE)
   const [leader, setLeader] = useState(() => LEADER_POSITIONS.indexOf(120_000))
   const [ratio, setRatio] = useState(1)
   const [max, setMax] = useState(CAP_MAX)
+  const [shareAt, setShareAt] = useState(() => BET_SHARES.indexOf(0.2))
+  const [cashAt, setCashAt] = useState(() => YOUR_CASH.indexOf(150))
+  const [multAt, setMultAt] = useState(() => MULTIPLIER_STOPS.indexOf(1))
   // First paint shows a flat curve and $0.00; the real figures arrive as the
   // headline lands, so the number rolls and the curve rises once.
   const [live, setLive] = useState(false)
@@ -529,20 +547,53 @@ function Sizer() {
     return () => clearTimeout(timer)
   }, [])
 
+  const capital = mode === CAPITAL_SHARE
   const position = LEADER_POSITIONS[leader]
-  const result = sizeCopy(position, ratio, max)
+  const share = BET_SHARES[shareAt]
+  const cash = YOUR_CASH[cashAt]
+  const multiplier = MULTIPLIER_STOPS[multAt]
+  // A cash-share copy also stops at your free cash.
+  const limit = capital ? Math.min(max, cash) : max
+  const sizeAt = capital
+    ? (s) => capitalShareCopy({ share: s, yourCash: cash, multiplier, cap: max, minCopy: MIN_COPY })
+    : (p) => sizeCopy(p, ratio, max)
+  const result = sizeAt(capital ? share : position)
   const [tone, label] = OUTCOME[result.state]
-  useWidthMorph(badge, result.state + max)
+  useWidthMorph(badge, result.state + limit)
 
-  const math = `${usd(position, 0)} × ${ratio.toFixed(1)}% = ${usd(result.raw)}`
+  const math = capital
+    ? `${pct(share)} of their cash × ${usd(cash, 0)} × ${multiplier}× = ${usd(result.raw)}`
+    : `${usd(position, 0)} × ${ratio.toFixed(1)}% = ${usd(result.raw)}`
   const verdict = {
     copied: 'copied in full.',
-    capped: `capped at ${usd(max)}.`,
+    capped: `capped at ${usd(limit)}.`,
     // A max under the minimum skips every copy, whatever their position.
     skipped: result.raw >= MIN_COPY
-      ? `capped at ${usd(max)}, under the ${usd(MIN_COPY, 0)} minimum, so no order.`
+      ? `capped at ${usd(limit)}, under the ${usd(MIN_COPY, 0)} minimum, so no order.`
       : `under the ${usd(MIN_COPY, 0)} minimum, so no order.`,
   }[result.state]
+  const limitText = capital && cash < max ? `${usd(cash, 0)} cash` : `${usd(max, 0)} max`
+
+  // Where the curve leaves the skipped zone and where it meets the limit.
+  const slope = capital ? cash * multiplier : ratio / 100
+  const chart = {
+    key: capital ? `cash ${cashAt} ${multAt} ${max}` : `position ${ratio} ${max}`,
+    axis: capital ? SHARE_AXIS : POSITION_AXIS,
+    at: capital ? share : position,
+    orderAt: (value) => sizeAt(value).order,
+    top: limit,
+    skipBelow: MIN_COPY / slope,
+    capAbove: limit / slope,
+    title: capital ? 'Your order for every share of their cash' : 'Your order for every size of their position',
+    describe: (skipsAll) => (capital
+      ? 'The share of their free cash their bet took, on a log scale from 0.1% to 100%. '
+        + cashShareCurve({ skipsAll, cash, multiplier, limit, slope })
+      : 'Their position on a log scale from $100 to $10M. ' + (skipsAll
+        ? `A max of ${usd(max, 0)} sits under the ${usd(MIN_COPY, 0)} minimum, so every copy is skipped. `
+        : `Under ${usd(MIN_COPY / slope, 0)} the copy is skipped; up to ${usd(max / slope, 0)} `
+          + `it is ${ratio.toFixed(1)}% of their position; above that it is capped at ${usd(max, 0)}. `))
+      + 'The marked point is the example above.',
+  }
 
   return (
     <aside className="sizer hero-in" style={{ '--i': 3 }} aria-labelledby="sizer-title">
@@ -554,18 +605,61 @@ function Sizer() {
         <span className="sizer-tag">ILLUSTRATIVE</span>
       </div>
 
+      <div className="seg seg-sm sizer-mode" role="group" aria-label="Size the copy by" style={{ '--n': 2, '--i': capital ? 1 : 0 }}>
+        <button type="button" aria-pressed={!capital} onClick={() => setMode(POSITION_SHARE)}>Their position</button>
+        <button type="button" aria-pressed={capital} onClick={() => setMode(CAPITAL_SHARE)}>Their cash share</button>
+      </div>
+
       <div className="sizer-controls">
-        <SizerSlider
-          id="sz-leader"
-          label="Their position"
-          min={0}
-          max={LEADER_POSITIONS.length - 1}
-          step={1}
-          value={leader}
-          shown={shortUsd(position)}
-          spoken={usd(position, 0)}
-          onChange={setLeader}
-        />
+        {capital ? (
+          <>
+            <SizerSlider
+              id="sz-share"
+              label="Their bet, of their cash"
+              min={0}
+              max={BET_SHARES.length - 1}
+              step={1}
+              value={shareAt}
+              shown={pct(share)}
+              spoken={`${pct(share)} of their free cash`}
+              onChange={setShareAt}
+            />
+            <SizerSlider
+              id="sz-cash"
+              label="Your free cash"
+              min={0}
+              max={YOUR_CASH.length - 1}
+              step={1}
+              value={cashAt}
+              shown={usd(cash, 0)}
+              spoken={usd(cash, 0)}
+              onChange={setCashAt}
+            />
+            <SizerSlider
+              id="sz-mult"
+              label="Multiplier"
+              min={0}
+              max={MULTIPLIER_STOPS.length - 1}
+              step={1}
+              value={multAt}
+              shown={`${multiplier}×`}
+              spoken={`${multiplier} times`}
+              onChange={setMultAt}
+            />
+          </>
+        ) : (
+          <SizerSlider
+            id="sz-leader"
+            label="Their position"
+            min={0}
+            max={LEADER_POSITIONS.length - 1}
+            step={1}
+            value={leader}
+            shown={shortUsd(position)}
+            spoken={usd(position, 0)}
+            onChange={setLeader}
+          />
+        )}
         <SizerSlider
           id="sz-cap"
           label="Max per position"
@@ -577,28 +671,34 @@ function Sizer() {
           spoken={usd(max, 0)}
           onChange={setMax}
         />
-        <SizerSlider
-          id="sz-ratio"
-          label="Copy ratio"
-          min={0.5}
-          max={20}
-          step={0.5}
-          value={ratio}
-          shown={`${ratio.toFixed(1)}%`}
-          spoken={`${ratio.toFixed(1)} percent`}
-          hint="Your copy = their position × this %."
-          wide
-          onChange={setRatio}
-        />
+        {capital ? (
+          <p className="setting-hint sizer-rule">
+            Your copy = their bet’s share of their cash × your free cash × the multiplier.
+          </p>
+        ) : (
+          <SizerSlider
+            id="sz-ratio"
+            label="Copy ratio"
+            min={0.5}
+            max={20}
+            step={0.5}
+            value={ratio}
+            shown={`${ratio.toFixed(1)}%`}
+            spoken={`${ratio.toFixed(1)} percent`}
+            hint="Your copy = their position × this %."
+            wide
+            onChange={setRatio}
+          />
+        )}
       </div>
 
       <div className={`sizer-out is-${result.state}`}>
         <div className="sizer-out-head">
           <span>Your order</span>
-          <span ref={badge} className={`badge sizer-badge ${tone}`}>{label(max)}</span>
+          <span ref={badge} className={`badge sizer-badge ${tone}`}>{label(limitText)}</span>
         </div>
         <Roll text={usd(live ? result.order : 0)} className="sizer-amount" />
-        <SizerChart position={position} ratio={ratio} cap={max} live={live} />
+        <SizerChart model={chart} live={live} />
         <p className="sizer-math" aria-live="polite" aria-atomic="true">
           {math} — {verdict}
         </p>
@@ -642,29 +742,47 @@ function SizerSlider({ id, label, min, max, step, value, shown, spoken, hint, wi
   )
 }
 
-/* The rule as a curve: your order for every size of their position, from $100
-   to $10M on a log scale, with the example above marked. Under the minimum it
-   is skipped, then it rises with your ratio, then it flattens at your cap. A
-   control change morphs the curve from its previous shape (the kit's chart
-   rule for data changes). */
+/** The cash-share curve in words, for the chart's description. */
+function cashShareCurve({ skipsAll, cash, multiplier, limit, slope }) {
+  if (skipsAll) {
+    return limit < MIN_COPY
+      ? `A limit of ${usd(limit, 0)} sits under the ${usd(MIN_COPY, 0)} minimum, so every copy is skipped. `
+      : `At ${multiplier}× of your ${usd(cash, 0)}, even a bet of all their cash copies under the `
+        + `${usd(MIN_COPY, 0)} minimum, so every copy is skipped. `
+  }
+  const skipShare = MIN_COPY / slope
+  const capShare = limit / slope
+  return `Your copy is that share of your ${usd(cash, 0)} × ${multiplier}. `
+    + (skipShare > SHARE_AXIS.from ? `Under ${pct(skipShare)} the copy is skipped. ` : '')
+    + (capShare < 1 ? `From ${pct(Math.max(capShare, SHARE_AXIS.from))} it is capped at ${usd(limit, 0)}. ` : '')
+}
+
+/* The rule as a curve: your order across their position, $100 to $10M, or
+   across the share of their cash a bet took, 0.1% to 100%, both on a log
+   scale, with the example above marked. Under the minimum it is skipped,
+   then it rises, then it flattens at your limit. A control change morphs the
+   curve from its previous shape (the kit's chart rule for data changes). */
 const CURVE_STEPS = 96
 const CURVE_FLOOR = 38   // baseline, in viewBox units (0..40, y down)
 const CURVE_SPAN = 33    // how far above the baseline the cap sits
-const logX = (value) => ((Math.log10(value) - 2) / 5) * 100   // $100 → 0, $10M → 100
+const axisPct = (axis, value) => (Math.log10(value / axis.from) / axis.decades) * 100
+const axisValue = (axis, t) => axis.from * 10 ** (axis.decades * t)
 const clampPct = (v) => Math.min(100, Math.max(0, v))
 
-function curvePoints(ratio, cap, flat) {
+function curvePoints(model, flat) {
   return Array.from({ length: CURVE_STEPS + 1 }, (_, i) => {
-    const order = flat ? 0 : sizeCopy(10 ** (2 + (5 * i) / CURVE_STEPS), ratio, cap).order
-    return [(i / CURVE_STEPS) * 100, CURVE_FLOOR - (order / cap) * CURVE_SPAN]
+    const order = flat ? 0 : model.orderAt(axisValue(model.axis, i / CURVE_STEPS))
+    return [(i / CURVE_STEPS) * 100, CURVE_FLOOR - (order / model.top) * CURVE_SPAN]
   })
 }
 const curvePath = (points) => points.map(([x, y], i) => `${i ? 'L' : 'M'}${x.toFixed(2)} ${y.toFixed(2)}`).join('')
 
-function SizerChart({ position, ratio, cap, live }) {
+function SizerChart({ model, live }) {
   const path = useRef(null)
   const shown = useRef(null)
-  const target = useMemo(() => curvePoints(ratio, cap, !live), [ratio, cap, live])
+  // model.key names every input of the curve, so it is the memo's dependency.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const target = useMemo(() => curvePoints(model, !live), [model.key, live])
 
   useEffect(() => {
     const node = path.current
@@ -688,25 +806,20 @@ function SizerChart({ position, ratio, cap, live }) {
     return () => cancelAnimationFrame(raf)
   }, [target])
 
-  // A max under the minimum skips every copy, so the skipped zone then spans
-  // the whole axis.
-  const skipsAll = cap < MIN_COPY
-  const skipAt = skipsAll ? 100 : clampPct(logX(MIN_COPY / (ratio / 100)))
-  const capAt = skipsAll ? 100 : clampPct(logX(cap / (ratio / 100)))
-  const { order } = sizeCopy(position, ratio, cap)
-  const markX = logX(position)
-  const markY = ((CURVE_FLOOR - (live ? order / cap : 0) * CURVE_SPAN) / 40) * 100
-  const desc = 'Their position on a log scale from $100 to $10M. ' + (skipsAll
-    ? `A max of ${usd(cap, 0)} sits under the ${usd(MIN_COPY, 0)} minimum, so every copy is skipped. `
-    : `Under ${usd(MIN_COPY / (ratio / 100), 0)} the copy is skipped; up to ${usd(cap / (ratio / 100), 0)} `
-      + `it is ${ratio.toFixed(1)}% of their position; above that it is capped at ${usd(cap, 0)}. `)
-    + 'The marked point is the example above.'
+  // A limit under the minimum, or a curve that ends under it, skips every
+  // copy, so the skipped zone then spans the whole axis.
+  const skipsAll = model.top < MIN_COPY || axisPct(model.axis, model.skipBelow) >= 100
+  const skipAt = skipsAll ? 100 : clampPct(axisPct(model.axis, model.skipBelow))
+  const capAt = skipsAll ? 100 : clampPct(axisPct(model.axis, model.capAbove))
+  const order = model.orderAt(model.at)
+  const markX = axisPct(model.axis, model.at)
+  const markY = ((CURVE_FLOOR - (live ? order / model.top : 0) * CURVE_SPAN) / 40) * 100
   return (
     <figure className="sizer-chart">
       <div className="sc-plot">
         <svg viewBox="0 0 100 40" preserveAspectRatio="none" role="img" aria-labelledby="sc-title sc-desc">
-          <title id="sc-title">Your order for every size of their position</title>
-          <desc id="sc-desc">{desc}</desc>
+          <title id="sc-title">{model.title}</title>
+          <desc id="sc-desc">{model.describe(skipsAll)}</desc>
           <rect className="sc-skip" x="0" y="0" width={skipAt} height="40" />
           <rect className="sc-cap" x={capAt} y="0" width={100 - capAt} height="40" />
           <path className="sc-base" d={`M0 ${CURVE_FLOOR} H100`} vectorEffect="non-scaling-stroke" />
@@ -717,7 +830,7 @@ function SizerChart({ position, ratio, cap, live }) {
         {100 - capAt > 14 && <span className="sc-tag is-cap" style={{ '--x': `${(capAt + 100) / 2}%` }} aria-hidden="true">capped</span>}
       </div>
       <div className="sc-axis" aria-hidden="true">
-        {['$100', '$1K', '$10K', '$100K', '$1M', '$10M'].map((tick) => <span key={tick}>{tick}</span>)}
+        {model.axis.ticks.map((tick) => <span key={tick}>{tick}</span>)}
       </div>
     </figure>
   )

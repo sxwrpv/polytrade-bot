@@ -38,12 +38,14 @@ Used for Telegram login validation, account linking, export step-up, and alerts.
 - `COPY_ENGINE_POLL_SECONDS` — full reconciliation cadence; default `30`.
 - `POLYGON_RPC_URL` — optional HTTP RPC for on-chain polling, and the only evidence that lets the engine release an uncertain buy claim (it reads the wallet's own share balance). Without it, uncertain claims are only adopted or kept.
 - `UNCERTAIN_CLAIM_EVIDENCE_SECONDS` — how long after its last change an uncertain claim waits before the on-chain balance may settle it; default `900`.
+- `LEADER_CASH_CACHE_SECONDS` — how long one reading of a source wallet's free cash (pUSD, USDC.e and native USDC) serves cash-share sizing; default `30`. The reading comes from `POLYGON_RPC_URL` when set, otherwise the SDK's public Polygon endpoint.
 - `COPY_ENGINE_AUTOSTART` — direct runtime defaults on; base Compose defaults off for safety.
 - `ENFORCE_FRONTEND_GEOBLOCK` — `1` makes website geoblock a hard order veto; default advisory.
 
 ## Risk defaults
 
 - `DEFAULT_COPY_RATIO_PCT` — `1`.
+- `DEFAULT_CAPITAL_MULTIPLIER` — `1`, for wallets sized by cash share.
 - `DEFAULT_MAX_POSITION_USD` — `15`.
 - `DEFAULT_MIN_PRICE` — `0.10`.
 - `DEFAULT_MAX_PRICE` — `0.98`.

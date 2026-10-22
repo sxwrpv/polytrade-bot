@@ -19,7 +19,7 @@ No setting removes these risks. Use only funds you can afford to lose completely
 
 ## What the controls can and cannot do
 
-Per source: copy ratio, maximum copied position, minimum source position, ignore-below threshold, maximum open positions, maximum source exposure, entry price range, maximum slippage, daily realized-loss limit, and paused state.
+Per source: sizing by copy ratio or by cash share with its multiplier, maximum copied position, minimum source position, ignore-below threshold, maximum open positions, maximum source exposure, entry price range, maximum slippage, daily realized-loss limit, and paused state.
 
 Per account: master pause, an account-wide open/reserved notional cap, and revision fencing that stops in-flight buys after settings change.
 
@@ -54,7 +54,9 @@ Key export requires a linked Telegram identity and verification no older than fi
 
 | Setting | Default |
 |---|---|
+| Sizing | copy ratio |
 | Copy ratio | `1%` |
+| Cash-share multiplier | `1×` |
 | Maximum copied position | `$15` |
 | Minimum source position | `$0` |
 | Ignore own copy below | `$2` |

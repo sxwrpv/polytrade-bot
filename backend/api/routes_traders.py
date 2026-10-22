@@ -6,6 +6,7 @@ import re
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import asdict
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, model_validator
@@ -41,6 +42,11 @@ class FollowSettings(BaseModel):
     max_price: float | None = Field(None, ge=0, le=1)
     max_slippage_pct: float | None = Field(None, ge=0, le=10)
     daily_loss_limit_usd: float | None = Field(None, ge=0, le=1000)
+    # SIZING: 'position_share' = their position × copy_ratio_pct (null means
+    # this too); 'capital_share' = the share of their free cash a bet took, of
+    # your free cash, × capital_multiplier. Same bounds as the UI slider.
+    sizing_mode: Literal["position_share", "capital_share"] | None = None
+    capital_multiplier: float | None = Field(None, ge=0.1, le=100)
 
     @model_validator(mode="after")
     def valid_price_bracket(self):
@@ -54,6 +60,7 @@ _FOLLOW_KEYS = (
     "paused", "copy_ratio_pct", "max_position_usd", "min_leader_usd",
     "ignore_below_usd", "max_open_positions", "max_total_exposure_usd",
     "min_price", "max_price", "max_slippage_pct", "daily_loss_limit_usd",
+    "sizing_mode", "capital_multiplier",
 )
 
 
@@ -92,7 +99,7 @@ async def following(user=Depends(get_current_user), db=Depends(get_db)):
         "SELECT f.trader_address, f.copy_ratio_pct, f.max_position_usd, "
         "f.paused, f.min_leader_usd, f.ignore_below_usd, f.max_open_positions, "
         "f.min_price, f.max_price, f.max_slippage_pct, f.max_total_exposure_usd, "
-        "f.daily_loss_limit_usd, f.created_at, "
+        "f.daily_loss_limit_usd, f.sizing_mode, f.capital_multiplier, f.created_at, "
         "c.display_name, c.consistency_score, c.total_pnl, c.open_positions "
         "FROM followed_traders f LEFT JOIN trader_cache c ON c.address = f.trader_address "
         "WHERE f.user_id = ? AND f.is_active = 1 ORDER BY f.created_at DESC", (user["id"],))

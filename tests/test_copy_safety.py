@@ -1,13 +1,23 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import tempfile
+import time
 import unittest
+from dataclasses import replace
 from types import SimpleNamespace
 
-from backend.core.copy_engine import Action, CopyEngine
+import httpx
+
+from backend.core import copy_engine as ce
+from backend.core.copy_engine import (
+    CAPITAL_SHARE, POSITION_SHARE, Action, CopyEngine, cash_share, plan_actions,
+)
 from backend.core.execution import OrderResult
+from backend.core.leader_cash import LeaderCashError, LeaderCashReader
+from backend.core.withdraw import PUSD, USDC, USDC_E
 from backend.db.database import Database, now_iso
 
 
@@ -468,6 +478,388 @@ class CopySafetyTests(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(available, 37.5)
         raw, _ = await engine._read_collateral(user, object())
         self.assertEqual(raw, 50.0)
+
+
+# ---------------------------------------------------------------------------
+# Capital share: the copy takes the share of your free cash that the leader's
+# bet took of theirs (owner's call 2026-10-22, free cash as the base).
+# ---------------------------------------------------------------------------
+FOLLOW = {"max_position_usd": 50.0}
+
+
+def capital_plan(positions, rows=(), available=150.0, **kwargs):
+    options = dict(sizing_mode=CAPITAL_SHARE, multiplier=1.0, leader_cash=8000.0,
+                   recent_buys={TOKEN}, ignore_below=2.0)
+    options.update(kwargs)
+    return plan_actions(list(positions), list(rows), FOLLOW, available, **options)
+
+
+def leader_holding(token: str, value: float, price: float = 0.5):
+    p = position(price=price, value=value)
+    p.asset = token
+    return p
+
+
+def copy_row(*, shares=60.0, trader_shares=4000.0, notional=30.0, token=TOKEN):
+    return {"token_id": token, "id": "pos-1", "shares": shares,
+            "trader_shares": trader_shares, "notional_usd": notional, "entry_price": 0.5}
+
+
+class CapitalShareSizingTests(unittest.TestCase):
+    def test_the_share_is_read_against_the_cash_held_before_the_bet(self):
+        self.assertAlmostEqual(0.20, cash_share(2000, 8000))      # 2,000 of 10,000
+        self.assertAlmostEqual(1.00, cash_share(500, 0))          # all of it
+        self.assertAlmostEqual(0.05, cash_share(2000, 38000))     # the owner's 2K of 40K
+        for bet, cash in ((2000, None), (0, 1000), (-5, 1000), (10, -1),
+                          (float("nan"), 10), (10, float("inf")), (None, 10)):
+            with self.subTest(bet=bet, cash=cash):
+                self.assertIsNone(cash_share(bet, cash))
+
+    def test_an_open_takes_the_same_share_of_your_free_cash(self):
+        [action] = capital_plan([position(value=2000)])
+        self.assertEqual("open", action.kind)
+        self.assertAlmostEqual(30.0, action.amount)               # 20% of $150
+        self.assertEqual(CAPITAL_SHARE, action.sizing_mode)
+        self.assertAlmostEqual(0.2, action.capital_weight)
+        self.assertAlmostEqual(150.0, action.follower_cash)
+
+    def test_the_multiplier_scales_and_the_usual_caps_still_apply(self):
+        [doubled] = capital_plan([position(value=2000)], multiplier=2.0)
+        self.assertAlmostEqual(50.0, doubled.amount, msg="max per position")
+        [all_in] = capital_plan([position(value=2000)], multiplier=10.0, max_per_trade=500.0)
+        self.assertAlmostEqual(150.0, all_in.amount, msg="capped at your free cash")
+        other = copy_row(token="token-other", notional=140.0)
+        opens = [a for a in capital_plan([position(value=2000), leader_holding("token-other", 70)],
+                                         [other], max_total_exposure=150.0) if a.kind == "open"]
+        self.assertAlmostEqual(10.0, opens[0].amount, msg="exposure cap to this leader")
+
+    def test_a_copy_under_the_minimum_is_skipped(self):
+        # $500 of $100,000 is 0.5%: $0.75 of $150, under the $2 minimum.
+        self.assertEqual([], capital_plan([position(value=500)], leader_cash=99500.0))
+
+    def test_only_a_recent_leader_buy_is_opened(self):
+        self.assertEqual([], capital_plan([position(value=2000)], recent_buys=set()))
+        self.assertEqual([], capital_plan([position(value=2000)], recent_buys=None))
+
+    def test_no_leader_cash_reading_plans_no_buy_and_keeps_the_anchor(self):
+        self.assertEqual([], capital_plan([position(value=2000)], leader_cash=None))
+        grown = leader_holding(TOKEN, 3000)                        # 6,000 shares vs 4,000
+        self.assertEqual([], capital_plan([grown], [copy_row()], leader_cash=None))
+
+    def test_blocked_opens_stay_blocked(self):
+        self.assertEqual([], capital_plan([position(value=2000)], block_opens=True))
+        actions = capital_plan([leader_holding(TOKEN, 3000)], [copy_row()], block_opens=True)
+        self.assertEqual(["reanchor"], [a.kind for a in actions])
+
+    def test_a_second_open_is_sized_from_the_cash_the_first_left(self):
+        first, second = capital_plan(
+            [leader_holding("token-a", 2000), leader_holding("token-b", 2000)],
+            recent_buys={"token-a", "token-b"})
+        self.assertAlmostEqual(30.0, first.amount)                 # 20% of 150
+        self.assertAlmostEqual(24.0, second.amount)                # 20% of the 120 left
+
+    def test_an_increase_takes_the_share_the_leader_added(self):
+        # 4,000 -> 6,000 shares at 0.50: $1,000 added with $9,000 left = 10%.
+        [action] = capital_plan([leader_holding(TOKEN, 3000)], [copy_row()],
+                                leader_cash=9000.0, available=100.0)
+        self.assertEqual(("resize", "increase"), (action.kind, action.subkind))
+        self.assertAlmostEqual(10.0, action.amount)                # 10% of $100
+        self.assertEqual(CAPITAL_SHARE, action.sizing_mode)
+        self.assertEqual(6000.0, action.trader_shares)
+
+    def test_an_increase_past_max_per_position_reanchors_as_before(self):
+        actions = capital_plan([leader_holding(TOKEN, 3000)], [copy_row(notional=50.0)],
+                               leader_cash=9000.0)
+        self.assertEqual(["reanchor"], [a.kind for a in actions])
+
+    def test_exits_keep_the_proportional_share_rule(self):
+        trimmed = [leader_holding(TOKEN, 1200)]                    # 4,000 -> 2,400 shares
+        for mode in (CAPITAL_SHARE, POSITION_SHARE):
+            with self.subTest(mode=mode):
+                [sell] = capital_plan(trimmed, [copy_row()], sizing_mode=mode, leader_cash=None)
+                self.assertEqual(("resize", "decrease"), (sell.kind, sell.subkind))
+                self.assertAlmostEqual(24.0, sell.amount)          # 40% of 60 shares
+                [close] = capital_plan([], [copy_row()], sizing_mode=mode, leader_cash=None)
+                self.assertEqual(("close", 60.0), (close.kind, close.amount))
+
+    def test_position_share_ignores_the_capital_inputs(self):
+        [action] = capital_plan([position(value=2000)], sizing_mode=POSITION_SHARE,
+                                recent_buys=set())
+        self.assertAlmostEqual(20.0, action.amount)                # 1% of their $2,000
+        self.assertEqual(POSITION_SHARE, action.sizing_mode)
+        self.assertIsNone(action.capital_weight)
+
+    def test_follow_risk_reads_the_mode_and_the_multiplier(self):
+        default = CopyEngine._follow_risk({})
+        self.assertEqual((POSITION_SHARE, 1.0), (default["sizing_mode"], default["multiplier"]))
+        chosen = CopyEngine._follow_risk({"sizing_mode": "capital_share", "capital_multiplier": 4})
+        self.assertEqual((CAPITAL_SHARE, 4.0), (chosen["sizing_mode"], chosen["multiplier"]))
+        self.assertEqual(POSITION_SHARE, CopyEngine._follow_risk({"sizing_mode": "equity"})["sizing_mode"])
+        for junk in (-2, float("nan")):
+            with self.subTest(junk=junk):
+                self.assertEqual(0.0, CopyEngine._follow_risk({"capital_multiplier": junk})["multiplier"])
+
+
+class FakeLeaderCash:
+    def __init__(self, usd: float = 8000.0, error: Exception | None = None):
+        self.usd, self.error, self.calls = usd, error, []
+
+    async def cash_usd(self, wallet, *, after=None):
+        self.calls.append((wallet, after))
+        if self.error is not None:
+            raise self.error
+        return self.usd
+
+
+def leader_buy(*, size=4000.0, price=0.5, usd=2000.0, ts=None):
+    return SimpleNamespace(
+        timestamp=int(ts if ts is not None else time.time()), asset=TOKEN, side="BUY",
+        size=size, price=price, usd_size=usd, condition_id="condition-1", outcome="YES",
+        slug="market", title="Market", tx_hash="0xbuy")
+
+
+class CapitalShareEngineTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        fd, self.path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        self.db = Database(path=self.path, dsn="")
+        await self.db.connect()
+        await self.db.init()
+        await self.db.execute(
+            "INSERT INTO users(id, private_key_enc, created_at) VALUES(?,?,?)",
+            (USER, "encrypted", now_iso()))
+        await self.db.execute(
+            "INSERT INTO followed_traders(id, user_id, trader_address, copy_ratio_pct, "
+            "max_position_usd, sizing_mode, capital_multiplier, paused, is_active, created_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?)",
+            ("follow-1", USER, TRADER, 1.0, 50.0, CAPITAL_SHARE, 1.0, 0, 1, now_iso()))
+        self.orders: list[tuple[str, float]] = []
+        self.clients_built = 0
+
+    async def asyncTearDown(self):
+        await self.db.close()
+        os.unlink(self.path)
+
+    async def follow(self) -> dict:
+        return await self.db.fetchone("SELECT * FROM followed_traders WHERE id='follow-1'")
+
+    def engine(self, *, leader_value=2000.0, cash=None, collateral=150.0):
+        async def get_positions(wallet, **kwargs):
+            return [position(value=leader_value)] if wallet == TRADER else []
+
+        async def get_all_positions(wallet, **kwargs):
+            return ([position(value=leader_value)] if wallet == TRADER else []), True
+
+        async def place(client, pm, token, side, amount, **kwargs):
+            self.orders.append((side, float(amount)))
+            return OrderResult(ok=True, filled_shares=amount / 0.5, avg_price=0.5)
+
+        async def client_factory(user):
+            self.clients_built += 1
+            return object()
+
+        async def collateral_fn(client):
+            return collateral
+
+        return CopyEngine(
+            self.db, SimpleNamespace(get_positions=get_positions,
+                                     get_all_positions=get_all_positions),
+            place_order=place, client_factory=client_factory, collateral_fn=collateral_fn,
+            leader_cash=cash)
+
+    async def test_fast_path_copies_the_leaders_cash_share(self):
+        cash = FakeLeaderCash(8000.0)
+        engine = self.engine(cash=cash)
+        trade = leader_buy()
+
+        await engine._handle_leader_trade(await self.follow(), trade)
+
+        self.assertEqual([("BUY", 30.0)], self.orders)            # 20% of $150
+        self.assertEqual([(TRADER, float(trade.timestamp))], cash.calls,
+                         "read once, and only from after the trade")
+        self.assertEqual({TOKEN}, engine._recent_buys_of(TRADER))
+        row = await self.db.fetchone("SELECT notional_usd FROM copy_positions WHERE token_id=?",
+                                     (TOKEN,))
+        self.assertAlmostEqual(30.0, row["notional_usd"])
+
+    async def test_fast_path_skips_and_logs_when_leader_cash_is_unknown(self):
+        engine = self.engine(cash=FakeLeaderCash(error=LeaderCashError("eth_call: HTTP 503")))
+
+        with self.assertLogs("copy_engine", level="INFO") as logs:
+            await engine._handle_leader_trade(await self.follow(), leader_buy())
+
+        self.assertEqual([], self.orders)
+        self.assertEqual(0, self.clients_built, "skipped before any account read")
+        text = "\n".join(logs.output)
+        self.assertIn("leader cash unavailable", text)
+        self.assertIn("reason=leader_cash_unknown", text)
+
+    async def test_without_a_reader_capital_share_copies_nothing(self):
+        engine = self.engine(cash=None)
+        with self.assertLogs("copy_engine", level="WARNING"):
+            await engine._handle_leader_trade(await self.follow(), leader_buy())
+        self.assertEqual([], self.orders)
+
+    async def test_a_top_up_of_a_market_held_before_copying_counts_only_the_trade(self):
+        engine = self.engine(leader_value=20000.0, cash=FakeLeaderCash(900.0))
+        engine._no_backfill[(USER, TRADER)] = {TOKEN}
+
+        await engine._handle_leader_trade(await self.follow(), leader_buy(size=200, usd=100.0))
+
+        # $100 with $900 left is 10%, so $15 of $150. The whole $20,000
+        # position would have read as 96% and gone to the $50 cap.
+        self.assertEqual([("BUY", 15.0)], self.orders)
+
+    async def test_a_reservation_rederives_the_share_with_the_current_multiplier(self):
+        engine = self.engine()
+        planned = replace(open_action(amount=50.0), trader_address=TRADER,
+                          sizing_mode=CAPITAL_SHARE, capital_weight=0.2, follower_cash=150.0)
+        await self.db.execute("UPDATE followed_traders SET capital_multiplier=1 WHERE id='follow-1'")
+
+        reserved, _ = await engine._prepare_buy(USER, planned)
+
+        self.assertAlmostEqual(30.0, reserved.amount)             # 20% of 150 at 1x
+
+    async def test_a_buy_sized_under_the_other_mode_is_not_reserved(self):
+        engine = self.engine()
+        position_sized = replace(open_action(amount=10.0), trader_address=TRADER)
+        self.assertIsNone(await engine._prepare_buy(USER, position_sized))
+        await self.db.execute(
+            "UPDATE followed_traders SET sizing_mode='position_share' WHERE id='follow-1'")
+        capital_sized = replace(position_sized, sizing_mode=CAPITAL_SHARE,
+                                capital_weight=0.2, follower_cash=150.0)
+        self.assertIsNone(await engine._prepare_buy(USER, capital_sized))
+        self.assertEqual(0, await self.db.fetchval("SELECT COUNT(*) FROM copy_open_claims"))
+
+    async def test_the_reconciler_opens_a_recent_leader_buy_with_its_cash_share(self):
+        cash = FakeLeaderCash(8000.0)
+        engine = self.engine(cash=cash)
+        engine._no_backfill[(USER, TRADER)] = set()      # following since before the buy
+        engine._note_leader_buy(TRADER, TOKEN, time.time())
+
+        await engine._sync_user(USER, [await self.follow()])
+
+        self.assertEqual([("BUY", 30.0)], self.orders)
+        self.assertEqual(1, len(cash.calls))
+
+    async def test_the_reconciler_leaves_an_unflagged_position_alone(self):
+        cash = FakeLeaderCash(8000.0)
+        engine = self.engine(cash=cash)
+        engine._no_backfill[(USER, TRADER)] = set()
+
+        await engine._sync_user(USER, [await self.follow()])
+
+        self.assertEqual([], self.orders)
+        self.assertEqual([], cash.calls, "a quiet pass costs the RPC nothing")
+
+    async def test_a_leader_buy_is_remembered_only_while_it_can_be_copied(self):
+        engine = self.engine()
+        engine._note_leader_buy(TRADER, "stale", time.time() - ce.MAX_LEADER_TRADE_AGE_SECONDS - 1)
+        engine._note_leader_buy(TRADER, TOKEN, time.time())
+        self.assertEqual({TOKEN}, engine._recent_buys_of(TRADER))
+        engine._recent_leader_buys[TRADER][TOKEN] = time.time() - 1
+        self.assertEqual(frozenset(), engine._recent_buys_of(TRADER))
+
+
+def rpc(balances=None, *, chain="0x89", code="0x6080", calls=None, error=None):
+    """A Polygon JSON-RPC node over httpx.MockTransport."""
+    balances = {k.lower(): v for k, v in (balances or {}).items()}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if calls is not None:
+            calls.append(body["method"])
+        if error is not None:
+            raise error
+        if body["method"] == "eth_chainId":
+            result = chain
+        elif body["method"] == "eth_getCode":
+            result = code
+        else:
+            token = body["params"][0]["to"].lower()
+            result = "0x" + format(balances.get(token, 0), "064x")
+        return httpx.Response(200, json={"jsonrpc": "2.0", "id": body["id"], "result": result})
+
+    return httpx.MockTransport(handler)
+
+
+class LeaderCashReaderTests(unittest.IsolatedAsyncioTestCase):
+    URL = "https://polygon.example/v2/SECRETKEY"
+
+    def reader(self, transport, clock=None):
+        return LeaderCashReader(self.URL, transport=transport,
+                                clock=clock or (lambda: self.now))
+
+    async def asyncSetUp(self):
+        self.now = 1_000.0
+
+    async def test_free_cash_is_pusd_plus_both_usdc_tokens(self):
+        reader = self.reader(rpc({PUSD: 7_000_000_000, USDC_E: 500_000_000, USDC: 250_500_000}))
+        self.assertAlmostEqual(7750.5, await reader.cash_usd(TRADER))
+        await reader.aclose()
+
+    async def test_a_node_on_another_chain_or_without_pusd_is_refused(self):
+        for transport in (rpc(chain="0x1"), rpc(code="0x")):
+            reader = self.reader(transport)
+            with self.assertRaises(LeaderCashError):
+                await reader.cash_usd(TRADER)
+            await reader.aclose()
+
+    async def test_one_reading_serves_a_leader_for_thirty_seconds(self):
+        calls: list[str] = []
+        reader = self.reader(rpc({PUSD: 1_000_000}, calls=calls))
+        self.assertEqual(1.0, await reader.cash_usd(TRADER))
+        reads = calls.count("eth_call")
+        self.now += 29
+        self.assertEqual(1.0, await reader.cash_usd(TRADER))
+        self.assertEqual(reads, calls.count("eth_call"))
+        self.now += 2
+        await reader.cash_usd(TRADER)
+        self.assertEqual(2 * reads, calls.count("eth_call"), "expired after 30s")
+        await reader.aclose()
+
+    async def test_a_reading_from_before_the_trade_is_not_reused_for_it(self):
+        calls: list[str] = []
+        reader = self.reader(rpc({PUSD: 1_000_000}, calls=calls))
+        await reader.cash_usd(TRADER)                      # read at t=1000
+        reads = calls.count("eth_call")
+        await reader.cash_usd(TRADER, after=self.now - 10)
+        self.assertEqual(reads, calls.count("eth_call"), "taken after that trade")
+        await reader.cash_usd(TRADER, after=self.now - 1)  # the trade is newer than the read
+        self.assertEqual(2 * reads, calls.count("eth_call"))
+        await reader.aclose()
+
+    async def test_followers_of_one_trade_share_one_read(self):
+        calls: list[str] = []
+        reader = self.reader(rpc({PUSD: 1_000_000}, calls=calls))
+        results = await asyncio.gather(*(reader.cash_usd(TRADER) for _ in range(5)))
+        self.assertEqual([1.0] * 5, results)
+        self.assertEqual(3, calls.count("eth_call"), "pUSD, USDC.e and USDC, once")
+        await reader.aclose()
+
+    async def test_a_failed_read_is_remembered_briefly_and_never_shows_the_url(self):
+        calls: list[str] = []
+        reader = self.reader(rpc(calls=calls, error=httpx.ConnectError(f"cannot reach {self.URL}")))
+        with self.assertRaises(LeaderCashError) as first:
+            await reader.cash_usd(TRADER)
+        self.assertNotIn("SECRETKEY", str(first.exception))
+        attempts = len(calls)
+        with self.assertRaises(LeaderCashError):
+            await reader.cash_usd(TRADER)
+        self.assertEqual(attempts, len(calls), "a dead RPC is not hit again at once")
+        self.now += 6
+        with self.assertRaises(LeaderCashError):
+            await reader.cash_usd(TRADER)
+        self.assertGreater(len(calls), attempts)
+        await reader.aclose()
+
+    async def test_a_malformed_wallet_is_refused_without_a_call(self):
+        calls: list[str] = []
+        reader = self.reader(rpc(calls=calls))
+        with self.assertRaises(LeaderCashError):
+            await reader.cash_usd("0x1234")
+        self.assertEqual([], calls)
+        await reader.aclose()
 
 
 if __name__ == "__main__":

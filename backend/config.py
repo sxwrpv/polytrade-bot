@@ -58,6 +58,11 @@ DEFAULT_MAX_POSITION_USD = float(os.environ.get("DEFAULT_MAX_POSITION_USD", "15.
 # then capped by MAX/TRADE (max_position_usd), available collateral, and the
 # per-trader exposure cap. 1.0 = copy 1% of the leader's dollar position.
 DEFAULT_COPY_RATIO_PCT = float(os.environ.get("DEFAULT_COPY_RATIO_PCT", "1.0"))
+# Capital-share follows (followed_traders.sizing_mode = 'capital_share') size
+# each copy from the share of their free cash the leader's bet took: copy =
+# that share × your free cash × this multiplier, then the same caps. 1.0 =
+# the same share of your cash.
+DEFAULT_CAPITAL_MULTIPLIER = float(os.environ.get("DEFAULT_CAPITAL_MULTIPLIER", "1.0"))
 # Price band a leader position must sit in to be copied (skip longshot dust and
 # near-resolved markets). Per-wallet overridable.
 # NOTE: these MUST match the WalletRiskCard UI defaults (frontend) — when a

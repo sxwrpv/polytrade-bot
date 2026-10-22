@@ -114,7 +114,9 @@ Example settings shape:
 
 ```json
 {
+  "sizing_mode": "position_share",
   "copy_ratio_pct": 1,
+  "capital_multiplier": null,
   "max_position_usd": 15,
   "min_leader_position_usd": 0,
   "ignore_below_usd": 2,

@@ -84,6 +84,11 @@ CREATE TABLE IF NOT EXISTS followed_traders (
     max_open_positions INTEGER,                         -- MAX OPEN: cap simultaneous open copies for this trader
     min_price        REAL,                              -- MIN PRICE: skip leader positions priced below this
     max_price        REAL,                              -- MAX PRICE: skip leader positions priced above this
+    -- SIZING: NULL / 'position_share' = leader position × copy_ratio_pct;
+    -- 'capital_share' = the share of their free cash the bet took × your free
+    -- cash × capital_multiplier (copy_engine.cash_share)
+    sizing_mode      TEXT CHECK(sizing_mode IS NULL OR sizing_mode IN ('position_share','capital_share')),
+    capital_multiplier REAL,                            -- MULTIPLIER for capital_share (NULL = config default)
     is_active        INTEGER NOT NULL DEFAULT 1,
     created_at       TEXT NOT NULL,
     UNIQUE(user_id, trader_address)
@@ -421,6 +426,10 @@ MIGRATIONS = (
     "ALTER TABLE wallet_creation_claims ADD COLUMN private_key_enc TEXT",
     "ALTER TABLE wallet_creation_claims ADD COLUMN lease_owner TEXT",
     "ALTER TABLE wallet_creation_claims ADD COLUMN lease_expires_at TEXT",
+    # capital-share sizing (supabase/migrations/0013); NULL keeps position share
+    "ALTER TABLE followed_traders ADD COLUMN sizing_mode TEXT "
+    "CHECK(sizing_mode IS NULL OR sizing_mode IN ('position_share','capital_share'))",
+    "ALTER TABLE followed_traders ADD COLUMN capital_multiplier REAL",
 )
 
 
@@ -506,6 +515,8 @@ CREATE TABLE IF NOT EXISTS followed_traders (
     max_open_positions     INTEGER,
     min_price              DOUBLE PRECISION,
     max_price              DOUBLE PRECISION,
+    sizing_mode            TEXT CHECK(sizing_mode IS NULL OR sizing_mode IN ('position_share','capital_share')),
+    capital_multiplier     DOUBLE PRECISION,
     is_active              INTEGER NOT NULL DEFAULT 1,
     created_at             TEXT NOT NULL,
     UNIQUE(user_id, trader_address)
@@ -720,6 +731,10 @@ ALTER TABLE copy_open_claims ADD COLUMN IF NOT EXISTS last_error TEXT;
 UPDATE copy_open_claims SET claim_id = COALESCE(claim_id, md5(user_id || ':' || token_id)), updated_at = COALESCE(updated_at, claimed_at);
 ALTER TABLE copy_open_claims ALTER COLUMN claim_id SET NOT NULL;
 ALTER TABLE copy_open_claims ALTER COLUMN updated_at SET NOT NULL;
+-- Capital-share sizing (supabase/migrations/0013). NULL keeps position share.
+ALTER TABLE followed_traders ADD COLUMN IF NOT EXISTS sizing_mode TEXT
+    CHECK(sizing_mode IS NULL OR sizing_mode IN ('position_share','capital_share'));
+ALTER TABLE followed_traders ADD COLUMN IF NOT EXISTS capital_multiplier DOUBLE PRECISION;
 
 -- Deny-by-default: enable RLS on every table so a fresh Supabase deploy never
 -- exposes rows through the auto-generated REST/GraphQL API. The bot connects as

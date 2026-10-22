@@ -349,7 +349,7 @@ async def lifespan(app: FastAPI):
     tasks.append(asyncio.create_task(_telemetry_retention_loop(db, stop)))
     if os.environ.get("COPY_ENGINE_AUTOSTART", "1") == "1":
         from backend.config import POLYGON_RPC_URL
-        from backend.core import ctf, detection
+        from backend.core import ctf, detection, leader_cash
         detector = None
         ctf_reader = None
         if POLYGON_RPC_URL:
@@ -365,7 +365,14 @@ async def lifespan(app: FastAPI):
             except Exception as exc:
                 log.error("on-chain claim evidence unavailable (%s); uncertain claims "
                           "will only be adopted or retained", type(exc).__name__)
+        # Capital-share follows size from the leader's free cash on-chain:
+        # POLYGON_RPC_URL when set, else the SDK's public endpoint, as the
+        # redeemer and withdrawals read. No network until such a follow
+        # needs a reading.
+        cash_reader = leader_cash.LeaderCashReader(
+            POLYGON_RPC_URL or redeem.default_rpc_url())
         engine = CopyEngine(db, pm, detector=detector, ctf=ctf_reader,
+                            leader_cash=cash_reader,
                             risk_lock=app.state.copy_risk_lock,
                             position_notifier=app.state.position_notifier,
                             clients=app.state.clients)

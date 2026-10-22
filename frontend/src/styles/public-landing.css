@@ -107,10 +107,12 @@
 .sizer-brand .brand-logo { width: 26px; height: 26px; border-radius: 8px; box-shadow: 0 0 0 1px var(--border); }
 .sizer-tag { font: 500 11px var(--mono); letter-spacing: .12em; color: var(--muted); }
 
+.sizer-mode { margin-bottom: 16px; }
 .sizer-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 .sizer-field { display: grid; gap: 8px; align-content: start; min-width: 0; }
 .sizer-field.is-slider { gap: 0; }
 .sizer-field.is-wide { grid-column: 1 / -1; }
+.sizer-rule { grid-column: 1 / -1; margin: 0; }
 .sizer-field .setting-head { font-size: 14px; font-weight: 600; }
 
 .sizer-out {

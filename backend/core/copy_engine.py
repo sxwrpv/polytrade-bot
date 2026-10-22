@@ -11,6 +11,13 @@ LEADER's own dollar position — notional = leader_position_value × copy_ratio_
 — clamped by MAX/TRADE (max_position_usd), available collateral, the per-trader
 exposure cap, and finally the pre-submission verified-wallet gate.
 
+A follow can opt into capital share instead (followed_traders.sizing_mode,
+owner's call 2026-10-22): the copy takes the share of YOUR free cash that the
+leader's bet took of THEIRS, times a multiplier — notional = cash_share(bet,
+leader free cash) × your free cash × capital_multiplier — then exactly the
+same clamps. Increases are sized the same way; exits keep the proportional
+share rule of both modes.
+
 `plan_actions` is pure (no IO) and exhaustively tested. The engine's collaborators
 (client factory, order placement, collateral lookup) are injectable so the whole
 diff→intent→persist path is verifiable without funds.
@@ -20,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import logging
+import math
 import os
 import time
 import uuid
@@ -33,6 +41,7 @@ from polymarket import errors as pm_errors
 
 from backend.config import (
     COPY_ENGINE_POLL_SECONDS,
+    DEFAULT_CAPITAL_MULTIPLIER,
     DEFAULT_COPY_RATIO_PCT,
     DEFAULT_IGNORE_BELOW_USD,
     DEFAULT_MAX_POSITION_USD,
@@ -46,6 +55,7 @@ from backend.config import (
 from backend.core import detection, execution, wallet, withdraw
 from backend.core.ctf import ChainBalance, ChainHead, CtfError
 from backend.core.health import heartbeats
+from backend.core.leader_cash import LeaderCashError
 from backend.core.locks import KeyedLocks
 from backend.core.polymarket import Position
 from backend.db.database import now_iso
@@ -182,6 +192,31 @@ CLIENT_TRANSPORT_ERRORS = (
 # Planning (pure)
 # ---------------------------------------------------------------------------
 
+# Copy sizing modes (followed_traders.sizing_mode). NULL, and any value other
+# than CAPITAL_SHARE, reads as POSITION_SHARE: the rule every follow had
+# before the column existed.
+POSITION_SHARE = "position_share"
+CAPITAL_SHARE = "capital_share"
+
+
+def cash_share(bet: float, leader_cash: float | None) -> float | None:
+    """The share of the leader's free cash a bet took, 0..1.
+
+    leader_cash is read after the bet settled, so the cash they held just
+    before it is that reading plus the bet: a $2,000 bet with $8,000 left
+    is 2,000 / 10,000 = 20%, and a bet of everything they had is 100%.
+    None when either figure is missing or unusable; capital share then sizes
+    nothing."""
+    if leader_cash is None or bet is None:
+        return None
+    leader_cash, bet = float(leader_cash), float(bet)
+    if not (math.isfinite(leader_cash) and math.isfinite(bet)):
+        return None
+    if leader_cash < 0 or bet <= 0:
+        return None
+    return bet / (leader_cash + bet)
+
+
 @dataclass
 class Action:
     kind: str                 # 'open' | 'close' | 'resize' | 'resolve' | 'reanchor'
@@ -198,6 +233,11 @@ class Action:
     row: dict | None = None              # existing copy_positions row
     trader_address: str = ""             # configured followed wallet (lower-case)
     claim_id: str = ""                   # durable BUY reservation/fencing token
+    # How a BUY was sized, so _prepare_buy can re-derive it from the follow's
+    # settings as they stand when the claim is reserved.
+    sizing_mode: str = POSITION_SHARE
+    capital_weight: float | None = None  # capital share: cash_share of the leader's bet
+    follower_cash: float | None = None   # capital share: the free cash it was applied to
 
 
 def plan_actions(
@@ -218,6 +258,10 @@ def plan_actions(
     min_price: float = DEFAULT_MIN_PRICE,
     max_price: float = DEFAULT_MAX_PRICE,
     positions_complete: bool = True,
+    sizing_mode: str = POSITION_SHARE,
+    multiplier: float = DEFAULT_CAPITAL_MULTIPLIER,
+    leader_cash: float | None = None,
+    recent_buys: frozenset | set | None = None,
 ) -> list[Action]:
     """Diff a leader's live positions against our open copies and emit
     open/close/resize/resolve intents.
@@ -229,6 +273,18 @@ def plan_actions(
     small (min_leader), outside the price band (min_price..max_price), when our
     resulting copy would be dust (ignore_below), or when we're already at the
     MAX OPEN count for this trader.
+
+    Capital share (sizing_mode=CAPITAL_SHARE) replaces the RATIO % step and
+    keeps every clamp after it. An OPEN is cash_share(leader position value,
+    leader_cash) × our free cash × multiplier, for a token in recent_buys only:
+    one the leader bought within MAX_LEADER_TRADE_AGE_SECONDS. The share
+    describes the moment of the bet. For an older position the leader's cash
+    has moved with their other trades since, and a fully invested leader
+    would read every position they hold as most of their cash. An increase is
+    cash_share(the value the leader added, leader_cash) × our free cash ×
+    multiplier. With no leader_cash reading, capital share plans no BUY and
+    keeps the anchor, so the next pass can still follow the increase. Our
+    free cash is what each planned BUY leaves of available_collateral.
     """
     pos_by_token = {p.asset: p for p in trader_positions if p.size > 0}
     rows_by_token = {r["token_id"]: r for r in open_rows}
@@ -240,6 +296,8 @@ def plan_actions(
     if max_total_exposure is not None:   # portfolio exposure cap
         current_exposure = sum(r["notional_usd"] for r in open_rows)
         remaining = min(remaining, max(0.0, max_total_exposure - current_exposure))
+    capital = sizing_mode == CAPITAL_SHARE
+    cash_left = available_collateral
     actions: list[Action] = []
 
     for token, p in pos_by_token.items():
@@ -261,14 +319,25 @@ def plan_actions(
                 continue
             if not (min_price <= p.cur_price <= max_price):  # price-band filter
                 continue
-            # OPEN: copy the leader's dollar position, scaled by RATIO %, capped.
-            amt = min(leader_notional * ratio_pct / 100.0, max_pos, remaining)
+            sizing = {}
+            if capital:
+                weight = cash_share(leader_notional, leader_cash)
+                if token not in (recent_buys or ()) or weight is None:
+                    continue
+                amt = min(weight * cash_left * multiplier, max_pos, remaining)
+                sizing = dict(sizing_mode=CAPITAL_SHARE, capital_weight=weight,
+                              follower_cash=cash_left)
+            else:
+                # OPEN: copy the leader's dollar position, scaled by RATIO %, capped.
+                amt = min(leader_notional * ratio_pct / 100.0, max_pos, remaining)
             if amt > 0 and amt >= dust_floor:
                 actions.append(Action(
                     kind="open", token_id=token, condition_id=p.condition_id,
                     outcome=p.outcome.upper(), side="BUY", amount=amt, notional_usd=amt,
-                    reference_price=p.avg_price, trader_shares=p.size, position=p))
+                    reference_price=p.avg_price, trader_shares=p.size, position=p,
+                    **sizing))
                 remaining -= amt
+                cash_left -= amt
                 open_count += 1
         else:
             # RESIZE: mirror the trader's own change in share count for THIS market.
@@ -276,10 +345,20 @@ def plan_actions(
             ratio = (p.size / base) if base > 0 else 1.0
             if ratio > 1 + resize_threshold:
                 amt = 0.0
+                sizing = {}
                 if not block_opens:
-                    delta_shares = row["shares"] * (ratio - 1)
                     headroom = max_pos - row["notional_usd"]
-                    amt = min(delta_shares * p.cur_price, remaining, headroom)
+                    if capital:
+                        weight = cash_share((p.size - base) * p.cur_price, leader_cash)
+                        if weight is None:
+                            continue        # no reading: keep the anchor, retry next pass
+                        target = weight * cash_left * multiplier
+                        sizing = dict(sizing_mode=CAPITAL_SHARE, capital_weight=weight,
+                                      follower_cash=cash_left)
+                    else:
+                        delta_shares = row["shares"] * (ratio - 1)
+                        target = delta_shares * p.cur_price
+                    amt = min(target, remaining, headroom)
                 # Same floor as _prepare_buy and _clamp_to_verified_position
                 # (the per-wallet IGNORE POSITIONS < $ slider). Planning against
                 # the 1.0 fallback emitted top-ups the reservation step was
@@ -288,8 +367,9 @@ def plan_actions(
                     actions.append(Action(
                         kind="resize", subkind="increase", token_id=token, side="BUY",
                         amount=amt, notional_usd=amt, reference_price=p.cur_price,
-                        trader_shares=p.size, row=row, position=p))
+                        trader_shares=p.size, row=row, position=p, **sizing))
                     remaining -= amt
+                    cash_left -= amt
                 else:
                     # The increase cannot be followed (MAX/TRADE reached, no
                     # cash, opens blocked). Move the anchor to the leader's new
@@ -411,13 +491,24 @@ class CopyEngine:
                  clients: dict | None = None,
                  user_concurrency: int | None = None,
                  detect_concurrency: int | None = None,
-                 ctf=None) -> None:
+                 ctf=None, leader_cash=None) -> None:
         self.db = db
         self.pm = pm
         # On-chain evidence for settling uncertain BUY claims (core/ctf.py,
         # UNCERTAIN_CLAIM_EVIDENCE_SECONDS). None, e.g. without
         # POLYGON_RPC_URL, means uncertain claims only adopt or retain.
         self._ctf = ctf
+        # Leaders' free cash for capital-share follows (core/leader_cash.py):
+        # anything with `async cash_usd(wallet, *, after=None) -> float`.
+        # None means no reading is ever available, so capital-share follows
+        # copy nothing. Only capital-share follows read it.
+        self._leader_cash_reader = leader_cash
+        # trader -> {token: wall-clock deadline}. Tokens the leader bought
+        # recently enough to copy (MAX_LEADER_TRADE_AGE_SECONDS), noted by
+        # the fast path. The reconciler opens capital-share copies of these
+        # only (plan_actions). In memory on purpose: after a restart the
+        # no-backfill seed treats everything the leader holds as old anyway.
+        self._recent_leader_buys: dict[str, dict[str, float]] = {}
         self.poll_interval = poll_interval or COPY_ENGINE_POLL_SECONDS
         self.detection_interval = detection_interval or DETECTION_POLL_SECONDS
         self.detector = detector or detection.ActivityPollDetector(pm)
@@ -879,10 +970,11 @@ class CopyEngine:
                 pass
         self._clients.clear()
         self._collateral_cache.clear()
-        ctf = getattr(self, "_ctf", None)
-        if ctf is not None:
+        for reader in (getattr(self, "_ctf", None), getattr(self, "_leader_cash_reader", None)):
+            if reader is None or getattr(reader, "aclose", None) is None:
+                continue
             try:
-                await ctf.aclose()
+                await reader.aclose()
             except Exception:
                 pass
 
@@ -1023,6 +1115,10 @@ class CopyEngine:
             (user_id, token))
 
         if trade.side.upper() == "BUY":
+            if leader_age <= MAX_LEADER_TRADE_AGE_SECONDS:
+                # A fact about the leader, the same for every follower:
+                # capital-share reconcile opens wait for one (plan_actions).
+                self._note_leader_buy(trader, token, float(trade.timestamp or detected_at))
             if frisk["paused"]:             # pause = no NEW buys…
                 return
             if existing:                    # already in — reconciler handles resize
@@ -1075,6 +1171,24 @@ class CopyEngine:
                 log.info("fast-open skipped %s reason=price_out_of_band (%.3f) trader=%s",
                          token, leader_price or 0, trader[:10])
                 return
+            capital = frisk["sizing_mode"] == CAPITAL_SHARE
+            weight = None
+            if capital:
+                bet = leader_notional
+                if token in getattr(self, "_no_backfill", {}).get((user_id, trader), ()):
+                    # The leader held this market before copying started, so
+                    # only this trade's money came out of their cash now. The
+                    # whole position would read as a bet of old money.
+                    bet = (float(getattr(trade, "usd_size", 0) or 0)
+                           or float(trade.size or 0) * float(trade.price or 0))
+                # Shared by every follower of the trade, and read after it.
+                leader_cash = await self._leader_cash(
+                    trader, after=float(trade.timestamp or detected_at))
+                weight = cash_share(bet, leader_cash)
+                if weight is None:
+                    log.info("fast-open skipped %s reason=leader_cash_unknown trader=%s",
+                             token, trader[:10])
+                    return
 
             client = await self._get_client(user)   # expensive — after the cheap checks
             available, client = await self._spendable_collateral(user, client)
@@ -1094,9 +1208,21 @@ class CopyEngine:
                 log.info("fast-open skipped %s reason=max_open (%d) trader=%s",
                          token, frisk["max_open"], trader[:10])
                 return
-            # RATIO %: copy the leader's dollar position, scaled, then capped.
-            notional = min(leader_notional * frisk["ratio_pct"] / 100.0,
-                           frisk["max_per_trade"], available)
+            sizing = {}
+            if capital:
+                # CAPITAL SHARE: the share of their cash the bet took, of
+                # yours, times the multiplier, then the same caps.
+                notional = min(weight * available * frisk["multiplier"],
+                               frisk["max_per_trade"], available)
+                sizing = dict(sizing_mode=CAPITAL_SHARE, capital_weight=weight,
+                              follower_cash=available)
+                log.info("fast-open capital share %s: bet took %.3f%% of leader cash; "
+                         "free cash %.2f x %.2f trader=%s", token, weight * 100,
+                         available, frisk["multiplier"], trader[:10])
+            else:
+                # RATIO %: copy the leader's dollar position, scaled, then capped.
+                notional = min(leader_notional * frisk["ratio_pct"] / 100.0,
+                               frisk["max_per_trade"], available)
             if frisk["max_exposure"] is not None:   # cap exposure to THIS trader
                 trader_open = sum(r["notional_usd"] for r in trader_open_rows)
                 notional = min(notional, max(0.0, frisk["max_exposure"] - trader_open))
@@ -1120,6 +1246,7 @@ class CopyEngine:
                     redeemable=False, outcome=outcome, slug=slug,
                     title=title),
                 trader_address=trader,
+                **sizing,
             )
             spent = await self._execute(user_id, client, action, slippage=frisk["slippage"])
             if spent:
@@ -1375,6 +1502,15 @@ class CopyEngine:
                 self._no_backfill[key] &= held_now
             preexisting = self._no_backfill[key]
 
+            # Capital share sizes from the leader's free cash, read only when
+            # this pass has something to size with it.
+            recent: frozenset = frozenset()
+            leader_cash = None
+            if frisk["sizing_mode"] == CAPITAL_SHARE and not block_opens:
+                recent = self._recent_buys_of(trader) - preexisting
+                if self._capital_share_due(positions, open_rows, recent):
+                    leader_cash = await self._leader_cash(trader)
+
             actions = plan_actions(
                 positions, open_rows, follow, available,
                 max_total_exposure=frisk["max_exposure"], block_opens=block_opens,
@@ -1382,7 +1518,9 @@ class CopyEngine:
                 min_leader=frisk["min_leader"], ignore_below=frisk["ignore_below"],
                 max_open=frisk["max_open"], min_price=frisk["min_price"],
                 max_price=frisk["max_price"],
-                positions_complete=complete)
+                positions_complete=complete,
+                sizing_mode=frisk["sizing_mode"], multiplier=frisk["multiplier"],
+                leader_cash=leader_cash, recent_buys=recent)
             for action in actions:
                 if action.kind == "open" and action.token_id in preexisting:
                     log.info("reconcile open skipped (predates copying): %s %s %s",
@@ -1392,6 +1530,69 @@ class CopyEngine:
                 spent = await self._execute(user_id, client, action, slippage=frisk["slippage"])
                 if action.side == "BUY":
                     available = max(0.0, available - spent)
+
+    # --- capital share ----------------------------------------------------
+    async def _leader_cash(self, trader: str, *, after: float | None = None) -> float | None:
+        """The leader's free cash in USD, or None when there is no reading
+        (no reader configured, or the chain could not say). Capital share
+        sizes nothing from None, so the copy is skipped."""
+        reader = getattr(self, "_leader_cash_reader", None)
+        if reader is None:
+            log.warning("capital-share copy skipped for %s: no leader cash reader",
+                        trader[:10])
+            return None
+        try:
+            return float(await reader.cash_usd(trader, after=after))
+        except LeaderCashError as exc:
+            log.warning("capital-share copy skipped: leader cash unavailable for %s (%s)",
+                        trader[:10], exc)
+        except Exception as exc:      # a reader bug skips this copy; the pass goes on
+            log.warning("capital-share copy skipped: leader cash read failed for %s (%s)",
+                        trader[:10], type(exc).__name__)
+        return None
+
+    def _note_leader_buy(self, trader: str, token: str, ts: float) -> None:
+        """Remember that the leader bought `token` at unix time `ts`, for as
+        long as the trade stays young enough to copy."""
+        deadline = float(ts) + MAX_LEADER_TRADE_AGE_SECONDS
+        now = time.time()
+        if deadline <= now:
+            return
+        buys = self.__dict__.setdefault("_recent_leader_buys", {})
+        tokens = buys.setdefault(trader, {})
+        tokens[token] = max(tokens.get(token, 0.0), deadline)
+        if len(buys) > 1024:
+            for t in [t for t, noted in buys.items() if max(noted.values(), default=0.0) <= now]:
+                buys.pop(t, None)
+
+    def _recent_buys_of(self, trader: str) -> frozenset:
+        """Tokens the leader bought recently enough to copy."""
+        tokens = self.__dict__.setdefault("_recent_leader_buys", {}).get(trader)
+        if not tokens:
+            return frozenset()
+        now = time.time()
+        for token in [t for t, deadline in tokens.items() if deadline <= now]:
+            tokens.pop(token, None)
+        return frozenset(tokens)
+
+    @staticmethod
+    def _capital_share_due(positions, open_rows: list[dict], recent: frozenset) -> bool:
+        """Whether a capital-share plan has anything to size this pass: a
+        recent leader buy not copied yet, or a copied market the leader grew
+        past RESIZE_THRESHOLD. A quiet pass costs the RPC no read."""
+        rows = {r["token_id"]: r for r in open_rows}
+        for p in positions:
+            if p.size <= 0 or p.redeemable:
+                continue
+            row = rows.get(p.asset)
+            if row is None:
+                if p.asset in recent:
+                    return True
+                continue
+            base = row.get("trader_shares") or p.size
+            if base > 0 and p.size / base > 1 + RESIZE_THRESHOLD:
+                return True
+        return False
 
     # --- fill-or-kill attempt budget --------------------------------------
     @staticmethod
@@ -1753,6 +1954,19 @@ class CopyEngine:
                     return None
                 if await self._opens_blocked(user_id, trader, risk["daily_limit"], store=tx):
                     return None
+                # Sized under one mode, reserved under another: the follow
+                # was switched since planning. The next pass sizes it afresh.
+                if risk["sizing_mode"] != action.sizing_mode:
+                    log.info("buy skipped (sizing mode changed): %s %s",
+                             user_id[:10], action.token_id)
+                    return None
+                capital_cap = None
+                if risk["sizing_mode"] == CAPITAL_SHARE:
+                    if action.capital_weight is None or action.follower_cash is None:
+                        return None
+                    # Re-derived with the multiplier as it stands now.
+                    capital_cap = (float(action.capital_weight) * float(action.follower_cash)
+                                   * risk["multiplier"])
                 open_all = await tx.fetchall(
                     "SELECT * FROM copy_positions WHERE user_id=? "
                     "AND status IN ('open','closing','reconciliation_required')", (user_id,))
@@ -1778,8 +1992,11 @@ class CopyEngine:
                         leader_notional = float(getattr(p, "size", 0) or 0) * price
                     if leader_notional < risk["min_leader"] or not (risk["min_price"] <= price <= risk["max_price"]):
                         return None
-                    allowed = min(allowed, leader_notional * risk["ratio_pct"] / 100.0,
-                                  risk["max_per_trade"])
+                    if capital_cap is not None:
+                        allowed = min(allowed, capital_cap, risk["max_per_trade"])
+                    else:
+                        allowed = min(allowed, leader_notional * risk["ratio_pct"] / 100.0,
+                                      risk["max_per_trade"])
                     floor = risk["ignore_below"]
                 elif action.kind == "resize" and action.subkind == "increase":
                     fresh = await tx.fetchone(
@@ -1788,6 +2005,8 @@ class CopyEngine:
                         return None
                     action = replace(action, row=fresh)
                     allowed = min(allowed, max(0.0, risk["max_per_trade"] - fresh["notional_usd"]))
+                    if capital_cap is not None:
+                        allowed = min(allowed, capital_cap)
                     # Same per-wallet floor as opens (see _clamp_to_verified_position).
                     # Splitting them left this reservation step laxer than the
                     # verified-size gate downstream, so a sub-threshold resize
@@ -2097,7 +2316,14 @@ class CopyEngine:
         exp = follow.get("max_total_exposure_usd")
         lim = follow.get("daily_loss_limit_usd")
         mo = follow.get("max_open_positions")
+        multiplier = _f("capital_multiplier", DEFAULT_CAPITAL_MULTIPLIER)
+        if not math.isfinite(multiplier) or multiplier < 0:
+            multiplier = 0.0          # a value the API refuses: size nothing
         return {
+            # NULL or anything unrecognised is the original rule.
+            "sizing_mode": (CAPITAL_SHARE if follow.get("sizing_mode") == CAPITAL_SHARE
+                            else POSITION_SHARE),
+            "multiplier": multiplier,
             "paused": bool(follow.get("paused")),
             "slippage": validate_slippage_pct(
                 slip if slip is not None else MAX_COPY_SLIPPAGE_PCT,
