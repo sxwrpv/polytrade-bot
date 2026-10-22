@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { api, CURRENT_TERMS_VERSION, haptic, saveSession } from '../api'
 import { useRedeemStatus } from '../redeemStatus'
+import { useWithdrawStatus } from '../withdrawStatus'
 import CopyText from '../components/CopyText'
 import Icon from '../components/Icon'
 import { FundingAccess } from '../components/DepositAddresses'
@@ -25,6 +26,7 @@ function Progress({ step }) {
 
 export default function Onboarding({ onDone }) {
   const redeem = useRedeemStatus()
+  const withdrawals = useWithdrawStatus()
   const [acknowledged, setAcknowledged] = useState(false)
 
   const [result, setResult] = useState(null)
@@ -85,8 +87,8 @@ export default function Onboarding({ onDone }) {
         <article><Icon name="alert" /><b>Real money, real risk</b><p>Trades can lose some or all committed funds. Copy execution may differ, be delayed, or fail; past activity is not a promise of results.</p></article>
         <article><Icon name="globe" /><b>Eligibility &amp; access</b><p>You are responsible for ensuring that Polymarket and this service are permitted where you live and that you meet all applicable eligibility requirements.</p></article>
         <article><Icon name="transfer" /><b>Moving funds</b><p>{redeem.auto
-          ? 'There is no in-app withdrawal. Resolved positions are redeemed automatically. External tools, supported networks, and fees may be required to move funds out.'
-          : 'There is no in-app withdrawal or automatic redemption. External tools, supported networks, and fees may be required.'}</p></article>
+          ? `${withdrawals.open ? 'Withdraw cash from Account as USDC on Polygon.' : 'There is no in-app withdrawal.'} Resolved positions are redeemed automatically. External tools, supported networks, and fees may be required to move funds out.`
+          : `${withdrawals.open ? 'Withdraw cash from Account as USDC on Polygon. There is no automatic redemption.' : 'There is no in-app withdrawal or automatic redemption.'} External tools, supported networks, and fees may be required.`}</p></article>
       </div>
       <label className="ack-row card">
         <span className="ck">

@@ -1059,6 +1059,69 @@ a { color: inherit; }
 @keyframes logo-in { from { opacity: 0; transform: scale(.92); filter: blur(4px); } }
 .launch-state .state-icon { width: 48px; height: 48px; }
 
+/* withdraw (components/Withdraw.jsx) */
+.withdraw-available { display: grid; gap: 4px; margin-bottom: 4px; }
+.withdraw-figure { font-size: 28px; font-weight: 650; letter-spacing: -0.02em; line-height: 1.15; }
+.withdraw-amount-row { display: flex; gap: 8px; align-items: stretch; }
+.withdraw-amount-row input { flex: 1; min-width: 0; }
+.withdraw .notice { margin: 4px 0 12px; }
+.withdraw-error { margin-bottom: 12px; }
+.withdraw-submit .icon { margin-right: 2px; }
+.withdraw-open { display: grid; gap: 6px; padding-bottom: 14px; margin-bottom: 14px; border-bottom: 1px solid var(--border); }
+.withdraw-open-head, .withdraw-progress-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.withdraw-progress-head .mono { font-weight: 600; }
+.withdraw-link { display: inline-flex; align-items: center; gap: 4px; width: fit-content; font-size: 14px; font-weight: 600; color: var(--green-deep); }
+.withdraw-summary { display: grid; margin: 0 0 14px; }
+.withdraw-summary > div { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--border); }
+.withdraw-summary dt { color: var(--muted); font-size: 14px; }
+.withdraw-summary dd { margin: 0; text-align: right; font-weight: 600; }
+.withdraw-summary dd small { display: block; color: var(--muted); font-size: 12px; font-weight: 500; }
+.withdraw-address { margin: 6px 0 2px; line-height: 1.7; letter-spacing: .03em; }
+.withdraw-address b { color: var(--green-deep); font-weight: 700; }
+.withdraw-steps { list-style: none; margin: 16px 0 8px; padding: 0; display: grid; gap: 9px; }
+.withdraw-steps li { display: flex; align-items: center; gap: 10px; font-size: 14px; color: var(--muted); }
+.withdraw-steps li::before {
+  content: ''; width: 10px; height: 10px; flex: none; border-radius: 50%;
+  border: 2px solid var(--border-strong); transition: background-color .3s, border-color .3s;
+}
+.withdraw-steps li[data-state='done'] { color: var(--text); }
+.withdraw-steps li[data-state='done']::before { background: var(--green-deep); border-color: var(--green-deep); }
+.withdraw-steps li[data-state='active'] { color: var(--text); font-weight: 600; }
+.withdraw-steps li[data-state='active']::before { border-color: var(--green-deep); animation: wd-pulse 1.4s ease-in-out infinite; }
+.withdraw-steps li[data-state='warn']::before { background: var(--amber-ink); border-color: var(--amber-ink); }
+.withdraw-steps li[data-state='error']::before { background: var(--red); border-color: var(--red); }
+.withdraw-recent { margin-top: 18px; }
+.withdraw-recent-end { display: inline-flex; align-items: center; gap: 6px; flex: none; }
+
+/* Multi-state status pill (motion kit: buttons/status-badge) on PolyTrade's
+   tokens: icon swaps on the kit's overshoot curve, width eases in JS. */
+.wd-status {
+  --c: var(--muted);
+  display: inline-flex; align-items: center; gap: 7px; height: 28px; padding: 0 11px 0 9px;
+  border-radius: 999px; background: color-mix(in srgb, var(--c) 13%, transparent); color: var(--c);
+  font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden;
+  transition: background-color .3s, color .3s;
+}
+.wd-status[data-tone='processing'] { --c: var(--text); }
+.wd-status[data-tone='success'] { --c: var(--green-deep); }
+.wd-status[data-tone='error'] { --c: var(--red); }
+.wd-status[data-tone='warn'] { --c: var(--amber-ink); }
+.wd-status-icon { position: relative; width: 14px; height: 14px; flex: none; }
+.wd-status-icon > * {
+  position: absolute; inset: 0; width: 14px; height: 14px; opacity: 0; transform: scale(.4);
+  transition: opacity .2s, transform .35s cubic-bezier(.2, 1.5, .3, 1);
+}
+.wd-status-spin { box-sizing: border-box; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: wd-spin .7s linear infinite; }
+.wd-status-dot { inset: 4px; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.wd-status[data-tone='processing'] .wd-status-spin,
+.wd-status[data-tone='success'] .wd-status-ok,
+.wd-status[data-tone='error'] .wd-status-err,
+.wd-status[data-tone='warn'] .wd-status-dot { opacity: 1; transform: none; }
+.wd-status.is-shake { animation: wd-shake .45s; }
+@keyframes wd-spin { to { rotate: 360deg; } }
+@keyframes wd-shake { 20%, 60% { transform: translateX(-4px); } 40%, 80% { transform: translateX(4px); } }
+@keyframes wd-pulse { 50% { box-shadow: 0 0 0 4px var(--green-soft); } }
+
 @media (min-width: 561px) {
   .onboard-terms { grid-template-columns: 1fr 1fr; }
 }

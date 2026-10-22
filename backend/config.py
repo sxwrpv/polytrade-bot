@@ -133,6 +133,31 @@ CREATE_WALLET_RATE_LIMIT = os.environ.get("CREATE_WALLET_RATE_LIMIT", "3/3600")
 # per reconcile pass and a trade poll per detection tick, shared by everyone.
 MAX_FOLLOWS_PER_USER = int(os.environ.get("MAX_FOLLOWS_PER_USER", "25"))
 
+# --- Withdrawals (backend/core/withdraw.py) ---
+# Cash leaves as native USDC on Polygon through Polymarket's bridge. Off until
+# the operator turns it on; turning it off again is the kill switch.
+WITHDRAWALS_ENABLED = os.environ.get("WITHDRAWALS_ENABLED", "0") == "1"
+# Optional allowlist of Telegram user ids (comma-separated), for a first real
+# withdrawal before everyone gets the feature. Empty: every linked account.
+WITHDRAW_ALLOWED_TELEGRAM_IDS = frozenset(
+    int(part) for part in os.environ.get("WITHDRAW_ALLOWED_TELEGRAM_IDS", "").split(",")
+    if part.strip().isdigit())
+# Floor under the bridge's own minimum (its /supported-assets minCheckoutUsd,
+# $2 on Polygon in 2026-10); the higher of the two applies.
+WITHDRAW_MIN_USD = float(os.environ.get("WITHDRAW_MIN_USD", "2"))
+WITHDRAW_MAX_USD = float(os.environ.get("WITHDRAW_MAX_USD", "500"))
+# Per user, over a rolling 24 hours. Failed withdrawals do not count.
+WITHDRAW_DAILY_MAX_USD = float(os.environ.get("WITHDRAW_DAILY_MAX_USD", "1000"))
+WITHDRAW_DAILY_COUNT = int(os.environ.get("WITHDRAW_DAILY_COUNT", "3"))
+# "N/seconds" per user: withdrawal submits, and previews (each one asks the
+# bridge for a quote).
+WITHDRAW_RATE_LIMIT = os.environ.get("WITHDRAW_RATE_LIMIT", "5/3600")
+WITHDRAW_PREVIEW_RATE_LIMIT = os.environ.get("WITHDRAW_PREVIEW_RATE_LIMIT", "30/3600")
+# Maximum age of the Telegram initData that authorizes a withdrawal (seconds).
+WITHDRAW_STEP_UP_MAX_AGE = int(os.environ.get("WITHDRAW_STEP_UP_MAX_AGE", "300"))
+# How long the bridge may take to deliver before an operator is called in.
+WITHDRAW_BRIDGE_TIMEOUT = float(os.environ.get("WITHDRAW_BRIDGE_TIMEOUT", "1800"))
+
 # --- Local UI preview (Vite + Mobile Preview extension) ---
 # Enables POST /api/auth/dev-login and seeds a local-only wallet when the DB
 # is empty. Never set in production.

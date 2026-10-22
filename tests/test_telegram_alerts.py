@@ -8,8 +8,44 @@ from unittest.mock import AsyncMock
 
 from backend.core.copy_engine import Action, CopyEngine
 from backend.core.execution import OrderResult
-from backend.core.telegram_alerts import TelegramPositionNotifier, format_position_alert
+from backend.core.telegram_alerts import (
+    TelegramPositionNotifier, format_alert, format_position_alert, format_withdrawal_alert,
+)
 from backend.db.database import Database, now_iso
+
+DESTINATION = "0x3c3C3c3C3c3C3C3c3C3c3c3c3c3C3C3c3c3C3c3C"
+
+
+class WithdrawalAlertTests(unittest.TestCase):
+    def event(self, kind: str, **extra) -> dict:
+        return {"event": f"withdrawal_{kind}", "user_id": "0xwallet", "withdrawal_id": "w1",
+                "amount_usd": "25.00", "destination": DESTINATION, **extra}
+
+    def test_each_step_has_its_own_status_line(self):
+        expected = {"requested": "WITHDRAWAL REQUESTED", "bridging": "WITHDRAWAL ON ITS WAY",
+                    "confirmed": "WITHDRAWAL DELIVERED", "failed": "WITHDRAWAL NOT SENT",
+                    "attention": "WITHDRAWAL NEEDS A CHECK"}
+        for kind, status in expected.items():
+            text = format_alert(self.event(kind, tx_hash="0x" + "f7" * 32,
+                                           delivered_usd="24.99"))
+            self.assertIn(status, text, kind)
+            self.assertIn("0x3c3C…3c3C", text, kind)
+            self.assertNotIn(DESTINATION[2:].lower(), text.lower(), kind)
+
+    def test_delivery_links_the_transaction_and_failures_carry_the_reason(self):
+        delivered = format_withdrawal_alert(self.event("confirmed", delivered_usd="24.99",
+                                                       tx_hash="0x" + "e8" * 32))
+        self.assertIn("24.99 USDC", delivered)
+        self.assertIn("https://polygonscan.com/tx/0x" + "e8" * 32, delivered)
+        failed = format_withdrawal_alert(self.event("failed", reason="Not sent: <busy>"))
+        self.assertIn("$25.00", failed)
+        self.assertIn("stayed in your PolyTrade wallet", failed)
+        self.assertIn("Not sent: &lt;busy&gt;", failed)
+
+    def test_position_events_keep_their_own_format(self):
+        text = format_alert({"event": "opened", "market_title": "M", "outcome": "YES",
+                             "shares": 1, "entry_price": .5, "notional_usd": 1})
+        self.assertIn("POSITION OPENED", text)
 
 
 class TelegramAlertTests(unittest.IsolatedAsyncioTestCase):

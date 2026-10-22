@@ -71,6 +71,16 @@ export const api = {
   // pass the CURRENT initData so the backend can re-verify the human.
   exportKey: (initData) =>
     req('/user/export-key', { method: 'POST', body: JSON.stringify({ init_data: initData }) }),
+  // Withdrawals: native USDC on Polygon. Sending one needs the same fresh
+  // Telegram step-up proof as key export, so the CURRENT initData goes along.
+  withdrawals: () => req('/user/withdrawals'),
+  previewWithdrawal: (body) => req('/user/withdrawals/preview', {
+    method: 'POST', body: JSON.stringify(body),
+  }),
+  createWithdrawal: (body, initData) => req('/user/withdrawals', {
+    method: 'POST', body: JSON.stringify({ ...body, init_data: initData }),
+  }),
+  withdrawal: (id) => req(`/user/withdrawals/${encodeURIComponent(id)}`),
   // Already-copied wallets and their controls. Discovery lives on the public
   // read-only /screener surface rather than in the authenticated Mini App.
   following: () => req('/traders/following'),

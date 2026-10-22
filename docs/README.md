@@ -31,7 +31,7 @@ Read the complete [Getting Started](getting-started.md) walkthrough before fundi
 - **Custody:** PolyTrade creates and stores an encrypted signer so the service can place unattended orders. This makes the wallet custodial: PolyTrade holds the key that signs for it.
 - **Eligibility:** You are responsible for being legally eligible to use Polymarket and PolyTrade. A website geoblock signal may be advisory; the exchange makes its own order decision.
 - **Execution can differ:** Copying a profitable wallet does not reproduce its price, timing, size, hedges, or return. Orders may be skipped or fail.
-- **No in-app withdrawal:** PolyTrade does not expose a withdrawal API or in-app withdrawal workflow. Key export requires fresh Telegram verification, and using an exported signer requires understanding the wallet model.
+- **Withdrawals:** **Account → Withdraw** sends cash out as native USDC on Polygon after a fresh Telegram check. Key export requires fresh Telegram verification, and using an exported signer requires understanding the wallet model.
 - **Automatic redemption:** PolyTrade redeems resolved positions about every 30 minutes. Winnings return to your spendable balance and lost positions are cleared from the wallet.
 - **Pause is not liquidation:** Pausing, disabling, or unfollowing blocks new buys; it does not sell existing positions.
 

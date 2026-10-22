@@ -81,6 +81,21 @@ Prefer same-origin. Do not use wildcard CORS for credentialed workflows.
 - `REDEEM_CONCURRENCY` — users redeemed at once; default 2.
 - `REDEEM_RETRY_SECONDS` — wait before retrying a failed or unconfirmed redeem; default six hours.
 
+## Withdrawals
+
+Withdrawals send cash out as native USDC on Polygon through Polymarket's bridge (`backend/core/withdraw.py`). They need the builder credentials and run on the single production worker only.
+
+- `WITHDRAWALS_ENABLED` — default off. `1` offers withdrawals and starts their reconcile loop; `0` again is the kill switch. `/api/version` reports `withdrawals.open`, and the homepage and Mini App word withdrawals from it.
+- `WITHDRAW_ALLOWED_TELEGRAM_IDS` — comma-separated Telegram user ids. When set, only those accounts can withdraw and `withdrawals.open` stays false; use it for a first real withdrawal.
+- `WITHDRAW_MIN_USD` — floor under the bridge's own minimum; default `2`. The higher of the two applies.
+- `WITHDRAW_MAX_USD` — per withdrawal; default `500`.
+- `WITHDRAW_DAILY_MAX_USD` and `WITHDRAW_DAILY_COUNT` — per user over a rolling 24 hours; defaults `1000` and `3`. Failed withdrawals do not count.
+- `WITHDRAW_RATE_LIMIT` and `WITHDRAW_PREVIEW_RATE_LIMIT` — per user, `N/seconds`; defaults `5/3600` and `30/3600`.
+- `WITHDRAW_STEP_UP_MAX_AGE` — maximum age of the Telegram launch data that authorizes a withdrawal; default 300 seconds.
+- `WITHDRAW_BRIDGE_TIMEOUT` — how long the bridge may take to deliver before a withdrawal needs an operator; default 1800 seconds.
+
+`POLYGON_RPC_URL` is used for receipts and balances when set; otherwise the SDK's public Polygon endpoint is.
+
 ## Database
 
 - `DATABASE_URL` — async Postgres connection string.

@@ -40,7 +40,7 @@ Request deposit addresses in **User**, use only an asset and network shown as su
 
 Deposits convert into Polymarket collateral (shown as pUSD). Conversion and indexing are not instant, and a matching address format is not proof that a token or network is supported.
 
-There is no withdrawal API and no in-app withdrawal workflow. Read [Wallet and Funding](wallet-and-funding.md) before depositing.
+Withdrawals leave from **Account → Withdraw** as native USDC on Polygon. Read [Wallet and Funding](wallet-and-funding.md) before depositing.
 
 ## 5. Choose a source wallet
 
@@ -87,7 +87,7 @@ Resolved positions are redeemed automatically about every 30 minutes: winnings r
 - [ ] I understand my ratio, position cap, price, slippage, exposure, and loss limits.
 - [ ] I reviewed the source wallet's concentration and data limitations.
 - [ ] I know pausing does not sell existing positions.
-- [ ] I know there is no in-app withdrawal, and that resolved positions are redeemed automatically.
+- [ ] I know withdrawals pay out native USDC on Polygon, and that resolved positions are redeemed automatically.
 
 ## Next step
 

@@ -92,6 +92,58 @@ def format_position_alert(event: dict) -> str:
     return "\n".join(lines)
 
 
+def _short_address(address) -> str:
+    text = str(address or "").strip()
+    return f"{text[:6]}…{text[-4:]}" if len(text) > 12 else text
+
+
+def format_withdrawal_alert(event: dict) -> str:
+    """One message per withdrawal step (backend/core/withdraw.py), laid out
+    like the position alerts. The destination appears shortened only."""
+    kind = str(event.get("event", "")).removeprefix("withdrawal_")
+    amount = html.escape(str(event.get("amount_usd") or "0.00"))
+    to = html.escape(_short_address(event.get("destination")))
+    tx = str(event.get("tx_hash") or "").strip()
+    link = (f'<a href="https://polygonscan.com/tx/{html.escape(tx, quote=True)}">'
+            "View transaction on Polygonscan</a>") if tx else ""
+    if kind == "requested":
+        status = "🟡 <b>WITHDRAWAL REQUESTED</b>"
+        facts = [f"Amount: <b>${amount}</b>", f"To: <b>{to}</b> on Polygon",
+                 "Arrives as: <b>USDC</b>"]
+        footer = "Not you? Secure your Telegram account right away."
+    elif kind == "bridging":
+        status = "🔵 <b>WITHDRAWAL ON ITS WAY</b>"
+        facts = [f"Sent: <b>${amount}</b> from your PolyTrade wallet",
+                 f"To: <b>{to}</b> on Polygon"]
+        footer = "The bridge is converting it to USDC. This usually takes under a minute."
+    elif kind == "confirmed":
+        status = "✅ <b>WITHDRAWAL DELIVERED</b>"
+        delivered = html.escape(str(event.get("delivered_usd") or amount))
+        facts = [f"Delivered: <b>{delivered} USDC</b>", f"To: <b>{to}</b> on Polygon"]
+        footer = link
+    elif kind == "attention":
+        status = "🟠 <b>WITHDRAWAL NEEDS A CHECK</b>"
+        facts = [f"Amount: <b>${amount}</b>", f"To: <b>{to}</b> on Polygon"]
+        footer = ("It left your PolyTrade wallet, and the bridge has not confirmed delivery "
+                  "yet. PolyTrade is following up with the bridge provider.")
+    else:
+        status = "🔴 <b>WITHDRAWAL NOT SENT</b>"
+        facts = [f"Amount: <b>${amount}</b> stayed in your PolyTrade wallet",
+                 f"To: <b>{to}</b> on Polygon"]
+        reason = str(event.get("reason") or "").strip()
+        footer = html.escape(reason) if reason else ""
+    lines = [status, "<blockquote>" + "\n".join(facts) + "</blockquote>"]
+    if footer:
+        lines.append(footer)
+    return "\n".join(lines)
+
+
+def format_alert(event: dict) -> str:
+    if str(event.get("event", "")).startswith("withdrawal_"):
+        return format_withdrawal_alert(event)
+    return format_position_alert(event)
+
+
 class TelegramAPIError(RuntimeError):
     """A failed sendMessage, described WITHOUT the request URL.
 
@@ -160,7 +212,8 @@ class TelegramPositionNotifier:
                         await asyncio.sleep(
                             min(30.0, max(self.RATE_LIMIT_FLOOR_SECONDS, exc.retry_after)))
             except Exception:
-                log.exception("position alert failed for %s", event.get("position_id"))
+                log.exception("alert failed for %s",
+                              event.get("position_id") or event.get("withdrawal_id"))
             finally:
                 self._queue.task_done()
             await asyncio.sleep(self.SEND_INTERVAL_SECONDS)
@@ -176,7 +229,7 @@ class TelegramPositionNotifier:
                 f"https://api.telegram.org/bot{self.bot_token}/sendMessage",
                 json={
                     "chat_id": int(chat_id),
-                    "text": format_position_alert(event),
+                    "text": format_alert(event),
                     "parse_mode": "HTML",
                     "disable_web_page_preview": True,
                 },

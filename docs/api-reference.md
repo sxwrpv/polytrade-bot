@@ -91,8 +91,14 @@ Rate limiting is process-local and resets on restart. Never submit wallet creati
 - `GET /api/user/settings`
 - `POST /api/user/settings`
 - `POST /api/user/export-key`
+- `GET /api/user/withdrawals`
+- `POST /api/user/withdrawals/preview`
+- `POST /api/user/withdrawals`
+- `GET /api/user/withdrawals/{id}`
 
 Export requires a linked Telegram identity and `initData` no older than five minutes. Treat the response as a secret.
+
+`GET /api/user/withdrawals` returns whether withdrawals are offered to the account, the available amount and its parts, the limits left today, the open withdrawal and the latest ten. `preview` takes `{amount, destination}`, runs every check and returns the bridge's quote without reserving anything. `POST /api/user/withdrawals` takes `{amount, destination, confirm_last4, idempotency_key, init_data}` and answers `202` with the withdrawal; the same key returns the same withdrawal, and the same key with a different amount or address answers `409`. It needs `initData` from the linked Telegram account no older than five minutes. Statuses: `requested`, `submitting`, `submitted`, `bridging`, `confirmed`, `failed`, `attention`, `refunded`.
 
 ## Trader routes
 

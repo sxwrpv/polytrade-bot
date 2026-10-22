@@ -10,6 +10,9 @@ Env toggles (useful for tests/dev):
                                into pUSD (default off; see backend/core/redeem.py)
   REDEEM_LOSSES=0              with that loop on, leave resolved losses in the
                                wallet (default 1: clear them for $0)
+  WITHDRAWALS_ENABLED=1        offer withdrawals to native USDC on Polygon and
+                               run their reconcile loop (default off; see
+                               backend/core/withdraw.py)
 """
 from __future__ import annotations
 
@@ -28,9 +31,11 @@ from fastapi.staticfiles import StaticFiles
 from backend.config import (
     CORS_ALLOW_ORIGINS, DB_PATH, DEV_PREVIEW, ENCRYPTION_SECRET, POLYMARKET_BUILDER_API_KEY,
     POLYMARKET_BUILDER_PASSPHRASE, POLYMARKET_BUILDER_SECRET, TELEGRAM_BOT_TOKEN,
+    WITHDRAW_ALLOWED_TELEGRAM_IDS, WITHDRAWALS_ENABLED,
 )
 from backend.core import (
     auth, dev_preview, equity, redeem, runtime_security, telemetry, trader_stats, wallet,
+    withdraw,
 )
 from backend.core.health import heartbeats, upstream
 from backend.core.copy_engine import CopyEngine
@@ -253,6 +258,28 @@ async def _redeem_loop(app, stop: asyncio.Event) -> None:
         await chain.aclose()
 
 
+# Seconds between passes over open withdrawals no request task is moving.
+WITHDRAW_RECONCILE_SECONDS = 30.0
+
+
+async def _withdraw_loop(app, stop: asyncio.Event) -> None:
+    """Move every open withdrawal forward that no request task is moving: the
+    ones a restart orphaned, and bridge deliveries still being tracked (see
+    backend/core/withdraw.py). A heartbeat per completed pass."""
+    heartbeats.register("withdrawals", WITHDRAW_RECONCILE_SECONDS)
+    service = app.state.withdrawer
+    while not stop.is_set():
+        try:
+            await service.reconcile()
+            heartbeats.mark("withdrawals")
+        except Exception:
+            log.exception("withdrawal reconcile pass failed (continuing)")
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=WITHDRAW_RECONCILE_SECONDS)
+        except asyncio.TimeoutError:
+            pass
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Before anything opens a file: make new DB/WAL/log files owner-only, then
@@ -360,6 +387,26 @@ async def lifespan(app: FastAPI):
             log.warning("REDEEM_AUTOSTART=1 but no builder credentials are set; "
                         "redeeming needs the gasless relayer, so the loop is not started")
 
+    # Off unless asked for, like redeeming: it moves real money out. Run it on
+    # the single production worker only.
+    app.state.withdrawer = None
+    if WITHDRAWALS_ENABLED:
+        if _gasless_configured():
+            from backend.config import POLYGON_RPC_URL
+            engine = getattr(app.state, "engine", None)
+            app.state.withdrawer = withdraw.Withdrawer(
+                db, client_for=_shared_client_factory(app),
+                chain=withdraw.PolygonReader(POLYGON_RPC_URL or redeem.default_rpc_url()),
+                bridge=withdraw.BridgeClient(),
+                notify=app.state.position_notifier, risk_lock=app.state.copy_risk_lock,
+                on_funds_moved=engine.invalidate_collateral if engine is not None else None,
+                allowlist=WITHDRAW_ALLOWED_TELEGRAM_IDS)
+            withdraw.STATUS["open"] = not WITHDRAW_ALLOWED_TELEGRAM_IDS
+            tasks.append(asyncio.create_task(_withdraw_loop(app, stop)))
+        else:
+            log.warning("WITHDRAWALS_ENABLED=1 but no builder credentials are set; "
+                        "withdrawals need the gasless relayer, so they stay off")
+
     try:
         yield
     finally:
@@ -369,6 +416,11 @@ async def lifespan(app: FastAPI):
                 await asyncio.wait_for(task, timeout=10)
             except (asyncio.TimeoutError, asyncio.CancelledError):
                 pass
+        withdrawer = getattr(app.state, "withdrawer", None)
+        if withdrawer is not None:
+            await withdrawer.aclose()
+            await withdrawer.chain.aclose()
+            await withdrawer.bridge.aclose()
         # close cached per-user CLOB clients (API cache + engine cache)
         for client in app.state.clients.values():
             try:
@@ -520,6 +572,9 @@ async def version():
         # Whether resolved positions are redeemed here without the user: the
         # Mini App and the homepage word redemption from this.
         "redeem": dict(redeem.STATUS),
+        # Whether every linked account can withdraw in the app; the wording
+        # about withdrawals follows it.
+        "withdrawals": dict(withdraw.STATUS),
     }
 
 
@@ -565,6 +620,10 @@ async def ready(response: Response):
             checks["positions_reconciliation_required"] = await db.fetchval(
                 "SELECT COUNT(*) FROM copy_positions "
                 "WHERE status='reconciliation_required'") or 0
+            # Withdrawals whose pUSD left the wallet without a confirmed
+            # delivery: an operator follows them up (backend/core/withdraw.py).
+            checks["withdrawals_attention"] = await db.fetchval(
+                "SELECT COUNT(*) FROM withdrawals WHERE status='attention'") or 0
         except Exception as exc:
             checks["counts_error"] = type(exc).__name__
 

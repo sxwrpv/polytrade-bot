@@ -7,7 +7,7 @@ This page explains what PolyTrade controls, how to deposit safely, and what the 
 - PolyTrade creates a signer and stores its private key encrypted so the service can place trades without asking you to sign each order. **This is custodial.**
 - Start only from [@cpolytrade_bot](https://t.me/cpolytrade_bot), create the wallet in the Telegram Mini App, and back up the signer key offline.
 - Deposit only with an asset/network route displayed in **User**, and send a small test first.
-- PolyTrade does not expose a withdrawal API or in-app withdrawal workflow.
+- **Account → Withdraw** sends cash out as native USDC on Polygon to an address you enter. A transfer that has reached the chain cannot be reversed.
 - PolyTrade redeems resolved positions automatically about every 30 minutes.
 
 A wallet address, visible balance, or successful deposit does not remove market, custody, smart-contract, infrastructure, or total-loss risk.
@@ -58,9 +58,20 @@ Blockchain transfers generally cannot be reversed. PolyTrade cannot guarantee re
 
 Conversion, public indexing, and displayed values can lag. These balances are operational views and are unaudited. If values disagree, compare the source transaction and live wallet state before attempting another transfer or trade.
 
-## Withdrawals and direct control
+## Withdraw
 
-PolyTrade does not expose a withdrawal API or in-app withdrawal workflow. Do not assume that a cash balance can be transferred out inside PolyTrade.
+**Account → Withdraw** sends cash from your PolyTrade wallet to an address you enter. It arrives as native USDC on Polygon: Polymarket's bridge converts the wallet's pUSD and pays the address you gave.
+
+1. Enter a Polygon address you control and an amount. The panel shows what you can withdraw: your cash, minus money held for open copy orders, fills still settling on-chain, and any withdrawal in progress.
+2. Review it. PolyTrade asks the bridge for a quote and shows the USDC you receive, with the quoted minimum.
+3. Retype the last 4 characters of the address and confirm. A fresh Telegram check, no older than five minutes, authorizes the withdrawal.
+4. Follow it: sending from your wallet, converting on the bridge, delivered. Telegram messages you at each step, with a Polygonscan link once the USDC arrives.
+
+Limits: from the bridge minimum ($2) to $500 per withdrawal, and up to $1,000 and three withdrawals per 24 hours, one at a time. Exchanges list native USDC as USDC on the Polygon network; check that network before you paste an exchange deposit address. A transfer that has reached the chain cannot be reversed.
+
+If the bridge has not confirmed delivery within 30 minutes, the withdrawal shows **Needs a check**, and PolyTrade follows it up with the bridge provider. If **Account** has no Withdraw section, withdrawals are switched off on this server.
+
+## Direct control
 
 Users who need direct control can export the signer private key after fresh Telegram verification and use compatible external tools. Before doing so, understand that the signer and gasless deposit/funder wallet may differ. An exported key is a permanent secret; anyone who obtains it may control the signer, and PolyTrade cannot rotate or revoke a copied key.
 

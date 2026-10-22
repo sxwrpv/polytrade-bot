@@ -7,6 +7,7 @@ import Modal from '../components/Modal'
 import Folder from '../components/Folder'
 import Icon from '../components/Icon'
 import { FundingAccess } from '../components/DepositAddresses'
+import WithdrawPanel from '../components/Withdraw'
 import { Notice, StateBlock, describeError } from '../components/UiState'
 import { performLogout } from '../authBootstrap'
 import { redeemWithin, useRedeemStatus } from '../redeemStatus'
@@ -189,6 +190,14 @@ export default function User({ onLogout }) {
       <Folder id="user-fund" title="Fund wallet">
         <FundingAccess gasless={(me || profile)?.gasless} />
       </Folder>
+
+      {/* Present only for accounts the server offers withdrawals to; the
+          panel loads its balances when the folder opens. */}
+      {(me || profile)?.withdrawals_enabled && (
+        <Folder id="user-withdraw" title="Withdraw">
+          <WithdrawPanel />
+        </Folder>
+      )}
 
       <Folder id="user-performance" title="Performance" open>
         {pnlError ? (

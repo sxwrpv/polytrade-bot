@@ -21,6 +21,18 @@ Do not publish or document IP-only operational access. Keep backend ports, dashb
 - [Wallet and Funding](wallet-and-funding.md) — signer/funder relationship, deposit boundaries, export, and redemption.
 - [Troubleshooting: copy engine and orders](troubleshooting.md) — reconcile uncertain outcomes before any retry.
 
+## Withdrawals
+
+Withdrawals are off until `WITHDRAWALS_ENABLED=1` (see [Configuration](configuration.md)). A withdrawal whose pUSD left the wallet without a confirmed delivery moves to `attention`: the app logs `WITHDRAW ATTENTION` at ERROR, Telegram tells the user PolyTrade is following up, and `/api/ready` counts it under `withdrawals_attention`. Two unresolved ones pause withdrawals for everyone.
+
+Follow it up with the bridge provider using the bridge address and transaction hash from the log, then close it inside the app container:
+
+    docker compose exec app python -m backend.core.withdraw list
+    docker compose exec app python -m backend.core.withdraw resolve <id> --delivered <tx_hash> --yes
+    docker compose exec app python -m backend.core.withdraw resolve <id> --refunded "<what came back, where>" --yes
+
+`--delivered` checks the transaction on Polygon before it marks the withdrawal confirmed. Without `--yes` both are dry runs.
+
 ## Non-negotiable operating rules
 
 - Protect `.env`, the database, backups, Telegram token, Builder credentials, and `ENCRYPTION_SECRET` as secrets.

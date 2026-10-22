@@ -446,6 +446,29 @@ class CopySafetyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("closing", persisted["status"])
         self.assertEqual(0, await self.db.fetchval("SELECT COUNT(*) FROM trade_events"))
 
+    async def test_buy_sizing_leaves_out_pusd_that_withdrawals_still_hold(self):
+        # A withdrawal holds its pUSD in the wallet until its transfer
+        # confirms; a copy BUY must not be sized from that money. Confirmed
+        # and failed withdrawals hold nothing (the balance already shows it).
+        for n, (status, units) in enumerate((("submitted", 12_500_000),
+                                             ("confirmed", 7_000_000),
+                                             ("failed", 3_000_000))):
+            await self.db.execute(
+                "INSERT INTO withdrawals(id,user_id,idempotency_key,amount_units,destination,"
+                "to_chain_id,to_token,status,requested_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (f"w{n}", USER, f"key-{n:05d}", units, "0x" + "3" * 40, 137, "usdc", status,
+                 now_iso(), now_iso()))
+
+        async def collateral(client):
+            return 50.0
+
+        engine = CopyEngine(self.db, fake_pm(), collateral_fn=collateral)
+        user = await self.db.fetchone("SELECT * FROM users WHERE id=?", (USER,))
+        available, _ = await engine._spendable_collateral(user, object())
+        self.assertAlmostEqual(available, 37.5)
+        raw, _ = await engine._read_collateral(user, object())
+        self.assertEqual(raw, 50.0)
+
 
 if __name__ == "__main__":
     unittest.main()

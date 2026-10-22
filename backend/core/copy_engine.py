@@ -43,7 +43,7 @@ from backend.config import (
     MAX_COPY_SLIPPAGE_PCT,
     validate_slippage_pct,
 )
-from backend.core import detection, execution, wallet
+from backend.core import detection, execution, wallet, withdraw
 from backend.core.ctf import ChainBalance, ChainHead, CtfError
 from backend.core.health import heartbeats
 from backend.core.locks import KeyedLocks
@@ -1077,7 +1077,7 @@ class CopyEngine:
                 return
 
             client = await self._get_client(user)   # expensive — after the cheap checks
-            available, client = await self._read_collateral(user, client)
+            available, client = await self._spendable_collateral(user, client)
             # Same definition of capital at risk as _sync_user and
             # _prepare_buy: a row mid-close still holds real shares, and a
             # reconciliation_required row may represent an order that DID
@@ -1312,7 +1312,7 @@ class CopyEngine:
         if not user:
             return
         client = await self._get_client(user)
-        available, client = await self._read_collateral(user, client)
+        available, client = await self._spendable_collateral(user, client)
         # Capital at risk, not just settled positions: a row mid-close still
         # holds real shares, and a reconciliation_required row may represent an
         # order that DID fill. The fast-detection path already counted all
@@ -2168,6 +2168,19 @@ class CopyEngine:
         """Called the moment we put money on the wire, so the next decision
         sizes against a fresh balance rather than the pre-spend one."""
         self._collateral_cache.pop(user_id, None)
+
+    def invalidate_collateral(self, user_id: str) -> None:
+        """For the withdrawal service: a withdrawal was reserved or its pUSD
+        left the wallet, so the cached balance is out of date."""
+        self._invalidate_collateral(user_id)
+
+    async def _spendable_collateral(self, user: dict, client) -> tuple[float, object]:
+        """What a BUY may be sized from: the collateral reading minus the pUSD
+        that withdrawals still hold in the wallet (reserved or sent but not yet
+        confirmed). Without this, a copy could spend money that is leaving."""
+        value, client = await self._read_collateral(user, client)
+        held = await withdraw.held_units(self.db, user["id"])
+        return max(0.0, float(value) - held / withdraw.UNITS_PER_USD), client
 
     async def _read_collateral(self, user: dict, client, *,
                                allow_cached: bool = True) -> tuple[float, object]:

@@ -177,6 +177,13 @@ class FrontendStorageTests(unittest.TestCase):
         self.assertIn("exportKey: (initData)", source)
         self.assertIn("init_data: initData", source)
 
+    def test_withdrawal_sends_telegram_step_up_proof(self):
+        # Moving money out needs the same proof as revealing the key: a stolen
+        # session alone must not be able to withdraw.
+        source = (Path(__file__).parents[1] / "frontend/src/api.js").read_text()
+        self.assertIn("createWithdrawal: (body, initData)", source)
+        self.assertIn("{ ...body, init_data: initData }", source)
+
 
 if __name__ == "__main__":
     unittest.main()

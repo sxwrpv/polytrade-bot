@@ -168,6 +168,51 @@ CREATE INDEX IF NOT EXISTS idx_product_events_name_ts
     ON product_events(event_name, ts);
 CREATE INDEX IF NOT EXISTS idx_product_events_ts ON product_events(ts);
 
+-- One row per withdrawal request: pUSD out of the custodial deposit wallet,
+-- delivered as native USDC on Polygon by Polymarket's bridge (see
+-- backend/core/withdraw.py). The row is the audit trail. Status only moves
+-- forward, each step stamps its own *_at, and rows are never deleted.
+CREATE TABLE IF NOT EXISTS withdrawals (
+    id               TEXT PRIMARY KEY,
+    user_id          TEXT NOT NULL REFERENCES users(id),
+    idempotency_key  TEXT NOT NULL,                     -- one per confirm screen, from the client
+    amount_units     INTEGER NOT NULL CHECK(amount_units > 0),   -- pUSD base units (6 dp)
+    destination      TEXT NOT NULL,                     -- checksummed; logged only shortened
+    to_chain_id      INTEGER NOT NULL,
+    to_token         TEXT NOT NULL,
+    status           TEXT NOT NULL CHECK(status IN ('requested','submitting','submitted',
+                         'bridging','confirmed','failed','attention','refunded')),
+    quote_id         TEXT,
+    quoted_out_units INTEGER,                           -- the bridge's estimate
+    min_out_units    INTEGER,                           -- the bridge's minimum after slippage
+    bridge_address   TEXT,                              -- where the pUSD is sent
+    bridge_baseline  INTEGER,                           -- transactions already at that address
+    relayer_tx_id    TEXT,
+    tx_hash          TEXT,                              -- the pUSD transfer
+    submit_block     INTEGER,
+    bridge_status    TEXT,                              -- last status the bridge reported
+    delivery_tx_hash TEXT,                              -- the bridge's USDC delivery
+    delivered_units  INTEGER,
+    error            TEXT,
+    operator_note    TEXT,
+    requested_at     TEXT NOT NULL,
+    submitting_at    TEXT,
+    submitted_at     TEXT,
+    bridging_at      TEXT,
+    confirmed_at     TEXT,
+    failed_at        TEXT,
+    attention_at     TEXT,
+    updated_at       TEXT NOT NULL,
+    UNIQUE(user_id, idempotency_key)
+);
+-- One open withdrawal per user; 'attention' stays open until an operator
+-- resolves it.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_withdrawals_open_per_user
+    ON withdrawals(user_id)
+    WHERE status IN ('requested','submitting','submitted','bridging','attention');
+CREATE INDEX IF NOT EXISTS idx_withdrawals_user_requested
+    ON withdrawals(user_id, requested_at);
+
 CREATE TABLE IF NOT EXISTS trader_cache (
     address           TEXT PRIMARY KEY,                -- proxyWallet
     display_name      TEXT,                            -- userName
@@ -260,7 +305,8 @@ CREATE INDEX IF NOT EXISTS idx_trader_cache_fill_exit_ratio_30d ON trader_cache(
 
 TABLES = ("users", "user_consents", "funding_acknowledgements",
           "wallet_creation_claims", "followed_traders", "copy_positions",
-          "copy_open_claims", "trade_events", "product_events", "trader_cache")
+          "copy_open_claims", "trade_events", "product_events", "withdrawals",
+          "trader_cache")
 
 # Idempotent ALTERs for DBs created before a column existed (CREATE TABLE IF NOT
 # EXISTS won't add columns to an existing table). Applied at startup; "duplicate
@@ -533,6 +579,45 @@ CREATE INDEX IF NOT EXISTS idx_product_events_name_ts
     ON product_events(event_name, ts);
 CREATE INDEX IF NOT EXISTS idx_product_events_ts ON product_events(ts);
 
+CREATE TABLE IF NOT EXISTS withdrawals (
+    id               TEXT PRIMARY KEY,
+    user_id          TEXT NOT NULL REFERENCES users(id),
+    idempotency_key  TEXT NOT NULL,
+    amount_units     BIGINT NOT NULL CHECK(amount_units > 0),
+    destination      TEXT NOT NULL,
+    to_chain_id      INTEGER NOT NULL,
+    to_token         TEXT NOT NULL,
+    status           TEXT NOT NULL CHECK(status IN ('requested','submitting','submitted',
+                         'bridging','confirmed','failed','attention','refunded')),
+    quote_id         TEXT,
+    quoted_out_units BIGINT,
+    min_out_units    BIGINT,
+    bridge_address   TEXT,
+    bridge_baseline  INTEGER,
+    relayer_tx_id    TEXT,
+    tx_hash          TEXT,
+    submit_block     BIGINT,
+    bridge_status    TEXT,
+    delivery_tx_hash TEXT,
+    delivered_units  BIGINT,
+    error            TEXT,
+    operator_note    TEXT,
+    requested_at     TEXT NOT NULL,
+    submitting_at    TEXT,
+    submitted_at     TEXT,
+    bridging_at      TEXT,
+    confirmed_at     TEXT,
+    failed_at        TEXT,
+    attention_at     TEXT,
+    updated_at       TEXT NOT NULL,
+    UNIQUE(user_id, idempotency_key)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_withdrawals_open_per_user
+    ON withdrawals(user_id)
+    WHERE status IN ('requested','submitting','submitted','bridging','attention');
+CREATE INDEX IF NOT EXISTS idx_withdrawals_user_requested
+    ON withdrawals(user_id, requested_at);
+
 CREATE TABLE IF NOT EXISTS trader_cache (
     address           TEXT PRIMARY KEY,
     display_name      TEXT,
@@ -657,4 +742,5 @@ ALTER TABLE equity_snapshots ENABLE ROW LEVEL SECURITY;
 -- product_events readable and writable through the auto-generated API
 -- (migration 0009 covered databases built from migrations).
 ALTER TABLE product_events   ENABLE ROW LEVEL SECURITY;
+ALTER TABLE withdrawals      ENABLE ROW LEVEL SECURITY;
 """

@@ -34,7 +34,7 @@ A manual close can also fail — it is a fill-or-kill order with a price floor. 
 ## Funding, withdrawal, and redemption boundaries
 
 - Deposit only through a displayed supported asset/network route, and test with a small amount first.
-- There is no withdrawal API and no in-app withdrawal workflow.
+- Withdrawals pay out native USDC on Polygon through Polymarket's bridge. Each one needs a fresh Telegram check and the address's last 4 characters retyped, and stays within the per-withdrawal and daily limits. A transfer that has reached the chain cannot be reversed.
 - Exporting a private key is not a withdrawal; it requires understanding the signer/funder relationship.
 - Resolved positions are redeemed automatically about every 30 minutes; until the next pass, winnings show as claimable.
 

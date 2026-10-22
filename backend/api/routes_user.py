@@ -1,4 +1,4 @@
-"""/api/user/* — wallet onboarding, profile, PnL, settings, key export."""
+"""/api/user/* — wallet onboarding, profile, PnL, settings, key export, withdrawals."""
 from __future__ import annotations
 
 import asyncio
@@ -11,9 +11,12 @@ import aiosqlite
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
-from backend.config import CREATE_WALLET_RATE_LIMIT, ENCRYPTION_SECRET, TELEGRAM_BOT_TOKEN
+from backend.config import (
+    CREATE_WALLET_RATE_LIMIT, ENCRYPTION_SECRET, TELEGRAM_BOT_TOKEN,
+    WITHDRAW_PREVIEW_RATE_LIMIT, WITHDRAW_RATE_LIMIT, WITHDRAW_STEP_UP_MAX_AGE,
+)
 from backend.core.client_identity import client_identity
-from backend.core import auth, equity as equity_mod, pnl as pnl_mod, wallet
+from backend.core import auth, equity as equity_mod, pnl as pnl_mod, wallet, withdraw
 from backend.api.deps import get_current_user, get_db, get_pm, get_user_client
 from backend.db.database import now_iso
 
@@ -372,7 +375,10 @@ async def me(request: Request, balance: bool = False,
             # deposit wallet (gasless) vs EOA fallback — cheap DB-only check,
             # no client build needed: a deposit wallet's funder != its signer.
             "gasless": user["id"] != user["signer_address"],
-            "telegram_linked": user.get("telegram_user_id") is not None}
+            "telegram_linked": user.get("telegram_user_id") is not None,
+            # The Account page shows its Withdraw section only when true.
+            "withdrawals_enabled": bool(
+                _withdrawer(request) and _withdrawer(request).offered_to(user))}
 
 
 @router.post("/funding-acknowledgement")
@@ -559,3 +565,114 @@ async def export_key(body: ExportKeyBody, user=Depends(get_current_user)):
                          "the stored signer", str(user.get("id"))[:10])
             raise HTTPException(409, "wallet key integrity check failed — contact support")
     return {"private_key": pk}
+
+
+# --- withdrawals (backend/core/withdraw.py) ---------------------------------
+
+_withdraw_hits: dict[str, list[float]] = {}
+_preview_hits: dict[str, list[float]] = {}
+
+
+def _rate_limited(hits: dict[str, list[float]], key: str, spec: str) -> bool:
+    """Sliding window per key: "N/seconds" (single process, like create-wallet)."""
+    limit_s, _, window_s = spec.partition("/")
+    limit, window = int(limit_s), float(window_s or 3600)
+    now = time.time()
+    recent = [t for t in hits.get(key, []) if now - t < window]
+    limited = len(recent) >= limit
+    if not limited:
+        recent.append(now)
+    hits[key] = recent
+    return limited
+
+
+class WithdrawalPreviewBody(BaseModel):
+    amount: str = Field(..., max_length=32)          # dollars, e.g. "25.50"
+    destination: str = Field(..., max_length=64)     # a 0x address on Polygon
+
+
+class WithdrawalBody(WithdrawalPreviewBody):
+    confirm_last4: str = Field(..., max_length=8)    # retyped by the user on the confirm screen
+    idempotency_key: str = Field(..., max_length=64)
+    # Fresh Telegram initData from the linked account, as for key export: a
+    # session alone can read the account but cannot move money out of it.
+    init_data: str = Field(..., max_length=4096)
+
+
+def _withdrawer(request: Request):
+    state = getattr(getattr(request, "app", None), "state", None)
+    return getattr(state, "withdrawer", None)
+
+
+def _retrieve(task: asyncio.Task) -> None:
+    """Collect the result of a withdrawal task whose request went away."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None and not isinstance(exc, withdraw.WithdrawRefused):
+        log.error("withdrawal request failed after its client left (%s)", type(exc).__name__)
+
+
+@router.get("/withdrawals")
+async def withdrawals(request: Request, user=Depends(get_current_user)):
+    """The Withdraw panel: availability, free balance and its parts, limits,
+    the open withdrawal and the latest ten."""
+    service = _withdrawer(request)
+    if service is None:
+        return {"enabled": False, "asset": "USDC", "chain": "Polygon", "recent": []}
+    return await service.summary(user)
+
+
+@router.post("/withdrawals/preview")
+async def preview_withdrawal(body: WithdrawalPreviewBody, request: Request,
+                             user=Depends(get_current_user)):
+    """Every check a withdrawal makes, plus the bridge's quote. Reserves nothing."""
+    service = _withdrawer(request)
+    if service is None:
+        raise HTTPException(503, "Withdrawals are switched off.")
+    if _rate_limited(_preview_hits, user["id"], WITHDRAW_PREVIEW_RATE_LIMIT):
+        raise HTTPException(429, "Too many previews. Try again later.")
+    try:
+        return await service.preview(user, body.amount, body.destination)
+    except withdraw.WithdrawRefused as exc:
+        raise HTTPException(exc.status, exc.message) from None
+
+
+@router.post("/withdrawals", status_code=202)
+async def create_withdrawal(body: WithdrawalBody, request: Request,
+                            user=Depends(get_current_user)):
+    """Send cash out as native USDC on Polygon. Needs a fresh Telegram step-up
+    from the linked account (WITHDRAW_STEP_UP_MAX_AGE, the key-export check).
+    The send runs in its own task, so a client that disconnects mid-request
+    cannot cut it off between reserving and recording the relayer's answer."""
+    service = _withdrawer(request)
+    if service is None:
+        raise HTTPException(503, "Withdrawals are switched off.")
+    if _rate_limited(_withdraw_hits, user["id"], WITHDRAW_RATE_LIMIT):
+        raise HTTPException(429, "Too many withdrawal attempts. Try again later.")
+    linked = user.get("telegram_user_id")
+    if not linked or not TELEGRAM_BOT_TOKEN:
+        raise HTTPException(403, "Open PolyTrade from the Telegram bot to withdraw.")
+    tg_user = auth.validate_init_data(
+        body.init_data, TELEGRAM_BOT_TOKEN, max_age=WITHDRAW_STEP_UP_MAX_AGE)
+    if not tg_user or int(tg_user.get("id", 0)) != int(linked):
+        log.warning("withdraw step-up REJECTED for %s", str(user.get("id"))[:10])
+        raise HTTPException(403, "Telegram verification failed or expired. Reopen PolyTrade "
+                                 "from Telegram and try again.")
+    task = asyncio.create_task(service.request(
+        user, amount=body.amount, destination=body.destination,
+        confirm_last4=body.confirm_last4, idempotency_key=body.idempotency_key))
+    task.add_done_callback(_retrieve)
+    try:
+        return await asyncio.shield(task)
+    except withdraw.WithdrawRefused as exc:
+        raise HTTPException(exc.status, exc.message) from None
+
+
+@router.get("/withdrawals/{withdrawal_id}")
+async def get_withdrawal(withdrawal_id: str, request: Request, user=Depends(get_current_user)):
+    service = _withdrawer(request)
+    row = await service.get(user, withdrawal_id) if service is not None else None
+    if row is None:
+        raise HTTPException(404, "withdrawal not found")
+    return row

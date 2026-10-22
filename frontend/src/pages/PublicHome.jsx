@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import SiteSwitcher from '../components/SiteSwitcher'
 import { redeemMinutes, useRedeemStatus } from '../redeemStatus'
+import { useWithdrawStatus } from '../withdrawStatus'
 // The homepage's own styles travel in this lazily loaded chunk, so a Mini App
 // launch inside Telegram never downloads them.
 import '../styles/public-landing.css'
@@ -182,6 +183,7 @@ const LIFECYCLE = [
 export default function PublicHome() {
   useReveal()
   const redeem = useRedeemStatus()
+  const withdrawals = useWithdrawStatus()
   const cadence = useRef(null)
   useTimelineScrub(cadence)
   return (
@@ -366,8 +368,8 @@ export default function PublicHome() {
             <article className="rise" style={{ '--i': 0 }}><strong>Real-money risk</strong><p>Prediction-market positions can lose some or all of the money committed. Past wallet activity does not predict future results.</p></article>
             <article className="rise" style={{ '--i': 1 }}><strong>Custodial wallet</strong><p>PolyTrade creates and operates a wallet for you. Review the security model and protect access to your Telegram account.</p></article>
             <article className="rise" style={{ '--i': 2 }}><strong>Funding and withdrawals</strong><p>{redeem.auto
-              ? `There is no in-app withdrawal. Resolved positions are redeemed automatically about every ${redeemMinutes(redeem)} minutes. Exiting and moving funds may require external tools and network fees.`
-              : 'There is no in-app withdrawal or automatic redemption. Exiting and moving funds may require external tools and network fees.'}</p></article>
+              ? `${withdrawals.open ? 'Withdraw cash from Account as USDC on Polygon.' : 'There is no in-app withdrawal.'} Resolved positions are redeemed automatically about every ${redeemMinutes(redeem)} minutes. Exiting and moving funds may require external tools and network fees.`
+              : `${withdrawals.open ? 'Withdraw cash from Account as USDC on Polygon. There is no automatic redemption.' : 'There is no in-app withdrawal or automatic redemption.'} Exiting and moving funds may require external tools and network fees.`}</p></article>
             <article className="rise" style={{ '--i': 3 }}><strong>Eligibility is your responsibility</strong><p>Use only where Polymarket and this service are legally available to you. Geographic and other restrictions may apply.</p></article>
           </div>
         </section>

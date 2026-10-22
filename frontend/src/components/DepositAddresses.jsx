@@ -5,6 +5,7 @@ import ChainIcon from './ChainIcon'
 import CopyText from './CopyText'
 import { Notice } from './UiState'
 import { useRedeemStatus } from '../redeemStatus'
+import { useWithdrawStatus } from '../withdrawStatus'
 
 const SHORT_LABEL = { evm: 'EVM', svm: 'Solana', tron: 'Tron', btc: 'Bitcoin' }
 
@@ -12,6 +13,7 @@ const SHORT_LABEL = { evm: 'EVM', svm: 'Solana', tron: 'Tron', btc: 'Bitcoin' }
 // route starts closed, and the backend independently enforces the durable ack.
 export function FundingAccess({ gasless }) {
   const redeem = useRedeemStatus()
+  const withdrawals = useWithdrawStatus()
   const [acknowledged, setAcknowledged] = useState(false)
   const [rows, setRows] = useState(null)
   const [err, setErr] = useState('')
@@ -41,8 +43,8 @@ export function FundingAccess({ gasless }) {
       <div className="security-check card">
         <h2>Before you fund</h2>
         <p>Only send supported assets using the exact chain and address shown. Start small and verify the transfer. {redeem.auto
-          ? 'PolyTrade does not provide in-app withdrawals, and resolved positions are redeemed automatically; moving funds out may require external tools and network fees.'
-          : 'PolyTrade does not provide in-app withdrawals or automatic redemption; moving or redeeming funds may require external tools and network fees.'}</p>
+          ? `${withdrawals.open ? 'Withdrawals from Account pay out USDC on Polygon' : 'PolyTrade does not provide in-app withdrawals'}, and resolved positions are redeemed automatically; moving funds out may require external tools and network fees.`
+          : `${withdrawals.open ? 'Withdrawals from Account pay out USDC on Polygon. PolyTrade does not provide automatic redemption' : 'PolyTrade does not provide in-app withdrawals or automatic redemption'}; moving or redeeming funds may require external tools and network fees.`}</p>
         <label className="ack-row">
           <span className="ck">
             <input type="checkbox" checked={acknowledged} onChange={(event) => setAcknowledged(event.target.checked)} />
@@ -68,8 +70,8 @@ export function FundingAccess({ gasless }) {
       </p>
       <div className="notice-box funding-disclosure">
         {redeem.auto
-          ? 'PolyTrade does not offer in-app withdrawals. Resolved positions are redeemed automatically. Moving funds out may require external tools, a supported network, and network fees.'
-          : 'PolyTrade does not offer in-app withdrawals or automatic redemption. Moving funds may require external tools, a supported network, and network fees.'}
+          ? `${withdrawals.open ? 'Withdraw from Account: cash arrives as USDC on Polygon.' : 'PolyTrade does not offer in-app withdrawals.'} Resolved positions are redeemed automatically. Moving funds out may require external tools, a supported network, and network fees.`
+          : `${withdrawals.open ? 'Withdraw from Account: cash arrives as USDC on Polygon. PolyTrade does not offer automatic redemption.' : 'PolyTrade does not offer in-app withdrawals or automatic redemption.'} Moving funds may require external tools, a supported network, and network fees.`}
       </div>
       <div className="seg" role="group" aria-label="Deposit network" style={{ '--n': rows.length, '--i': index }}>
         {rows.map((row) => (
