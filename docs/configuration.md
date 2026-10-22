@@ -80,6 +80,8 @@ Prefer same-origin. Do not use wildcard CORS for credentialed workflows.
 - `REDEEM_SECONDS` — default 30 minutes.
 - `REDEEM_CONCURRENCY` — users redeemed at once; default 2.
 - `REDEEM_RETRY_SECONDS` — wait before retrying a failed or unconfirmed redeem; default six hours.
+- `DEPOSIT_ALERTS_AUTOSTART` — default on wherever `TELEGRAM_BOT_TOKEN` is set. The bot messages a user once for each deposit that lands in their wallet, with the amount and a Polygonscan link (`backend/core/deposits.py`). It only reads Polygon, through `POLYGON_RPC_URL` when set and otherwise the SDK's public endpoint. `0` turns it off.
+- `DEPOSIT_POLL_SECONDS` — how often it reads newly finalized blocks; default 30 seconds.
 
 ## Withdrawals
 

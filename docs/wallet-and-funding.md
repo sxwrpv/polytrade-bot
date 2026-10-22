@@ -37,6 +37,8 @@ Wallet creation can return before every upstream readiness check succeeds. An ad
 6. Wait for conversion and indexing.
 7. Verify the cash balance before sending more.
 
+When a deposit reaches your PolyTrade wallet, the bot messages you in Telegram with the amount and a Polygonscan link.
+
 The Bridge API may provide EVM, Solana, Bitcoin, and Tron address families. An address family does not mean every token on that network is supported.
 
 ### Avoid irreversible mistakes
