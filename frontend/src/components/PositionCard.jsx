@@ -1,6 +1,7 @@
 import Icon from './Icon'
 import { dollars } from '../money'
 import { redeemWithin } from '../redeemStatus'
+import { marketUrl, openMarketLink } from '../polymarketLink'
 
 const short = (a) => (a ? `${a.slice(0, 6)}…${a.slice(-4)}` : '')
 const cents = (v) => (v == null ? '—' : `${(v * 100).toFixed(1)}¢`)
@@ -46,9 +47,10 @@ export default function PositionCard({ p, closed, onRequestClose, redeem = { aut
           <h3 className="pc-title">
             {p.market_slug ? (
               <a
-                href={`https://polymarket.com/event/${p.market_slug}`}
+                href={marketUrl(p.market_slug)}
                 target="_blank"
                 rel="noopener noreferrer"
+                onClick={openMarketLink}
                 title="View market on polymarket.com"
               >
                 {title}

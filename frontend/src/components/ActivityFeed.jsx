@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { api } from '../api'
 import { ErrorState, Notice, SkeletonCards, StateBlock } from './UiState'
 import { dollars } from '../money'
+import { marketUrl, openMarketLink } from '../polymarketLink'
 
 const short = (a) => (a ? `${a.slice(0, 6)}…${a.slice(-4)}` : '')
 const money = (v) => `${(v || 0) >= 0 ? '+' : '−'}$${dollars(Math.abs(v || 0))}`
@@ -64,13 +65,16 @@ export default function ActivityFeed() {
                 {VERB[r.event_type] || r.event_type}
               </span>
               <span className="feed-title">
-                <a
-                  href={`https://polymarket.com/event/${r.market_slug}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  {r.market_title || 'Market'}
-                </a>
+                {r.market_slug ? (
+                  <a
+                    href={marketUrl(r.market_slug)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={openMarketLink}
+                  >
+                    {r.market_title || 'Market'}
+                  </a>
+                ) : (r.market_title || 'Market')}
               </span>
               <span className={`feed-amount ${r.pnl != null ? (r.pnl >= 0 ? 'pos' : 'neg') : ''}`}>
                 {r.pnl != null ? money(r.pnl) : `$${dollars(r.amount_usd || 0)}`}

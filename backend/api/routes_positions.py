@@ -92,7 +92,7 @@ async def open_positions(user=Depends(get_current_user), db=Depends(get_db), pmc
                 "id": None, "external": False, "origin": "pending_buy",
                 "token_id": token,
                 "market_title": p.title if p else None,
-                "market_slug": (p.event_slug or p.slug) if p else None,
+                "market_slug": (p.slug or p.event_slug) if p else None,
                 "outcome": (p.outcome or "").upper() if p else "",
                 "shares": p.size if p else 0.0,
                 "entry_price": p.avg_price if p else None,
@@ -140,7 +140,7 @@ async def open_positions(user=Depends(get_current_user), db=Depends(get_db), pmc
         history = history_by_token.get(p.asset)
         rows.append({
             "id": None, "external": True, "token_id": p.asset,
-            "market_title": p.title, "market_slug": p.event_slug or p.slug,
+            "market_title": p.title, "market_slug": p.slug or p.event_slug,
             "outcome": (p.outcome or "").upper(), "shares": p.size,
             "entry_price": p.avg_price, "notional_usd": round(p.initial_value, 2),
             "current_price": p.cur_price, "unrealized_pnl": round(p.cash_pnl, 2),
@@ -188,7 +188,7 @@ async def closed_positions(user=Depends(get_current_user), db=Depends(get_db),
         unclaimed.append({
             "id": None, "external": True, "claimable": True,
             "token_id": p.asset, "market_title": p.title,
-            "market_slug": p.event_slug or p.slug,
+            "market_slug": p.slug or p.event_slug,
             "outcome": (p.outcome or "").upper(), "shares": p.size,
             "entry_price": p.avg_price, "notional_usd": round(p.initial_value, 2),
             # settled: cur_price is the resolution price (~1 won / ~0 lost) and
@@ -252,7 +252,7 @@ async def close_external_position(body: CloseExternalBody, request: Request,
                 "market_slug,market_title,outcome,shares,entry_price,notional_usd,status,opened_at) "
                 "VALUES(?,?,?,?,?,?,?,?,?,?,?,'closing',?)",
                 (position_id, user["id"], MANUAL_TRADER, p.condition_id, body.token_id,
-                 p.event_slug or p.slug, p.title, (p.outcome or "").upper(), p.size,
+                 p.slug or p.event_slug, p.title, (p.outcome or "").upper(), p.size,
                  p.avg_price, round(p.initial_value, 2), ts))
     except aiosqlite.IntegrityError:
         raise HTTPException(409, "position is already being closed")
@@ -289,7 +289,7 @@ async def close_external_position(body: CloseExternalBody, request: Request,
                 raise RuntimeError("external SELL event insertion affected an unexpected row count")
         await _notify_position(request, {
             "event": "closed", "user_id": user["id"], "position_id": position_id,
-            "market_title": p.title, "market_slug": p.event_slug or p.slug,
+            "market_title": p.title, "market_slug": p.slug or p.event_slug,
             "outcome": (p.outcome or "").upper(), "shares": result.filled_shares,
             "entry_price": p.avg_price, "exit_price": result.avg_price,
             "realized_pnl": pnl, "trader_address": MANUAL_TRADER,

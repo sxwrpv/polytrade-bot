@@ -85,7 +85,9 @@ def format_position_alert(event: dict) -> str:
     lines = [status, "", f"<b>{title}</b>", "<blockquote>" + "\n".join(facts) + "</blockquote>"]
     footer = [part for part in (_source(event.get("trader_address")),) if part]
     if slug:
-        safe_url = "https://polymarket.com/event/" + html.escape(slug, quote=True)
+        # /market/<market slug> opens the market inside its event for single-
+        # and multi-outcome events alike; /event/ takes the EVENT slug.
+        safe_url = "https://polymarket.com/market/" + html.escape(slug, quote=True)
         footer.append(f'<a href="{safe_url}">View market on Polymarket</a>')
     if footer:
         lines.append(" · ".join(footer))
