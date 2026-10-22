@@ -14,13 +14,16 @@ costing an extra API call.
 `amount` semantics: for BUY it is the pUSD notional to spend; for SELL it is the
 number of shares to sell. The client (AsyncSecureClient) is natively async — no
 asyncio.to_thread needed, unlike the old py-clob-client(-v2)-based version.
+wallet.make_clob_client builds every client as a TradingClient, which signs a
+market BUY's amounts on the exchange's grid (market_buy_amounts).
 """
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
 
+from polymarket import AsyncSecureClient
 from polymarket.errors import RequestRejectedError
 
 from backend.config import (
@@ -149,17 +152,74 @@ def ceil_decimal_to_tick(value: Decimal, tick: Decimal) -> Decimal:
     return (value / tick).to_integral_value(rounding=ROUND_CEILING) * tick
 
 
-# The two CLOB answers to POST /order that prove the order never executed.
-# Each is the exchange's verdict on the order we sent, given before anything
-# matched: a FOK that cannot fill completely is killed whole, and the balance /
-# allowance check runs before matching. polymarket-client 0.6.0 raises them as
-# RequestRejectedError(status=400) carrying the server's text, or returns them
-# as RejectedOrder(code='fok_not_filled' / 'not_enough_balance')
-# (polymarket/models/clob/order_response.py). Its only retry re-posts the SAME
-# signed order once, after a 400 allowance shortfall
-# (polymarket/_internal/actions/orders/place.py), so the error we see is the
-# last of at most two refusals. Production, 2026-10-19: all five fences behind
-# these texts held 0 shares on-chain and in the indexer.
+# ---------------------------------------------------------------------------
+# Market BUY amounts on the exchange's grid
+# ---------------------------------------------------------------------------
+# The CLOB takes a market (FOK/FAK) BUY only when the pUSD it offers, the maker
+# amount, has at most 2 decimals and the shares it asks for, the taker amount,
+# at most 4. Otherwise POST /order answers 400 with _INVALID_AMOUNTS (the same
+# text and status are in github.com/Polymarket/rs-clob-client/issues/261).
+# polymarket-client 0.6.0 floors the spend to cents, then asks for
+# spend / max_price shares rounded up to the decimals its table gives the
+# market's tick size (_ROUNDING_BY_TICK, polymarket/_internal/actions/orders/
+# context.py): 3 at tick 0.1 and 4 at 0.01, both within the rule; 5 at 0.005
+# and 0.001 and 6 at 0.0025 and 0.0001. On those finer ticks 81-98% of spends
+# from $1 to $20 broke the rule across every price: $10.00 capped at 0.987
+# asked for 10.13172 shares. Production, 2026-10-22 15:20Z: two accounts, one
+# token, $10.00 each, both refused and fenced as uncertain.
+#
+# Rounding the shares up to 4 decimals keeps the whole spend and adds under
+# 0.0001 shares, so the order's price (maker / taker) can only fall and a
+# capped BUY stays at or below its cap. On a 0.01 tick the SDK already rounds
+# this way. Shaving the spend until spend / max_price fit 4 decimals was
+# measured too: at caps 0.961-0.999 it cost over 2% of the order for one BUY in
+# ten and over 15% for one in a hundred, and some spends had no fit at all.
+_CENT = 10_000        # 0.01 pUSD in base units (both amounts carry 6 decimals)
+_SHARE_STEP = 100     # 0.0001 shares in base units
+
+
+def market_buy_amounts(maker: int, taker: int) -> tuple[int, int]:
+    """A market BUY's (maker, taker) base units on the CLOB's grid: the pUSD
+    offered rounds down to a cent and the shares asked round up to 0.0001.
+    Both moves can only lower maker / taker, the order's price. On a 0.01 or
+    0.1 tick the SDK's amounts are already on the grid and come back
+    unchanged."""
+    return maker // _CENT * _CENT, -(-taker // _SHARE_STEP) * _SHARE_STEP
+
+
+class TradingClient(AsyncSecureClient):
+    """AsyncSecureClient that signs every market BUY on the CLOB's grid
+    (market_buy_amounts). wallet.make_clob_client builds every client as one.
+
+    The amounts are part of the signed order, so _sign_order is the last place
+    they can change. In polymarket-client 0.6.0 it is the one signing step for
+    limit (GTC/GTD) and market (FOK/FAK) orders, and it receives the draft the
+    SDK priced. Only FOK/FAK BUY drafts change here.
+    tests/test_execution_price_band.py sends a real BUY through this class and
+    reads the order that reaches POST /order, so an SDK release that signs
+    somewhere else fails that test."""
+
+    async def _sign_order(self, draft, *, post_only: bool):
+        if draft.side == "BUY" and draft.order_type in ("FOK", "FAK"):
+            maker, taker = market_buy_amounts(draft.offered_amount, draft.requested_amount)
+            draft = replace(draft, offered_amount=maker, requested_amount=taker)
+        return await super()._sign_order(draft, post_only=post_only)
+
+
+# The CLOB answers to POST /order that prove the order never executed. Each is
+# the exchange's verdict on the order we sent, given before anything matched:
+# a FOK that cannot fill completely is killed whole, and the balance /
+# allowance check and the check of a market order's amounts (see
+# market_buy_amounts) run before matching. polymarket-client 0.6.0 raises them
+# as RequestRejectedError(status=400) carrying the server's text, or returns
+# the first two as RejectedOrder(code='fok_not_filled' / 'not_enough_balance')
+# (polymarket/models/clob/order_response.py). It has no code for the amounts
+# text: in a 200 body that text would come back as RejectedOrder(code=
+# 'unknown'), the code a delayed order gets too, so only its 400 counts. The
+# SDK's only retry re-posts the SAME signed order once, after a 400 allowance
+# shortfall (polymarket/_internal/actions/orders/place.py), so the error we see
+# is the last of at most two refusals. Production, 2026-10-19: all five fences
+# behind the first two texts held 0 shares on-chain and in the indexer.
 #
 # Everything else after submission stays uncertain: transport errors and
 # timeouts, rate limits, 5xx, a 4xx with any other text, and the "rejected"
@@ -168,18 +228,23 @@ def ceil_decimal_to_tick(value: Decimal, tick: Decimal) -> Decimal:
 # placement status, not a refusal.
 _FOK_NOT_FILLED = "order couldn't be fully filled. FOK orders are fully filled or killed."
 _NOT_ENOUGH_BALANCE = "not enough balance / allowance"
+_INVALID_AMOUNTS = ("invalid amounts, the market buy orders maker amount supports a max "
+                    "accuracy of 2 decimals, taker amount a max of 4 decimals")
 
 
 def _terminal_rejection(message: str) -> str:
-    """'fok_not_filled' or 'not_enough_balance' when `message` is one of those
-    two verdicts, else ''. The FOK text must match exactly (a trailing period
-    is optional); the balance text is a prefix, because the server may append
-    the balance or allowance figures. A reworded message stays uncertain."""
+    """'fok_not_filled', 'not_enough_balance' or 'invalid_amounts' when
+    `message` is one of those verdicts, else ''. The FOK and amounts texts must
+    match exactly (a trailing period is optional); the balance text is a
+    prefix, because the server may append the balance or allowance figures. A
+    reworded message stays uncertain."""
     text = (message or "").strip()
     if text.rstrip(".") == _FOK_NOT_FILLED.rstrip("."):
         return "fok_not_filled"
     if text.startswith(_NOT_ENOUGH_BALANCE):
         return "not_enough_balance"
+    if text.rstrip(".") == _INVALID_AMOUNTS:
+        return "invalid_amounts"
     return ""
 
 
@@ -207,7 +272,8 @@ def _finalize(res: "OrderResult", resp, side: str) -> None:
         # The production cap incident proved that a post-submit "rejected"
         # response is not, in general, evidence that no shares arrived (a
         # delayed order can come back as RejectedOrder(code='unknown')). The
-        # SDK's codes for the two terminal verdicts are, but only on a BUY.
+        # SDK's codes for the FOK and balance verdicts are, but only on a BUY.
+        # It has none for the amounts verdict (see _terminal_rejection).
         rejection = _terminal_rejection(message) if side == "BUY" else ""
         if rejection and code == rejection:
             res.exchange_rejection = rejection
@@ -384,7 +450,7 @@ async def place_market_order(
         # We crossed the SDK's submission boundary, so an exception is ambiguous
         # (the engine retains its durable claim and reconciles before any
         # retry) unless it is the exchange's own terminal verdict on a BUY: a
-        # 400 carrying one of the two texts in _terminal_rejection, meaning the
+        # 400 carrying one of the texts in _terminal_rejection, meaning the
         # order was refused outright and nothing executed. A 4xx with any other
         # text stays ambiguous: the 2026-08-23 cap incident (three BUYs
         # reported failed, all filled) is why that is the default. Preflight
