@@ -930,6 +930,7 @@ button.hm-cell.is-pinned { box-shadow: 0 0 0 2px var(--green-deep); z-index: 3; 
 /* ---------- account ------------------------------------------------------- */
 .account-row { display: grid; gap: 6px; }
 .account-row + .account-row { margin-top: 14px; }
+.account-row:first-child { margin-top: 0; }
 .account-label { font-size: 13px; font-weight: 600; color: var(--muted); }
 .account-balances { margin-top: 16px; }
 .card > .notice { margin-top: 12px; }

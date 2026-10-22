@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { api, getWallet, clearWallet } from '../api'
-import CopyText from '../components/CopyText'
+import { api, clearWallet } from '../api'
 import StatGrid from '../components/StatGrid'
 import PnlHeatmap from '../components/PnlHeatmap'
 import Modal from '../components/Modal'
@@ -34,7 +33,6 @@ export default function User({ onLogout }) {
   const [loggingOut, setLoggingOut] = useState(false)
   const [reload, setReload] = useState(0)
   const savedName = useRef(null)
-  const addr = getWallet()
 
   useEffect(() => {
     // paint the profile immediately, upgrade with balance when it lands (the
@@ -111,10 +109,6 @@ export default function User({ onLogout }) {
     <div>
       <Folder id="user-account" title="Account" open>
         <div className="card">
-          <div className="account-row">
-            <span className="account-label">Wallet</span>
-            <CopyText value={addr} display={addr ? `${addr.slice(0, 10)}…${addr.slice(-8)}` : '—'} label="Copy wallet address" />
-          </div>
           <label className="fld account-row">
             Display name
             <input
