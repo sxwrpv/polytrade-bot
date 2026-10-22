@@ -11,7 +11,9 @@ fenced, no SELL of the position could run. Now:
   - (2026-10-22) so is a market BUY refused for the decimals of its amounts,
     and execution.TradingClient signs every market BUY within them;
   - (2026-10-23) TradingClient signs every market SELL within them too, and a
-    SELL the exchange refuses still stays uncertain for stuck-closing recovery.
+    SELL the exchange refuses still stays uncertain for stuck-closing recovery;
+  - (2026-10-23) a market BUY signs at its cap or a hair above it, so it lifts
+    an ask resting exactly there, which a copy at the leader's own price needs.
 """
 from __future__ import annotations
 
@@ -767,6 +769,15 @@ class ThousandthTickBook(Book):
                          neg_risk=False, last_trade_price=0.975)
 
 
+class LeaderPriceBook(Book):
+    """A 0.01-tick book whose best ask is 0.30, what the leader just paid."""
+
+    async def get_orderbook(self, token_id):
+        return OrderBook(token_id=token_id, condition_id=COND, bids=(Level(0.29, 1000),),
+                         asks=(Level(0.30, 1000),), tick_size=0.01, min_order_size=5,
+                         neg_risk=False, last_trade_price=0.30)
+
+
 class TerminalRejectionTests(unittest.IsolatedAsyncioTestCase):
     """Which answers after submission prove that a BUY never executed."""
 
@@ -893,16 +904,16 @@ class RefusedBuyTests(FenceDb):
                 self.assertEqual(0, await self.db.fetchval("SELECT COUNT(*) FROM copy_positions"))
 
     async def test_the_2026_10_22_open_end_to_end(self):
-        """An $8.00 open on a 0.001 tick, its price capped at 0.980 by the
-        wallet's default max price, signed and posted by the pinned SDK. The
-        SDK's own client asks for 8.16327 shares and the exchange refuses it:
-        the claim goes and no fence is left. TradingClient, which every
-        production client is, asks for 8.1633 shares and the position opens
-        for the whole $8.00."""
+        """An $8.00 open on a 0.001 tick with asks at 0.975, its price capped at
+        0.980 by the wallet's default max price, signed and posted by the
+        pinned SDK. The SDK's own client asks for 8.16327 shares and the
+        exchange refuses it: the claim goes and no fence is left.
+        TradingClient, which every production client is, asks for 8.1632
+        shares and the position opens for the whole $8.00 at 0.975."""
         for cls, taker, opened in ((AsyncSecureClient, "8163270", 0),
-                                   (execution.TradingClient, "8163300", 1)):
+                                   (execution.TradingClient, "8163200", 1)):
             with self.subTest(cls.__name__):
-                exchange = offline_clob.Exchange(tick="0.001")
+                exchange = offline_clob.Exchange(tick="0.001", asks=(("0.975", "1000"),))
                 engine = self.buy_engine(ThousandthTickBook())
                 async with offline_clob.client(exchange, cls) as sdk:
                     await engine._execute(USER, sdk, self.open_action(price=0.975))
@@ -915,8 +926,37 @@ class RefusedBuyTests(FenceDb):
                     "WHERE status='open'")
                 self.assertEqual(opened, len(rows))
                 for row in rows:
-                    self.assertAlmostEqual(8.1633, row["shares"])
-                    self.assertLessEqual(row["entry_price"], 0.98)
+                    self.assertAlmostEqual(8.205128, row["shares"])
+                    self.assertAlmostEqual(0.975, row["entry_price"], places=6)
+                    self.assertEqual(8.0, row["notional_usd"])
+
+    async def test_an_open_at_the_leaders_price_lifts_the_ask_there(self):
+        """The leader paid 0.30 on a 0.01 tick and asks remain at 0.30. With
+        the default 2% slippage the copy's cap is 0.30, the leader's own price,
+        as on every price from 0.10 to 0.49 on that tick. The SDK's own client
+        asks for 26.6667 shares for $8.00, a price under 0.30, and the exchange
+        kills the FOK: the engine opens nothing and leaves the token unfenced.
+        TradingClient asks for 26.6666, a price a hair above 0.30, and the
+        position opens at 0.30."""
+        for cls, taker, opened in ((AsyncSecureClient, "26666700", 0),
+                                   (execution.TradingClient, "26666600", 1)):
+            with self.subTest(cls.__name__):
+                await self.db.execute("DELETE FROM copy_positions")
+                exchange = offline_clob.Exchange(tick="0.01", asks=(("0.30", "1000"),))
+                engine = self.buy_engine(LeaderPriceBook())
+                async with offline_clob.client(exchange, cls) as sdk:
+                    await engine._execute(USER, sdk, self.open_action(price=0.30))
+                [order] = exchange.orders
+                self.assertEqual(("8000000", taker), (order["makerAmount"], order["takerAmount"]))
+                self.assertEqual(0, await self.claims(), "no claim of any state is kept")
+                self.assertIn("no active BUY fences", await self.fence_list())
+                rows = await self.db.fetchall(
+                    "SELECT shares, entry_price, notional_usd FROM copy_positions "
+                    "WHERE status='open'")
+                self.assertEqual(opened, len(rows))
+                for row in rows:
+                    self.assertAlmostEqual(26.666666, row["shares"])
+                    self.assertAlmostEqual(0.30, row["entry_price"], places=6)
                     self.assertEqual(8.0, row["notional_usd"])
 
     async def test_the_fill_or_kill_budget_brakes_the_retry(self):

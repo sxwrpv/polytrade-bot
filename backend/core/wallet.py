@@ -15,7 +15,8 @@ and signs a rejected order format; py-clob-client-v2's L1 auth always binds the
 API key to the EOA regardless of signature_type/funder, breaking
 POLY_1271/deposit-wallet order placement (see requirements.txt). Every client is
 an ``execution.TradingClient``, the same client with market order amounts signed
-on the exchange's grid (``execution.market_order_amounts``).
+on the exchange's grid (``execution.market_buy_amounts``,
+``execution.market_sell_amounts``).
 
 With a Builder API key configured (``POLYMARKET_BUILDER_API_KEY`` etc., from
 polymarket.com/settings?tab=builder), ``make_clob_client(funder=None)`` derives

@@ -9,7 +9,9 @@ would reach POST /order.
 from __future__ import annotations
 
 import json
+import math
 from decimal import Decimal
+from fractions import Fraction
 from unittest import mock
 
 import httpx
@@ -26,6 +28,8 @@ CONDITION = "0x" + "ab" * 32
 # 2026-10-22 (also github.com/Polymarket/rs-clob-client/issues/261, a 400).
 INVALID_AMOUNTS = ("invalid amounts, the market buy orders maker amount supports a max "
                    "accuracy of 2 decimals, taker amount a max of 4 decimals")
+# Its answer to a FOK it cannot fill whole (a 400; the SDK raises it).
+FOK_KILLED = "order couldn't be fully filled. FOK orders are fully filled or killed."
 
 
 def units(amount: str) -> Decimal:
@@ -36,12 +40,31 @@ def units(amount: str) -> Decimal:
 class Exchange:
     """Answers the CLOB requests a market order makes. POST /order refuses a
     market BUY whose maker amount has more than 2 decimals or whose taker
-    amount has more than 4, with the exchange's own 400; it fills every other
-    order whole and keeps each order it receives."""
+    amount has more than 4, with the exchange's own 400, and keeps each order
+    it receives.
 
-    def __init__(self, tick: str = "0.001"):
+    Given `asks` ((price, shares) levels, best first) it matches a market BUY
+    the way the CLOB does: the order's price is makerAmount / takerAmount, it
+    takes only asks at or below that price, and it spends the whole maker
+    amount at the resting prices. A FOK those asks cannot fill whole is killed
+    with the exchange's 400. Without `asks` every other order fills whole at
+    its own amounts."""
+
+    def __init__(self, tick: str = "0.001", asks: tuple[tuple[str, str], ...] = ()):
         self.tick = tick
+        self.asks = [(Fraction(price), Fraction(shares)) for price, shares in asks]
         self.orders: list[dict] = []
+
+    def match_buy(self, maker: int, taker: int) -> tuple[int, int]:
+        """(pUSD spent, shares bought) in base units for a market BUY."""
+        limit, left, bought = Fraction(maker, taker), Fraction(maker), Fraction(0)
+        for price, shares in self.asks:
+            if price > limit or not left:
+                break
+            take = min(shares * 10**6, left / price)
+            bought += take
+            left -= take * price
+        return maker - math.ceil(left), math.floor(bought)
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
@@ -55,13 +78,18 @@ class Exchange:
             order = sent["order"]
             self.orders.append(order)
             maker, taker = int(order["makerAmount"]), int(order["takerAmount"])
-            if (sent["orderType"] in ("FOK", "FAK") and order["side"] == "BUY"
-                    and (maker % 10_000 or taker % 100)):
+            market_buy = sent["orderType"] in ("FOK", "FAK") and order["side"] == "BUY"
+            if market_buy and (maker % 10_000 or taker % 100):
                 return httpx.Response(400, json={"error": INVALID_AMOUNTS})
+            making, taking = maker, taker
+            if market_buy and self.asks:
+                making, taking = self.match_buy(maker, taker)
+                if not taking or (sent["orderType"] == "FOK" and making < maker):
+                    return httpx.Response(400, json={"error": FOK_KILLED})
             return httpx.Response(200, json={
                 "success": True, "errorMsg": "", "orderID": f"0x{len(self.orders):064x}",
-                "status": "matched", "makingAmount": str(units(order["makerAmount"])),
-                "takingAmount": str(units(order["takerAmount"])),
+                "status": "matched", "makingAmount": str(units(str(making))),
+                "takingAmount": str(units(str(taking))),
                 "tradeIDs": [f"trade-{len(self.orders)}"], "transactionsHashes": []})
         return httpx.Response(404, json={"error": f"unexpected {request.method} {path}"})
 

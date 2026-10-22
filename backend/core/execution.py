@@ -15,13 +15,17 @@ costing an extra API call.
 number of shares to sell. The client (AsyncSecureClient) is natively async — no
 asyncio.to_thread needed, unlike the old py-clob-client(-v2)-based version.
 wallet.make_clob_client builds every client as a TradingClient, which signs
-every market order's amounts on the exchange's grid (market_order_amounts).
+every market order's amounts on the exchange's grid (market_buy_amounts,
+market_sell_amounts).
 """
 from __future__ import annotations
 
 import logging
+import math
+from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
+from fractions import Fraction
 
 from polymarket import AsyncSecureClient
 from polymarket.errors import RequestRejectedError
@@ -168,12 +172,33 @@ def ceil_decimal_to_tick(value: Decimal, tick: Decimal) -> Decimal:
 # asked for 10.13172 shares. Production, 2026-10-22 15:20Z: two accounts, one
 # token, $10.00 each, both refused and fenced as uncertain.
 #
-# Rounding the shares up to 4 decimals keeps the whole spend and adds under
-# 0.0001 shares, so the order's price (maker / taker) can only fall and a
-# capped BUY stays at or below its cap. On a 0.01 tick the SDK already rounds
-# this way. Shaving the spend until spend / max_price fit 4 decimals was
-# measured too: at caps 0.961-0.999 it cost over 2% of the order for one BUY in
-# ten and over 15% for one in a hundred, and some spends had no fit at all.
+# The direction the shares round in decides which asks the order can take.
+# The exchange prices a BUY as maker / taker and matches it only with asks at
+# or below that price. Rounded up, as the SDK rounds every capped BUY, the
+# shares put the price a hair under the cap whenever spend / cap is inexact:
+# 85% of spends from $1 at tick 0.01, 97% at 0.001 and over 99% at 0.0001. An
+# ask resting exactly at the cap is then out of reach and the FOK is killed
+# (github.com/Polymarket/py-sdk/issues/291, two thirds of one bot's FAK orders
+# for a month; fixed upstream in 6a77970b by rounding down). On a 0.01 tick a
+# copy often needs that ask. With the default 2% slippage the cap equals the
+# leader's own price for every price from 0.10 to 0.49 and at the 0.98
+# maximum, so the copy needs the rest of the level the leader just lifted;
+# from 0.50 up the cap is one tick above it, where the best ask sits once a
+# leader's resting bid is hit. In public fills of the 25 leaderboard wallets
+# PolyTrade seeds (2026-08-30 to 2026-10-22), 36% of their BUYs on 0.01-tick
+# markets put a copy's cap on such an ask.
+#
+# So the shares are spend / cap rounded down to 0.0001. The price lands at or
+# a hair above the cap, the order lifts an ask there, and the fill runs at the
+# resting price. It stays under cap + 0.0001, the next price on the finest
+# grid the CLOB lists, so no ask above the cap can match, even after a
+# market's tick turns finer (upstream 1ed8b7cd checks the same): rounding down
+# drops under 0.0001 shares, which keeps spend / shares under cap + 0.0001 for
+# any spend of at least cap^2 + 0.0001 x cap, so for every spend from $1
+# (copy_engine.MIN_NOTIONAL_USD). A smaller spend that could reach it rounds
+# up. Shaving the spend until spend / max_price fit 4 decimals was measured
+# too: at caps 0.961-0.999 it cost over 2% of the order for one BUY in ten and
+# over 15% for one in a hundred, and some spends had no fit at all.
 #
 # A market SELL offers shares (maker) for pUSD (taker). The SDK floors the
 # shares to 0.01 and asks for shares x min_price pUSD, which carries up to 5
@@ -185,41 +210,79 @@ def ceil_decimal_to_tick(value: Decimal, tick: Decimal) -> Decimal:
 # after each stuck-closing reopen, so a SELL goes on the same grid: its shares
 # keep their 2 decimals and its pUSD rounds up to 0.0001. That lifts the
 # order's price (taker / maker) by under 0.0001 / shares, so a SELL stays at or
-# above its floor; at ticks 0.01 and 0.1 nothing changes.
-#
-# Either move leaves a resting order exactly at the limit out of reach (an ask
-# at a BUY's cap, a bid at a SELL's floor): the exchange matches only once the
-# order's price reaches the resting one. github.com/Polymarket/py-sdk/issues/291
-# is the BUY side of that.
+# above its floor; at ticks 0.01 and 0.1 nothing changes. On the finer ticks it
+# also puts a bid resting exactly at the floor out of reach, the SELL side of
+# py-sdk#291: the exchange matches only once the order's price reaches the
+# resting one.
 _MAKER_STEP = 10_000   # 2 decimals in base units (both amounts carry 6 decimals)
 _TAKER_STEP = 100      # 4 decimals in base units
+_FINEST_TICK = Fraction(1, 10_000)
 
 
-def market_order_amounts(maker: int, taker: int) -> tuple[int, int]:
-    """A market order's (maker, taker) base units on the CLOB's grid: the
-    maker amount rounds down to 2 decimals and the taker amount up to 4. A BUY
-    (pUSD for shares) is priced maker / taker and a SELL (shares for pUSD)
-    taker / maker, so a BUY's price can only fall and a SELL's can only rise:
-    each keeps its cap or its floor. On a 0.01 or 0.1 tick the SDK's amounts
-    are already on the grid and come back unchanged."""
+def market_buy_amounts(maker: int, taker: int, cap: Decimal | None) -> tuple[int, int]:
+    """A market BUY's (maker, taker) base units on the CLOB's grid. The pUSD
+    offered rounds down to a cent. With a cap the shares are maker / cap
+    rounded down to 0.0001, which prices the order (maker / taker) at or just
+    above the cap and under cap + 0.0001; a spend under $1 that rounding down
+    would carry to cap + 0.0001 rounds up and prices at or below the cap.
+    Without one (an unprotected BUY, which the SDK prices off the book) the
+    SDK's shares round down to 0.0001."""
+    maker = maker // _MAKER_STEP * _MAKER_STEP
+    if cap is None:
+        return maker, taker // _TAKER_STEP * _TAKER_STEP
+    price = Fraction(cap)
+    steps = maker / (price * _TAKER_STEP)
+    down = math.floor(steps) * _TAKER_STEP
+    if down and Fraction(maker, down) < price + _FINEST_TICK:
+        return maker, down
+    return maker, math.ceil(steps) * _TAKER_STEP
+
+
+def market_sell_amounts(maker: int, taker: int) -> tuple[int, int]:
+    """A market SELL's (maker, taker) base units on the CLOB's grid: the shares
+    offered round down to 2 decimals and the pUSD asked up to 4. A SELL is
+    priced taker / maker, so its price can only rise and it keeps its floor.
+    On a 0.01 or 0.1 tick the SDK's amounts are already on the grid and come
+    back unchanged."""
     return maker // _MAKER_STEP * _MAKER_STEP, -(-taker // _TAKER_STEP) * _TAKER_STEP
 
 
+# The cap of the market BUY being prepared, for _sign_order, whose draft holds
+# the amounts the SDK priced and no price. A context variable belongs to one
+# task, so concurrent orders on one client each see their own cap.
+_market_buy_cap: ContextVar[Decimal | None] = ContextVar("market_buy_cap", default=None)
+
+
 class TradingClient(AsyncSecureClient):
-    """AsyncSecureClient that signs every market order on the CLOB's grid
-    (market_order_amounts). wallet.make_clob_client builds every client as one.
+    """AsyncSecureClient that signs every market order on the CLOB's grid, a
+    BUY priced to lift an ask at its cap (market_buy_amounts,
+    market_sell_amounts). wallet.make_clob_client builds every client as one.
 
     The amounts are part of the signed order, so _sign_order is the last place
     they can change. In polymarket-client 0.6.0 it is the one signing step for
     limit (GTC/GTD) and market (FOK/FAK) orders, and it receives the draft the
-    SDK priced. Only FOK/FAK drafts change here.
-    tests/test_execution_price_band.py sends a real BUY and a real SELL through
-    this class and reads the order that reaches POST /order, so an SDK release
-    that signs somewhere else fails those tests."""
+    SDK priced; _prepare_and_sign_market_order, which create_market_order and
+    place_market_order both call, carries a BUY's cap to it. Only FOK/FAK
+    drafts change here.
+    tests/test_execution_price_band.py sends real BUYs and SELLs through this
+    class and reads the orders that reach POST /order, so an SDK release that
+    signs or prices market orders somewhere else fails those tests."""
+
+    async def _prepare_and_sign_market_order(self, **order):
+        cap = order.get("max_price") if order.get("side") == "BUY" else None
+        token = _market_buy_cap.set(None if cap is None else Decimal(str(cap)))
+        try:
+            return await super()._prepare_and_sign_market_order(**order)
+        finally:
+            _market_buy_cap.reset(token)
 
     async def _sign_order(self, draft, *, post_only: bool):
         if draft.order_type in ("FOK", "FAK"):
-            maker, taker = market_order_amounts(draft.offered_amount, draft.requested_amount)
+            if draft.side == "BUY":
+                maker, taker = market_buy_amounts(draft.offered_amount, draft.requested_amount,
+                                                  _market_buy_cap.get())
+            else:
+                maker, taker = market_sell_amounts(draft.offered_amount, draft.requested_amount)
             draft = replace(draft, offered_amount=maker, requested_amount=taker)
         return await super()._sign_order(draft, post_only=post_only)
 
@@ -228,7 +291,7 @@ class TradingClient(AsyncSecureClient):
 # the exchange's verdict on the order we sent, given before anything matched:
 # a FOK that cannot fill completely is killed whole, and the balance /
 # allowance check and the check of a market order's amounts (see
-# market_order_amounts) run before matching. polymarket-client 0.6.0 raises them
+# market_buy_amounts) run before matching. polymarket-client 0.6.0 raises them
 # as RequestRejectedError(status=400) carrying the server's text, or returns
 # the first two as RejectedOrder(code='fok_not_filled' / 'not_enough_balance')
 # (polymarket/models/clob/order_response.py). It has no code for the amounts
