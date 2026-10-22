@@ -469,19 +469,25 @@ function useWidthMorph(ref, key) {
   }, [ref, key])
 }
 
-// What the wallet you follow holds in one market, and your max per position.
-// The app's own range for that cap ends at $500 (routes_traders.py, the Mini
-// App's slider), so the presets stop there: a bigger order would be a claim
-// the product cannot keep.
-const LEADER_POSITIONS = [40_000, 120_000, 1_500_000]
-const CAPS = [100, 250, 500]
+// What the wallet you follow holds in one market: round values on a log scale
+// from $100 to $10M, the chart's own axis, so the marked point follows the
+// slider from end to end.
+const ROUND_STEPS = [1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8]
+const LEADER_POSITIONS = [2, 3, 4, 5, 6]
+  .flatMap((exp) => ROUND_STEPS.map((step) => Math.round(step * 10 ** exp)))
+  .concat(10_000_000)
+// Your max per position, over the Mini App's own range (routes_traders.py and
+// its slider). It ends at $500, so no example order goes past what the product
+// allows.
+const CAP_MIN = 1
+const CAP_MAX = 500
 const MIN_COPY = 2          // the app's default "Min copy size"
 const EXAMPLE_PRICE = 0.42  // an example YES price inside the default 10¢–98¢ band
 
 const usd = (value, digits = 2) => `$${value.toLocaleString('en-US', {
   minimumFractionDigits: digits, maximumFractionDigits: digits,
 })}`
-/** $40K, $1.5M: preset buttons are narrow, the math line spells it out. */
+/** $40K, $1.5M: the slider's value stays short, the math line spells it out. */
 const shortUsd = (value) => (value >= 1e6 ? `$${+(value / 1e6).toFixed(1)}M`
   : value >= 1e3 ? `$${+(value / 1e3).toFixed(1)}K` : usd(value, 0))
 
@@ -503,12 +509,13 @@ const OUTCOME = {
 }
 
 /* Hero: the copy-sizing rule as something to try, in place of a looping
-   animation. The controls reuse the Mini App's own slider and segmented
-   control, with its labels and hints, so this is what the app looks like. */
+   animation. The controls are the Mini App's own slider: Max per position
+   keeps its $1–$500 range, and Their position snaps to round values on the
+   chart's log axis. */
 function Sizer() {
-  const [leader, setLeader] = useState(1)
+  const [leader, setLeader] = useState(() => LEADER_POSITIONS.indexOf(120_000))
   const [ratio, setRatio] = useState(1)
-  const [cap, setCap] = useState(2)
+  const [max, setMax] = useState(CAP_MAX)
   // First paint shows a flat curve and $0.00; the real figures arrive as the
   // headline lands, so the number rolls and the curve rises once.
   const [live, setLive] = useState(false)
@@ -521,7 +528,6 @@ function Sizer() {
   }, [])
 
   const position = LEADER_POSITIONS[leader]
-  const max = CAPS[cap]
   const result = sizeCopy(position, ratio, max)
   const [tone, label] = OUTCOME[result.state]
   useWidthMorph(badge, result.state + max)
@@ -530,7 +536,10 @@ function Sizer() {
   const verdict = {
     copied: 'copied in full.',
     capped: `capped at ${usd(max)}.`,
-    skipped: `under the ${usd(MIN_COPY, 0)} minimum, so no order.`,
+    // A max under the minimum skips every copy, whatever their position.
+    skipped: result.raw >= MIN_COPY
+      ? `capped at ${usd(max)}, under the ${usd(MIN_COPY, 0)} minimum, so no order.`
+      : `under the ${usd(MIN_COPY, 0)} minimum, so no order.`,
   }[result.state]
 
   return (
@@ -544,47 +553,41 @@ function Sizer() {
       </div>
 
       <div className="sizer-controls">
-        <div className="sizer-field">
-          <div className="setting-head"><span id="sz-leader">Their position</span></div>
-          <div className="seg seg-sm" role="group" aria-labelledby="sz-leader" style={{ '--n': 3, '--i': leader }}>
-            {LEADER_POSITIONS.map((value, index) => (
-              <button key={value} type="button" aria-pressed={index === leader} onClick={() => setLeader(index)}>
-                {shortUsd(value)}
-              </button>
-            ))}
-          </div>
-        </div>
-        <div className="sizer-field">
-          <div className="setting-head"><span id="sz-cap">Max per position</span></div>
-          <div className="seg seg-sm" role="group" aria-labelledby="sz-cap" style={{ '--n': 3, '--i': cap }}>
-            {CAPS.map((value, index) => (
-              <button key={value} type="button" aria-pressed={index === cap} onClick={() => setCap(index)}>
-                {usd(value, 0)}
-              </button>
-            ))}
-          </div>
-        </div>
-        <div className="sizer-field is-wide">
-          <div className="setting-head">
-            <label htmlFor="sz-ratio">Copy ratio</label>
-            <Roll text={`${ratio.toFixed(1)}%`} className="setting-val" />
-          </div>
-          <div className="slider-row">
-            <input
-              id="sz-ratio"
-              type="range"
-              min="0.5"
-              max="20"
-              step="0.5"
-              value={ratio}
-              style={{ '--fill': `${((ratio - 0.5) / 19.5) * 100}%` }}
-              aria-describedby="sz-ratio-hint"
-              aria-valuetext={`${ratio.toFixed(1)} percent`}
-              onChange={(event) => setRatio(Number(event.target.value))}
-            />
-          </div>
-          <span className="setting-hint" id="sz-ratio-hint">Your copy = their position × this %.</span>
-        </div>
+        <SizerSlider
+          id="sz-leader"
+          label="Their position"
+          min={0}
+          max={LEADER_POSITIONS.length - 1}
+          step={1}
+          value={leader}
+          shown={shortUsd(position)}
+          spoken={usd(position, 0)}
+          onChange={setLeader}
+        />
+        <SizerSlider
+          id="sz-cap"
+          label="Max per position"
+          min={CAP_MIN}
+          max={CAP_MAX}
+          step={1}
+          value={max}
+          shown={usd(max, 0)}
+          spoken={usd(max, 0)}
+          onChange={setMax}
+        />
+        <SizerSlider
+          id="sz-ratio"
+          label="Copy ratio"
+          min={0.5}
+          max={20}
+          step={0.5}
+          value={ratio}
+          shown={`${ratio.toFixed(1)}%`}
+          spoken={`${ratio.toFixed(1)} percent`}
+          hint="Your copy = their position × this %."
+          wide
+          onChange={setRatio}
+        />
       </div>
 
       <div className={`sizer-out is-${result.state}`}>
@@ -605,6 +608,35 @@ function Sizer() {
       </div>
       <p className="demo-note">Example figures. The app’s max per position goes up to $500, and real copies also stay within your balance and exposure caps.</p>
     </aside>
+  )
+}
+
+/* One sizer control in the Mini App's slider markup: label and value on one
+   line, the track filled up to the thumb. The value rolls as it changes, and
+   screen readers hear it through aria-valuetext. */
+function SizerSlider({ id, label, min, max, step, value, shown, spoken, hint, wide, onChange }) {
+  return (
+    <div className={`sizer-field is-slider${wide ? ' is-wide' : ''}`}>
+      <div className="setting-head">
+        <label htmlFor={id}>{label}</label>
+        <Roll text={shown} className="setting-val" />
+      </div>
+      <div className="slider-row">
+        <input
+          id={id}
+          type="range"
+          min={min}
+          max={max}
+          step={step}
+          value={value}
+          style={{ '--fill': `${((value - min) / (max - min)) * 100}%` }}
+          aria-describedby={hint ? `${id}-hint` : undefined}
+          aria-valuetext={spoken}
+          onChange={(event) => onChange(Number(event.target.value))}
+        />
+      </div>
+      {hint && <span className="setting-hint" id={`${id}-hint`}>{hint}</span>}
+    </div>
   )
 }
 
@@ -654,14 +686,19 @@ function SizerChart({ position, ratio, cap, live }) {
     return () => cancelAnimationFrame(raf)
   }, [target])
 
-  const skipAt = clampPct(logX(MIN_COPY / (ratio / 100)))
-  const capAt = clampPct(logX(cap / (ratio / 100)))
+  // A max under the minimum skips every copy, so the skipped zone then spans
+  // the whole axis.
+  const skipsAll = cap < MIN_COPY
+  const skipAt = skipsAll ? 100 : clampPct(logX(MIN_COPY / (ratio / 100)))
+  const capAt = skipsAll ? 100 : clampPct(logX(cap / (ratio / 100)))
   const { order } = sizeCopy(position, ratio, cap)
   const markX = logX(position)
   const markY = ((CURVE_FLOOR - (live ? order / cap : 0) * CURVE_SPAN) / 40) * 100
-  const desc = `Their position on a log scale from $100 to $10M. Under ${usd(MIN_COPY / (ratio / 100), 0)} `
-    + `the copy is skipped; up to ${usd(cap / (ratio / 100), 0)} it is ${ratio.toFixed(1)}% of their position; `
-    + `above that it is capped at ${usd(cap, 0)}. The marked point is the example above.`
+  const desc = 'Their position on a log scale from $100 to $10M. ' + (skipsAll
+    ? `A max of ${usd(cap, 0)} sits under the ${usd(MIN_COPY, 0)} minimum, so every copy is skipped. `
+    : `Under ${usd(MIN_COPY / (ratio / 100), 0)} the copy is skipped; up to ${usd(cap / (ratio / 100), 0)} `
+      + `it is ${ratio.toFixed(1)}% of their position; above that it is capped at ${usd(cap, 0)}. `)
+    + 'The marked point is the example above.'
   return (
     <figure className="sizer-chart">
       <div className="sc-plot">

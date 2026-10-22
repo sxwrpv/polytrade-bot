@@ -91,7 +91,8 @@
 
 /* ---------- the sizer ----------------------------------------------------
    The copy-sizing rule as a small instrument. Its controls are the Mini
-   App's own (.seg, .slider-row), so this is a true fragment of the product. */
+   App's own slider (.slider-row, .setting-head), so this is a true fragment
+   of the product. */
 .sizer {
   padding: 20px;
   background: var(--paper-hi);
@@ -108,9 +109,9 @@
 
 .sizer-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 .sizer-field { display: grid; gap: 8px; align-content: start; min-width: 0; }
-.sizer-field.is-wide { grid-column: 1 / -1; gap: 0; }
+.sizer-field.is-slider { gap: 0; }
+.sizer-field.is-wide { grid-column: 1 / -1; }
 .sizer-field .setting-head { font-size: 14px; font-weight: 600; }
-.sizer .seg button { font-family: var(--mono); font-size: 13px; padding: 0 6px; }
 
 .sizer-out {
   margin-top: 14px; padding: 16px;
@@ -486,7 +487,7 @@
 .footer-legal { display: block; margin-top: 16px; padding-top: 18px; border-top: 1px solid var(--border); color: var(--muted); font-size: 13px; }
 
 /* ---------- widths -------------------------------------------------------- */
-/* A narrow hero column: the sizer's two selectors stack so each keeps its
+/* A narrow hero column: the sizer's two top sliders stack so each keeps its
    full width. */
 @media (min-width: 961px) and (max-width: 1180px) {
   .sizer-controls { grid-template-columns: minmax(0, 1fr); }
