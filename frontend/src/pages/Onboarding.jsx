@@ -2,7 +2,6 @@ import { useState } from 'react'
 import { api, CURRENT_TERMS_VERSION, haptic, saveSession } from '../api'
 import { useRedeemStatus } from '../redeemStatus'
 import { useWithdrawStatus } from '../withdrawStatus'
-import CopyText from '../components/CopyText'
 import Icon from '../components/Icon'
 import { FundingAccess } from '../components/DepositAddresses'
 import { Notice } from '../components/UiState'
@@ -63,8 +62,6 @@ export default function Onboarding({ onDone }) {
         <h1>{result.created
           ? 'Your custodial wallet was created.'
           : 'Your existing custodial wallet is already linked to this Telegram account.'}</h1>
-        <p className="muted">Your wallet address:</p>
-        <CopyText value={result.address} label="Copy your wallet address" />
         {result.gasless && <p className="muted small">Wallet setup was attempted through the relayer. Trading readiness and approvals may still be incomplete; some external wallet or network actions may also require MATIC or other fees.</p>}
 
         <div className="section-header">Fund your wallet</div>
