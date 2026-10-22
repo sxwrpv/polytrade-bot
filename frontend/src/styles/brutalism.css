@@ -747,6 +747,9 @@ input[aria-invalid='true'] { border-color: var(--red-line); box-shadow: 0 0 0 3p
 .setting-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
 .setting-val { font-family: var(--mono); color: var(--green-deep); font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .setting-hint { font-size: 13px; font-weight: 400; color: var(--muted); line-height: 1.45; }
+/* sizing mode: the segmented control above a wallet's sizing sliders */
+.sizing-mode { display: grid; gap: 8px; margin: 12px 0 2px; }
+.sizing-mode .seg { max-width: 360px; }
 
 /* switch — the kit's spring thumb on a native checkbox */
 .switch-row {

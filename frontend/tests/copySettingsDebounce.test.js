@@ -29,3 +29,25 @@ test('latest valid edit is the only submitted setting', () => {
   h.flush()
   assert.deepEqual(h.saved, [{ min_price: 0.4 }])
 })
+
+const setModeSource = source.slice(source.indexOf('  async function setMode(mode) {'),
+  source.indexOf('  async function remove()'))
+for (const ok of [true, false]) {
+  test(`a sizing mode switch saves at once${ok ? '' : ' and is undone when the save fails'}`, async () => {
+    let state = { sizing_mode: 'position_share' }
+    const saved = []
+    const setMode = new Function('s', 'setS', 'persist', `${setModeSource}; return setMode`)(
+      state, (update) => { state = update(state) }, async (patch) => { saved.push(patch); return ok })
+    await setMode('capital_share')
+    assert.deepEqual(saved, [{ sizing_mode: 'capital_share' }])
+    assert.equal(state.sizing_mode, ok ? 'capital_share' : 'position_share')
+  })
+}
+
+test('choosing the mode already set sends nothing', async () => {
+  const saved = []
+  const setMode = new Function('s', 'setS', 'persist', `${setModeSource}; return setMode`)(
+    { sizing_mode: 'capital_share' }, () => {}, async (patch) => { saved.push(patch); return true })
+  await setMode('capital_share')
+  assert.deepEqual(saved, [])
+})

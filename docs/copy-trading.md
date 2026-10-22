@@ -29,13 +29,15 @@ Following starts activity polling from that time. Copying starts with the wallet
 
 ## Sizing
 
-Initial target:
+Each copied wallet sizes its copies one of two ways: by **copy ratio**, the default, or by **cash share**.
+
+Copy ratio, initial target:
 
 ```text
 source position value × copy ratio
 ```
 
-The engine then clamps against maximum copied position, collateral, minimum order and ignore-below thresholds, trader exposure, account exposure, maximum open positions, verified wallet headroom, existing copied size, and reserved claims.
+The engine then clamps against maximum copied position, collateral, minimum order and ignore-below thresholds, trader exposure, account exposure, maximum open positions, verified wallet headroom, existing copied size, and reserved claims. Both ways of sizing use the same limits.
 
 ### Example
 
@@ -47,6 +49,25 @@ final target = min($20, $15, other active limits) = at most $15
 ```
 
 Maximum position caps your whole position in an outcome, resizes included.
+
+### Cash share
+
+The copy takes the same share of your free cash that the source's bet took of theirs, times your multiplier:
+
+```text
+share  = bet ÷ (source's free cash after the bet + bet)
+target = share × your free cash × multiplier
+```
+
+The bet is the source's position value in that outcome. For an outcome the source already held when copying started, only the trade itself counts. The source's free cash is read on Polygon when they trade: pUSD plus bridged and native USDC, one reading per source for about 30 seconds. Their open positions are left out. Your free cash is your spendable balance. Every limit above applies to the target.
+
+A source has `$8,000` of free cash left after a `$2,000` bet, so the bet took 20% of their cash. With `$150` free and a `1×` multiplier, the target is `$30`. At `2×` it is `$60`, and a `$50` maximum position caps it at `$50`.
+
+- Increases follow the same rule, with the value the source added as the bet. Reductions and exits are copied proportionally in both modes.
+- When the source's cash cannot be read, the copy is skipped and logged.
+- The reconciler opens a cash-share copy only for a source buy younger than five minutes, so a fast copy that did not fill is retried while the bet is fresh.
+- A source with almost all of its money in positions bets a large share of the little cash it has, so shares jump. Your maximum position caps every copy.
+- Most large wallets hold hundreds of positions, each well under 1% of their cash. On a small account those copies come out under the minimum copy size unless the multiplier is high.
 
 ## Risk validation
 
