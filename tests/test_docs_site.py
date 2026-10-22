@@ -67,7 +67,7 @@ def test_consumer_docs_are_telegram_first_and_keep_material_facts():
     assert "lose" in consumer_docs and "full" in consumer_docs
     assert "eligib" in consumer_docs
     assert "does not expose a withdrawal" in consumer_docs
-    assert "does not automatically redeem" in consumer_docs
+    assert "redeems resolved positions automatically" in consumer_docs
     assert "pause" in consumer_docs and "does not sell" in consumer_docs
 
 

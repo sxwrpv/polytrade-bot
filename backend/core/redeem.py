@@ -69,6 +69,11 @@ from polymarket.calls import ctf_redeem_positions_call, erc1155_set_approval_for
 
 log = logging.getLogger("redeem")
 
+# What this process's redeem loop is doing, for /api/version and the wording
+# that tells users whether redemption is automatic. main.py fills it in when it
+# starts the loop, and turns `auto` off when the redeemer halts or stops.
+STATUS: dict = {"auto": False, "losses": False, "every_minutes": None}
+
 # pUSD and outcome tokens both carry 6 decimals.
 UNITS_PER_USD = 1_000_000
 # Below this a market is not worth a relayer transaction.

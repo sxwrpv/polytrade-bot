@@ -831,6 +831,7 @@ class LoopHeartbeatTests(RedeemDb):
 
         patches = [patch.object(main, "heartbeats", hb),
                    patch.object(redeem, "ChainReader", Chain),
+                   patch.dict(redeem.STATUS),
                    patch.dict(os.environ, {"REDEEM_SECONDS": "3600"})]
         if redeemer_cls is not None:
             patches.append(patch.object(redeem, "Redeemer", redeemer_cls))
@@ -843,8 +844,10 @@ class LoopHeartbeatTests(RedeemDb):
                 if self.passes:
                     break
             await asyncio.sleep(0.01)
+            self.status_during = dict(redeem.STATUS)
             stop.set()
             await asyncio.wait_for(task, timeout=5)
+            self.status_after = dict(redeem.STATUS)
         finally:
             for p in reversed(patches):
                 p.stop()
@@ -856,6 +859,10 @@ class LoopHeartbeatTests(RedeemDb):
         self.assertEqual(snap["successes"], 1)
         self.assertEqual(snap["interval_seconds"], 3600)
         self.assertEqual(closed, [True])
+        # /api/version reports this while the loop runs, and the app words
+        # redemption from it.
+        self.assertEqual(self.status_during, {"auto": True, "losses": True, "every_minutes": 60})
+        self.assertFalse(self.status_after["auto"])
 
     async def test_a_halted_redeemer_stops_the_heartbeat(self):
         test = self
@@ -874,6 +881,7 @@ class LoopHeartbeatTests(RedeemDb):
         self.assertEqual(snap["successes"], 0)
         self.assertTrue(snap["stale"])
         self.assertEqual(closed, [True])
+        self.assertFalse(self.status_during["auto"])
 
 
 if __name__ == "__main__":

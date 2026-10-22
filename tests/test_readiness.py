@@ -10,6 +10,7 @@ import os
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -146,6 +147,14 @@ class ReadinessEndpointTests(unittest.TestCase):
 
     def test_version_needs_no_session(self):
         self.assertEqual(self.client.get("/api/version").status_code, 200)
+
+    def test_version_reports_whether_redemption_is_automatic(self):
+        """The Mini App and the homepage word redemption from this field."""
+        from backend.core import redeem
+        self.assertFalse(self.client.get("/api/version").json()["redeem"]["auto"])
+        running = {"auto": True, "losses": True, "every_minutes": 30}
+        with patch.dict(redeem.STATUS, running):
+            self.assertEqual(self.client.get("/api/version").json()["redeem"], running)
 
 
 if __name__ == "__main__":

@@ -21,6 +21,7 @@ from backend.api.routes_positions import (
     closed_positions,
     open_positions,
 )
+from backend.core import redeem
 from backend.core.copy_engine import Action, CopyEngine
 from backend.core.execution import OrderResult
 from backend.db.database import Database, now_iso
@@ -99,6 +100,21 @@ class CloseSlippageContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(400, raised.exception.status_code)
         self.assertIn("redeemed manually on polymarket.com", raised.exception.detail)
         self.assertNotIn("redeem automatically", raised.exception.detail)
+
+    async def test_resolved_external_close_says_redemption_is_automatic_while_the_loop_runs(self):
+        pm = SimpleNamespace(get_positions=AsyncMock(return_value=[SimpleNamespace(
+            asset="resolved-token", size=2.0, redeemable=True,
+        )]))
+
+        with patch.dict(redeem.STATUS, {"auto": True}), \
+                self.assertRaises(HTTPException) as raised:
+            await close_external_position(
+                CloseExternalBody(token_id="resolved-token"), SimpleNamespace(),
+                user={"id": "user"}, db=SimpleNamespace(), pmc=pm)
+
+        self.assertEqual(400, raised.exception.status_code)
+        self.assertIn("redeems it to your balance automatically", raised.exception.detail)
+        self.assertNotIn("polymarket.com", raised.exception.detail)
 
     async def test_request_position_notifier_receives_event(self):
         notifier = AsyncMock()

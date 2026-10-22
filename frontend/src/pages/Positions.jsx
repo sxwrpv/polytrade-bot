@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { api, haptic } from '../api'
 import { buildCloseOutcomeTelemetry, trackTelemetry } from '../telemetry'
 import PositionCard from '../components/PositionCard'
+import { useRedeemStatus } from '../redeemStatus'
 import ActivityFeed from '../components/ActivityFeed'
 import Modal from '../components/Modal'
 import Icon from '../components/Icon'
@@ -47,6 +48,7 @@ function summarize(rows, closed) {
 const TABS = [['open', 'Open'], ['closed', 'Closed'], ['activity', 'Activity']]
 
 export default function Positions({ onNavigate }) {
+  const redeem = useRedeemStatus()
   const [tab, setTab] = useState('open')
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
@@ -400,6 +402,7 @@ export default function Positions({ onNavigate }) {
                 p={r}
                 closed={tab === 'closed'}
                 onRequestClose={handleRequestClose}
+                redeem={redeem}
               />
             ))
           )}

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api'
 import Icon from './Icon'
+import { useRedeemStatus } from '../redeemStatus'
 import { dollars } from '../money'
 
 /* Total balance and its curve, at the top of Home.
@@ -30,6 +31,7 @@ const money = (v) => (v == null || !Number.isFinite(v) ? '—' : `$${dollars(v)}
 const signed = (v) => `${v >= 0 ? '+' : '−'}$${dollars(Math.abs(v))}`
 
 export default function BalanceCard() {
+  const redeem = useRedeemStatus()
   const [me, setMe] = useState(null)
   const [meError, setMeError] = useState(null)
   const [period, setPeriod] = useState('30d')
@@ -100,7 +102,7 @@ export default function BalanceCard() {
       <div className="balance-head">
         <h2 className="balance-label" id="balance-title">Total balance</h2>
         {me?.claimable > 0 && (
-          <span className="balance-claimable" title="Resolved wins not yet redeemed — redeem them on polymarket.com">
+          <span className="balance-claimable" title={redeem.auto ? 'Resolved wins, redeemed to your balance automatically' : 'Resolved wins not yet redeemed — redeem them on polymarket.com'}>
             {money(me.claimable)} claimable
           </span>
         )}

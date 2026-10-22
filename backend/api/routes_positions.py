@@ -10,7 +10,7 @@ import aiosqlite
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from backend.core import execution
+from backend.core import execution, redeem
 from backend.api.deps import get_current_user, get_db, get_pm, get_user_client
 from backend.config import MAX_COPY_SLIPPAGE_PCT
 from backend.db.database import now_iso
@@ -222,6 +222,9 @@ async def close_external_position(body: CloseExternalBody, request: Request,
     if p is None or p.size <= 0.01:
         raise HTTPException(404, "wallet does not hold this token")
     if p.redeemable:
+        if redeem.STATUS["auto"]:
+            raise HTTPException(400, "market already resolved — PolyTrade redeems it to your "
+                                     "balance automatically; there is nothing to sell")
         raise HTTPException(400, "market already resolved — winnings must be redeemed manually "
                                  "on polymarket.com; there is nothing to sell")
     position_id = uuid.uuid4().hex

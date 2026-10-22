@@ -9,12 +9,14 @@ import Icon from '../components/Icon'
 import { FundingAccess } from '../components/DepositAddresses'
 import { Notice, StateBlock, describeError } from '../components/UiState'
 import { performLogout } from '../authBootstrap'
+import { redeemWithin, useRedeemStatus } from '../redeemStatus'
 import { dollars } from '../money'
 
 const usd = (v) => (v != null ? `$${dollars(v)}` : '—')
 const short = (a) => (a ? `${a.slice(0, 6)}…${a.slice(-4)}` : '')
 
 export default function User({ onLogout }) {
+  const redeem = useRedeemStatus()
   const [profile, setProfile] = useState(null)   // quick read: name, gasless
   const [me, setMe] = useState(null)             // full read: balances
   const [meError, setMeError] = useState(null)
@@ -146,7 +148,7 @@ export default function User({ onLogout }) {
               <div className="value" style={{ '--len': usd(me?.positions_value).length }}>{me == null && !meError ? <span className="sk sk-line" /> : usd(me?.positions_value)}</div>
             </div>
             <div className="stat-cell">
-              <div className="label" title="Resolved wins not yet redeemed — claim on polymarket.com">Claimable</div>
+              <div className="label" title={redeem.auto ? 'Resolved wins, redeemed to your balance automatically' : 'Resolved wins not yet redeemed — claim on polymarket.com'}>Claimable</div>
               <div className="value" style={{ '--len': usd(me?.claimable).length }}>{me == null && !meError ? <span className="sk sk-line" /> : usd(me?.claimable)}</div>
             </div>
             <div className="stat-cell">
@@ -175,8 +177,10 @@ export default function User({ onLogout }) {
           )}
           {me?.claimable > 0 && (
             <Notice>
-              <b>${dollars(me.claimable)} in resolved winnings</b> isn&apos;t auto-claimed yet —
-              redeem it on polymarket.com to turn it into spendable cash.
+              <b>${dollars(me.claimable)} in resolved winnings</b>{' '}
+              {redeem.auto
+                ? `is being redeemed to your balance automatically and arrives within ${redeemWithin(redeem)}.`
+                : <>isn&apos;t auto-claimed yet — redeem it on polymarket.com to turn it into spendable cash.</>}
             </Notice>
           )}
         </div>

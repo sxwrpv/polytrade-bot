@@ -730,8 +730,11 @@ test('uncertain external response preserves its durable operation position id', 
   assert.equal(result.value.target.operation_position_id, 'operation-1')
 })
 
-test('PositionCard resolved copy requires redemption on polymarket.com', async () => {
+test('PositionCard resolved copy follows the redeem status from the server', async () => {
   const source = await readFile(new URL('../src/components/PositionCard.jsx', import.meta.url), 'utf8')
-  assert.doesNotMatch(source, /winnings redeem automatically/i)
+  // The card says what this server does: /api/version reports whether resolved
+  // positions are redeemed automatically, and Positions passes it in as `redeem`.
+  assert.match(source, /redeem\.auto/)
+  assert.match(source, /redeemed to your balance automatically/i)
   assert.match(source, /must be redeemed on polymarket\.com/i)
 })

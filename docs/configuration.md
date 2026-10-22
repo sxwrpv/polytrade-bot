@@ -75,7 +75,8 @@ Prefer same-origin. Do not use wildcard CORS for credentialed workflows.
 - `DISCOVER_WALLETS_TARGET`
 - `EQUITY_SNAPSHOT_AUTOSTART`
 - `EQUITY_SNAPSHOT_SECONDS` — default five minutes.
-- `REDEEM_AUTOSTART` — default off. `1` redeems resolved winning positions back into pUSD through the gasless relayer, which needs the builder credentials. It moves real tokens, so enable it on the single production worker only.
+- `REDEEM_AUTOSTART` — default off. `1` redeems resolved winning positions back into pUSD through the gasless relayer, which needs the builder credentials. It moves real tokens, so enable it on the single production worker only. `/api/version` reports whether the loop is running (`redeem.auto`), and the Mini App and the homepage word redemption from it.
+- `REDEEM_LOSSES` — default `1`. Lost positions are redeemed as well, for $0, so they leave the wallet.
 - `REDEEM_SECONDS` — default 30 minutes.
 - `REDEEM_CONCURRENCY` — users redeemed at once; default 2.
 - `REDEEM_RETRY_SECONDS` — wait before retrying a failed or unconfirmed redeem; default six hours.

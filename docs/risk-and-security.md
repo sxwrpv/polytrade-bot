@@ -36,7 +36,7 @@ A manual close can also fail — it is a fill-or-kill order with a price floor. 
 - Deposit only through a displayed supported asset/network route, and test with a small amount first.
 - There is no withdrawal API and no in-app withdrawal workflow.
 - Exporting a private key is not a withdrawal; it requires understanding the signer/funder relationship.
-- Resolved winnings are not redeemed automatically and can stay claimable on Polymarket.
+- Resolved positions are redeemed automatically about every 30 minutes; until the next pass, winnings show as claimable.
 
 See [Wallet and Funding](wallet-and-funding.md).
 

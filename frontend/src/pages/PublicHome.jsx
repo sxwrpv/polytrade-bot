@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import SiteSwitcher from '../components/SiteSwitcher'
+import { redeemMinutes, useRedeemStatus } from '../redeemStatus'
 // The homepage's own styles travel in this lazily loaded chunk, so a Mini App
 // launch inside Telegram never downloads them.
 import '../styles/public-landing.css'
@@ -170,6 +171,7 @@ const LIFECYCLE = [
   {
     states: [['Open', 'pos'], ['Resolved', 'pos']],
     note: 'Settled markets say so. Winnings are redeemed on polymarket.com; there is nothing to sell.',
+    noteAuto: 'Settled markets say so. Winnings are redeemed to your balance automatically; there is nothing to sell.',
   },
   {
     states: [['Uncertain', 'warn']],
@@ -179,6 +181,7 @@ const LIFECYCLE = [
 
 export default function PublicHome() {
   useReveal()
+  const redeem = useRedeemStatus()
   const cadence = useRef(null)
   useTimelineScrub(cadence)
   return (
@@ -362,7 +365,9 @@ export default function PublicHome() {
           <div className="know-list reveal">
             <article className="rise" style={{ '--i': 0 }}><strong>Real-money risk</strong><p>Prediction-market positions can lose some or all of the money committed. Past wallet activity does not predict future results.</p></article>
             <article className="rise" style={{ '--i': 1 }}><strong>Custodial wallet</strong><p>PolyTrade creates and operates a wallet for you. Review the security model and protect access to your Telegram account.</p></article>
-            <article className="rise" style={{ '--i': 2 }}><strong>Funding and withdrawals</strong><p>There is no in-app withdrawal or automatic redemption. Exiting and moving funds may require external tools and network fees.</p></article>
+            <article className="rise" style={{ '--i': 2 }}><strong>Funding and withdrawals</strong><p>{redeem.auto
+              ? `There is no in-app withdrawal. Resolved positions are redeemed automatically about every ${redeemMinutes(redeem)} minutes. Exiting and moving funds may require external tools and network fees.`
+              : 'There is no in-app withdrawal or automatic redemption. Exiting and moving funds may require external tools and network fees.'}</p></article>
             <article className="rise" style={{ '--i': 3 }}><strong>Eligibility is your responsibility</strong><p>Use only where Polymarket and this service are legally available to you. Geographic and other restrictions may apply.</p></article>
           </div>
         </section>
@@ -873,12 +878,13 @@ function CohortChart() {
 }
 
 function Lifecycle() {
+  const redeem = useRedeemStatus()
   return (
     <div className="panel lifecycle reveal">
       <p className="panel-label">POSITION STATES · AS THE APP SHOWS THEM</p>
       <ol className="life-list">
-        {LIFECYCLE.map(({ states, note }, row) => (
-          <li key={note} className="life-row rise" style={{ '--i': row }}>
+        {LIFECYCLE.map(({ states, note, noteAuto }, row) => (
+          <li key={states.map(([state]) => state).join('-')} className="life-row rise" style={{ '--i': row }}>
             <div className="life-states">
               {states.map(([state, tone], index) => (
                 <Fragment key={state}>
@@ -887,7 +893,7 @@ function Lifecycle() {
                 </Fragment>
               ))}
             </div>
-            <p>{note}</p>
+            <p>{redeem.auto && noteAuto ? noteAuto : note}</p>
           </li>
         ))}
       </ol>

@@ -75,7 +75,7 @@ Pausing the account, pausing a wallet, or unfollowing blocks new buys. It does *
 
 To exit now, close the position manually and pick an acceptable slippage limit. A fill-or-kill sell fails when the full amount isn't available at or above its price floor.
 
-Resolved winning positions are not redeemed automatically and stay claimable until redeemed through Polymarket.
+Resolved positions are redeemed automatically about every 30 minutes: winnings return to your spendable balance and lost positions are cleared from the wallet.
 
 ## First-copy checklist
 
@@ -87,7 +87,7 @@ Resolved winning positions are not redeemed automatically and stay claimable unt
 - [ ] I understand my ratio, position cap, price, slippage, exposure, and loss limits.
 - [ ] I reviewed the source wallet's concentration and data limitations.
 - [ ] I know pausing does not sell existing positions.
-- [ ] I know there is no in-app withdrawal and no automatic redemption.
+- [ ] I know there is no in-app withdrawal, and that resolved positions are redeemed automatically.
 
 ## Next step
 

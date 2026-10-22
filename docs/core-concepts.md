@@ -68,9 +68,9 @@ Without them, PolyTrade falls back to a plain EOA. That path can require MATIC f
 
 The app separates available cash, open-position value, resolved claimable value, equity, and PnL. Equity history is periodically sampled and downsampled for longer periods; it is an operational view and is unaudited.
 
-## Resolved versus redeemed
+## Resolved and redeemed
 
-A resolved winning position becomes claimable. PolyTrade records it but does not automatically redeem outcome tokens. Redeem through Polymarket when required.
+A resolved winning position becomes claimable. PolyTrade redeems claimable positions automatically about every 30 minutes, turning them into spendable pUSD, and clears lost positions the same way.
 
 ## Data authority
 

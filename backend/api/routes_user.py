@@ -337,8 +337,9 @@ async def me(request: Request, balance: bool = False,
     """Profile. With ?balance=true it also computes the account's money split:
       balance       = free cash collateral (spendable pUSD)
       positions_val = live market value of open positions
-      claimable     = value of resolved-but-unredeemed winnings (redeem on
-                      polymarket.com to turn into cash; not auto-claimed)
+      claimable     = value of resolved-but-unredeemed winnings (the redeem loop
+                      turns them into cash when REDEEM_AUTOSTART=1; otherwise
+                      they are redeemed on polymarket.com)
       equity        = balance + positions_val + claimable (total account value)
     Splitting these is why the single 'balance' looked wrong: money sitting in
     open positions or unclaimed wins was invisible."""

@@ -1,5 +1,6 @@
 import Icon from './Icon'
 import { dollars } from '../money'
+import { redeemWithin } from '../redeemStatus'
 
 const short = (a) => (a ? `${a.slice(0, 6)}…${a.slice(-4)}` : '')
 const cents = (v) => (v == null ? '—' : `${(v * 100).toFixed(1)}¢`)
@@ -10,7 +11,7 @@ const usd = (v) => (v == null ? '—' : `${v >= 0 ? '+' : '−'}$${dollars(Math.
    numbers behind it sit in one row underneath; status and the close control
    come last, and a position that cannot be sold says why instead of offering a
    button that would fail. */
-export default function PositionCard({ p, closed, onRequestClose }) {
+export default function PositionCard({ p, closed, onRequestClose, redeem = { auto: false } }) {
   const value = closed ? p.realized_pnl || 0 : p.unrealized_pnl
   const refPrice = closed ? p.exit_price : p.current_price
   const movePct = p.entry_price && refPrice != null
@@ -22,12 +23,16 @@ export default function PositionCard({ p, closed, onRequestClose }) {
     || p.status === 'closing'
     || p.status === 'reconciliation_required'
   const title = p.market_title || `token ${(p.token_id || '').slice(0, 16)}…`
+  const within = redeemWithin(redeem)
   const tone = value == null ? '' : value >= 0 ? 'pos' : 'neg'
 
   let origin
   if (needsReconciliation) origin = null
   else if (manual) origin = 'Closed by you'
-  else if (p.claimable) origin = 'Market settled — winnings not redeemed yet'
+  else if (p.claimable) {
+    origin = redeem.auto ? 'Market settled — winnings on their way to your balance'
+      : 'Market settled — winnings not redeemed yet'
+  }
   else if (p.external) {
     origin = p.origin === 'bot_history'
       ? `Bot history links this token to ${short(p.trader_address)} — current shares need reconciliation`
@@ -81,15 +86,19 @@ export default function PositionCard({ p, closed, onRequestClose }) {
       {closed && p.claimable && (
         <div className="notice" role="note">
           <Icon name="info" />
-          <div><b>Claimable.</b> Redeem it on polymarket.com to turn it into spendable cash.</div>
+          {redeem.auto
+            ? <div><b>Claimable.</b> It is redeemed to your balance automatically within {within}.</div>
+            : <div><b>Claimable.</b> Redeem it on polymarket.com to turn it into spendable cash.</div>}
         </div>
       )}
       {!closed && !needsReconciliation && p.redeemable && (
         <div className="notice" role="note">
           <Icon name="info" />
           {Number(p.current_price) === 0
-            ? <div><b>Resolved.</b> This bet lost and is worth $0.</div>
-            : <div><b>Resolved.</b> Winnings must be redeemed on polymarket.com — there is nothing to sell.</div>}
+            ? <div><b>Resolved.</b> This bet lost and is worth $0.{redeem.auto && redeem.losses ? ' It clears from your wallet automatically.' : ''}</div>
+            : redeem.auto
+              ? <div><b>Resolved.</b> Winnings are redeemed to your balance automatically within {within}; there is nothing to sell.</div>
+              : <div><b>Resolved.</b> Winnings must be redeemed on polymarket.com — there is nothing to sell.</div>}
         </div>
       )}
       {!closed && !needsReconciliation && !p.redeemable && (

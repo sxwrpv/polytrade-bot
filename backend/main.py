@@ -231,12 +231,16 @@ async def _redeem_loop(app, stop: asyncio.Event) -> None:
     redeemer = redeem.Redeemer(app.state.db, app.state.pm, _shared_client_factory(app),
                                chain, retry_seconds=retry_seconds,
                                redeem_losses=redeem_losses)
+    redeem.STATUS.update(auto=True, losses=redeem_losses,
+                         every_minutes=max(1, round(interval / 60)))
     try:
         while not stop.is_set():
             try:
                 summary = await redeemer.run_pass(concurrency=concurrency, stop=stop)
                 if redeemer.halted is None:
                     heartbeats.mark("redeem")
+                else:
+                    redeem.STATUS["auto"] = False
                 log.info("redeem pass: %s", summary.describe())
             except Exception:
                 log.exception("redeem pass failed (continuing)")
@@ -245,6 +249,7 @@ async def _redeem_loop(app, stop: asyncio.Event) -> None:
             except asyncio.TimeoutError:
                 pass
     finally:
+        redeem.STATUS["auto"] = False
         await chain.aclose()
 
 
@@ -512,6 +517,9 @@ async def version():
         "built_at": BUILD_TIME or None,
         "engine_enabled": os.environ.get("COPY_ENGINE_AUTOSTART", "1") == "1",
         "data_mode": "live",
+        # Whether resolved positions are redeemed here without the user: the
+        # Mini App and the homepage word redemption from this.
+        "redeem": dict(redeem.STATUS),
     }
 
 

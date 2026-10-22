@@ -46,6 +46,8 @@ export function haptic(type = 'success') {
 }
 
 export const api = {
+  // what this server runs (public)
+  version: () => req('/version'),
   // auth
   logout: () => req('/auth/logout', { method: 'POST' }),
   telegramAuth: (initData) =>

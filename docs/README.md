@@ -32,7 +32,7 @@ Read the complete [Getting Started](getting-started.md) walkthrough before fundi
 - **Eligibility:** You are responsible for being legally eligible to use Polymarket and PolyTrade. A website geoblock signal may be advisory; the exchange makes its own order decision.
 - **Execution can differ:** Copying a profitable wallet does not reproduce its price, timing, size, hedges, or return. Orders may be skipped or fail.
 - **No in-app withdrawal:** PolyTrade does not expose a withdrawal API or in-app withdrawal workflow. Key export requires fresh Telegram verification, and using an exported signer requires understanding the wallet model.
-- **No automatic redemption:** Resolved winnings can remain claimable. PolyTrade does not automatically redeem them.
+- **Automatic redemption:** PolyTrade redeems resolved positions about every 30 minutes. Winnings return to your spendable balance and lost positions are cleared from the wallet.
 - **Pause is not liquidation:** Pausing, disabling, or unfollowing blocks new buys; it does not sell existing positions.
 
 Only fund an amount you can afford to lose completely. See [Risk and Security](risk-and-security.md) and [Wallet and Funding](wallet-and-funding.md).

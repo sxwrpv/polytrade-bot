@@ -8,7 +8,7 @@ This page explains what PolyTrade controls, how to deposit safely, and what the 
 - Start only from [@cpolytrade_bot](https://t.me/cpolytrade_bot), create the wallet in the Telegram Mini App, and back up the signer key offline.
 - Deposit only with an asset/network route displayed in **User**, and send a small test first.
 - PolyTrade does not expose a withdrawal API or in-app withdrawal workflow.
-- PolyTrade does not automatically redeem resolved winnings.
+- PolyTrade redeems resolved positions automatically about every 30 minutes.
 
 A wallet address, visible balance, or successful deposit does not remove market, custody, smart-contract, infrastructure, or total-loss risk.
 
@@ -76,13 +76,13 @@ Store the key offline in a secure vault. Screenshots, clipboard history, browser
 
 ## Resolution is not redemption
 
-When a market resolves, a winning position can become claimable. PolyTrade records claimable value, but it does not approve the auto-redeem operator and does not automatically redeem winnings.
+When a market resolves, a winning position becomes claimable. PolyTrade redeems it automatically about every 30 minutes, in one gasless transaction per wallet, and the payout returns to your spendable balance. Lost positions are cleared from the wallet the same way.
 
-Redeem through Polymarket when needed. A position can appear **Closed** while value is still claimable.
+A position can appear **Closed** while its value is still claimable; the next redeem pass turns it into spendable cash.
 
 ## What pausing does
 
-Pausing the account, disabling a followed source, or unfollowing blocks new buys. It does not sell existing positions or redeem resolved winnings. Existing positions still need monitoring through sale, resolution, and any required redemption.
+Pausing the account, disabling a followed source, or unfollowing blocks new buys. It does not sell existing positions. Open positions still need monitoring through sale and resolution; resolved ones are redeemed automatically.
 
 ## Technical wallet modes
 
