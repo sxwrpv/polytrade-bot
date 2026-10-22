@@ -176,16 +176,16 @@ class MarketBuyGridTests(unittest.IsolatedAsyncioTestCase):
     rounds the shares to 5 decimals on a 0.001 or 0.005 tick and to 6 on a
     0.0001 or 0.0025 tick; on 2026-10-22 the exchange refused two $10.00 BUYs
     for it, and each became an uncertain fence. TradingClient signs every
-    market BUY on the grid (execution.market_buy_amounts)."""
+    market BUY on the grid (execution.market_order_amounts)."""
 
     def test_every_tick_lands_on_the_grid_at_the_same_spend_and_cap(self):
-        """market_buy_amounts over the SDK's own amounts for every tick it
-        supports: on the grid, the same cents, under 0.0001 more shares, and a
-        price (maker / taker) at or below the cap. Ticks of 0.1 and 0.01 come
+        """market_order_amounts over the SDK's own BUY amounts for every tick
+        it supports: on the grid, the same cents, under 0.0001 more shares, and
+        a price (maker / taker) at or below the cap. Ticks of 0.1 and 0.01 come
         back unchanged."""
         # Beside the SDK's own output: a maker off the cent grid rounds down.
         self.assertEqual((10_000_000, 10_131_800),
-                         execution.market_buy_amounts(10_004_999, 10_131_720))
+                         execution.market_order_amounts(10_004_999, 10_131_720))
         for tick in ("0.1", "0.01", "0.005", "0.001", "0.0025", "0.0001"):
             step = Decimal(tick)
             prices = [step * k for k in range(1, int(1 / step))]
@@ -196,7 +196,7 @@ class MarketBuyGridTests(unittest.IsolatedAsyncioTestCase):
                         sdk_maker, sdk_taker = _compute_market_order_amounts(
                             amount=Decimal(cents) / 100, price=cap, side="BUY",
                             tick_size=step, protect_price=True)
-                        maker, taker = execution.market_buy_amounts(sdk_maker, sdk_taker)
+                        maker, taker = execution.market_order_amounts(sdk_maker, sdk_taker)
                         case = f"cap {cap}, ${cents / 100:.2f}"
                         self.assertEqual((0, 0), (maker % 10_000, taker % 100), case)
                         self.assertEqual(cents * 10_000, maker, case)
@@ -252,20 +252,20 @@ class MarketBuyGridTests(unittest.IsolatedAsyncioTestCase):
                 self.assertLessEqual(clob.units(order["makerAmount"])
                                      / clob.units(order["takerAmount"]), Decimal(cap))
 
-    async def test_sells_and_limit_orders_sign_the_sdks_own_amounts(self):
-        """Only a market BUY moves: a market SELL and a limit BUY sign the same
-        amounts through TradingClient as through the SDK's own client."""
+    async def test_limit_orders_sign_the_sdks_own_amounts(self):
+        """Only market orders move: a limit BUY and a limit SELL sign the same
+        amounts through TradingClient as through the SDK's own client, their
+        5 decimals of pUSD on a 0.001 tick included."""
         signed = {}
         for cls in (AsyncSecureClient, execution.TradingClient):
             async with clob.client(clob.Exchange(tick="0.001"), cls) as sdk:
-                sell = await sdk.create_market_order(
-                    token_id=clob.TOKEN, side="SELL", shares=Decimal("10.37"),
-                    min_price=Decimal("0.973"), order_type="FOK")
-                limit = await sdk.create_limit_order(
-                    token_id=clob.TOKEN, price=Decimal("0.987"), size=Decimal("10.13"),
-                    side="BUY")
-            signed[cls] = [(o.order_type, o.maker_amount, o.taker_amount) for o in (sell, limit)]
+                orders = [await sdk.create_limit_order(
+                    token_id=clob.TOKEN, price=Decimal("0.973"), size=Decimal("10.37"),
+                    side=side) for side in ("BUY", "SELL")]
+            signed[cls] = [(o.order_type, o.maker_amount, o.taker_amount) for o in orders]
         self.assertEqual(signed[AsyncSecureClient], signed[execution.TradingClient])
+        [(_, buy_pusd, _), (_, _, sell_pusd)] = signed[execution.TradingClient]
+        self.assertEqual(("10090010", "10090010"), (str(buy_pusd), str(sell_pusd)))
 
     async def test_every_client_is_built_as_a_trading_client(self):
         create = AsyncMock(return_value="client")
@@ -273,6 +273,84 @@ class MarketBuyGridTests(unittest.IsolatedAsyncioTestCase):
             built = await wallet.make_clob_client("0x" + "11" * 32, funder="0x" + "2" * 40)
         self.assertEqual("client", built)
         create.assert_awaited_once()
+
+
+class MarketSellGridTests(unittest.IsolatedAsyncioTestCase):
+    """A market SELL offers shares (maker) for pUSD (taker). The pinned SDK
+    floors the shares to 2 decimals and asks for shares x min_price pUSD: 5
+    decimals on a 0.001 or 0.005 tick, 6 on a 0.0025 or 0.0001 tick. No
+    exchange refusal of a SELL for that is on record. TradingClient signs
+    every market SELL on the same 2/4-decimal grid as a BUY, its pUSD rounded
+    up to 0.0001, so a close stays within the rule that refused the
+    2026-10-22 BUYs."""
+
+    def test_every_tick_lands_on_the_grid_at_the_same_shares_and_floor(self):
+        """market_order_amounts over the SDK's own SELL amounts for every tick
+        it supports: on the grid, the same shares, under 0.0001 more pUSD, and
+        a price (taker / maker) at or above the floor and under the next tick,
+        so a bid one tick up stays in reach. Ticks of 0.1 and 0.01 come back
+        unchanged."""
+        for tick in ("0.1", "0.01", "0.005", "0.001", "0.0025", "0.0001"):
+            step = Decimal(tick)
+            prices = [step * k for k in range(1, int(1 / step))]
+            floors = prices[::max(1, len(prices) // 60)] + prices[-5:]
+            with self.subTest(tick=tick):
+                for floor in floors:
+                    for hundredths in range(500, 50001, 997):
+                        shares = Decimal(hundredths) / 100
+                        sdk_maker, sdk_taker = _compute_market_order_amounts(
+                            amount=shares, price=floor, side="SELL",
+                            tick_size=step, protect_price=True)
+                        maker, taker = execution.market_order_amounts(sdk_maker, sdk_taker)
+                        case = f"floor {floor}, {shares} shares"
+                        self.assertEqual((0, 0), (maker % 10_000, taker % 100), case)
+                        self.assertEqual(hundredths * 10_000, maker, case)
+                        self.assertTrue(0 <= taker - sdk_taker < 100, case)
+                        self.assertGreaterEqual(Decimal(taker) / maker, floor, case)
+                        self.assertLess(Decimal(taker) / maker, floor + step, case)
+                        if tick in ("0.1", "0.01"):
+                            self.assertEqual((sdk_maker, sdk_taker), (maker, taker), case)
+
+    async def test_a_fine_tick_close_reaches_the_exchange_on_the_grid(self):
+        """10.37 shares on a 0.001 tick, floored at 0.971 (1% under a 0.98
+        reference), end to end through the pinned SDK. Signed by the SDK's own
+        client it asks for 10.06927 pUSD. Signed by TradingClient it asks for
+        10.0693, sells every share and keeps the floor."""
+        for cls, taker in ((AsyncSecureClient, "10069270"),
+                           (execution.TradingClient, "10069300")):
+            with self.subTest(cls.__name__):
+                exchange = clob.Exchange(tick="0.001")
+                async with clob.client(exchange, cls) as sdk:
+                    result = await place_market_order(
+                        sdk, ThousandthTickPM(), clob.TOKEN, "SELL", 10.37,
+                        reference_price=0.98, max_slippage_pct=1)
+                [order] = exchange.orders
+                self.assertEqual(("SELL", "10370000", taker),
+                                 (order["side"], order["makerAmount"], order["takerAmount"]))
+                self.assertEqual(0.971, result.limit_price)
+                self.assertTrue(result.ok)
+                self.assertAlmostEqual(10.37, result.filled_shares)
+                self.assertGreaterEqual(clob.units(order["takerAmount"])
+                                        / clob.units(order["makerAmount"]), Decimal("0.971"))
+
+    async def test_every_tick_reaches_the_exchange_on_the_grid(self):
+        """A real SELL through TradingClient on each tick the SDK supports, at
+        floors where its own pUSD leaves the grid."""
+        for tick, floor in (("0.005", "0.985"), ("0.001", "0.973"), ("0.001", "0.013"),
+                            ("0.0025", "0.9875"), ("0.0001", "0.9871"), ("0.01", "0.97"),
+                            ("0.1", "0.7")):
+            with self.subTest(tick=tick, floor=floor):
+                exchange = clob.Exchange(tick=tick)
+                async with clob.client(exchange, execution.TradingClient) as sdk:
+                    response = await sdk.place_market_order(
+                        token_id=clob.TOKEN, side="SELL", shares=Decimal("10.37"),
+                        min_price=Decimal(floor), order_type="FOK")
+                [order] = exchange.orders
+                self.assertTrue(response.ok, order)
+                self.assertEqual("10370000", order["makerAmount"])
+                self.assertEqual(0, int(order["takerAmount"]) % 100)
+                self.assertGreaterEqual(clob.units(order["takerAmount"])
+                                        / clob.units(order["makerAmount"]), Decimal(floor))
 
 
 if __name__ == "__main__":
