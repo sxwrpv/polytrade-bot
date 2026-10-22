@@ -1807,11 +1807,20 @@ class CopyEngine:
                     return None
                 claim_id = uuid.uuid4().hex
                 now = now_iso()
-                await tx.execute(
+                inserted = await tx.execute(
                     "INSERT INTO copy_open_claims(user_id,token_id,trader_address,claim_id,action,state,"
-                    "reserved_usd,risk_revision,claimed_at,updated_at) VALUES(?,?,?,?,?,'reserved',?,?,?,?)",
+                    "reserved_usd,risk_revision,claimed_at,updated_at) VALUES(?,?,?,?,?,'reserved',?,?,?,?) "
+                    "ON CONFLICT(user_id, token_id) DO NOTHING",
                     (user_id, action.token_id, trader, claim_id, action.kind,
                      allowed, int(user.get("risk_revision") or 0), now, now))
+                if inserted == 0:
+                    # A claim (a fence) already holds this token for this user.
+                    # The plain INSERT used to raise a duplicate-key error here,
+                    # which Postgres logged as an ERROR on every reconcile pass
+                    # for as long as the fence stood (2026-10-22: 3,053 of them
+                    # in 8h). Raising it ourselves keeps the old path exactly:
+                    # the transaction rolls back and the handler below skips.
+                    raise aiosqlite.IntegrityError("copy_open_claims: claim already held")
                 return replace(action, amount=allowed, notional_usd=allowed,
                                trader_address=trader, claim_id=claim_id), risk
         except aiosqlite.IntegrityError:
