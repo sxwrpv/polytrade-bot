@@ -693,7 +693,7 @@ class SizingSettingsTests(EngineDb):
 
     def test_postgres_boot_schema_and_migration_add_the_same_columns(self):
         migration = (Path(__file__).resolve().parents[1] / "supabase" / "migrations"
-                     / "0013_capital_share_sizing.sql").read_text()
+                     / "0014_capital_share_sizing.sql").read_text()
         for column in ("sizing_mode TEXT", "capital_multiplier DOUBLE PRECISION"):
             with self.subTest(column=column):
                 self.assertIn(f"followed_traders ADD COLUMN IF NOT EXISTS {column}",

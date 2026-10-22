@@ -426,7 +426,7 @@ MIGRATIONS = (
     "ALTER TABLE wallet_creation_claims ADD COLUMN private_key_enc TEXT",
     "ALTER TABLE wallet_creation_claims ADD COLUMN lease_owner TEXT",
     "ALTER TABLE wallet_creation_claims ADD COLUMN lease_expires_at TEXT",
-    # capital-share sizing (supabase/migrations/0013); NULL keeps position share
+    # capital-share sizing (supabase/migrations/0014); NULL keeps position share
     "ALTER TABLE followed_traders ADD COLUMN sizing_mode TEXT "
     "CHECK(sizing_mode IS NULL OR sizing_mode IN ('position_share','capital_share'))",
     "ALTER TABLE followed_traders ADD COLUMN capital_multiplier REAL",
@@ -731,7 +731,7 @@ ALTER TABLE copy_open_claims ADD COLUMN IF NOT EXISTS last_error TEXT;
 UPDATE copy_open_claims SET claim_id = COALESCE(claim_id, md5(user_id || ':' || token_id)), updated_at = COALESCE(updated_at, claimed_at);
 ALTER TABLE copy_open_claims ALTER COLUMN claim_id SET NOT NULL;
 ALTER TABLE copy_open_claims ALTER COLUMN updated_at SET NOT NULL;
--- Capital-share sizing (supabase/migrations/0013). NULL keeps position share.
+-- Capital-share sizing (supabase/migrations/0014). NULL keeps position share.
 ALTER TABLE followed_traders ADD COLUMN IF NOT EXISTS sizing_mode TEXT
     CHECK(sizing_mode IS NULL OR sizing_mode IN ('position_share','capital_share'));
 ALTER TABLE followed_traders ADD COLUMN IF NOT EXISTS capital_multiplier DOUBLE PRECISION;
