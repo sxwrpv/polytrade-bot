@@ -14,8 +14,8 @@ costing an extra API call.
 `amount` semantics: for BUY it is the pUSD notional to spend; for SELL it is the
 number of shares to sell. The client (AsyncSecureClient) is natively async — no
 asyncio.to_thread needed, unlike the old py-clob-client(-v2)-based version.
-wallet.make_clob_client builds every client as a TradingClient, which signs a
-market BUY's amounts on the exchange's grid (market_buy_amounts).
+wallet.make_clob_client builds every client as a TradingClient, which signs
+every market order's amounts on the exchange's grid (market_order_amounts).
 """
 from __future__ import annotations
 
@@ -153,7 +153,7 @@ def ceil_decimal_to_tick(value: Decimal, tick: Decimal) -> Decimal:
 
 
 # ---------------------------------------------------------------------------
-# Market BUY amounts on the exchange's grid
+# Market order amounts on the exchange's grid
 # ---------------------------------------------------------------------------
 # The CLOB takes a market (FOK/FAK) BUY only when the pUSD it offers, the maker
 # amount, has at most 2 decimals and the shares it asks for, the taker amount,
@@ -174,34 +174,52 @@ def ceil_decimal_to_tick(value: Decimal, tick: Decimal) -> Decimal:
 # this way. Shaving the spend until spend / max_price fit 4 decimals was
 # measured too: at caps 0.961-0.999 it cost over 2% of the order for one BUY in
 # ten and over 15% for one in a hundred, and some spends had no fit at all.
-_CENT = 10_000        # 0.01 pUSD in base units (both amounts carry 6 decimals)
-_SHARE_STEP = 100     # 0.0001 shares in base units
+#
+# A market SELL offers shares (maker) for pUSD (taker). The SDK floors the
+# shares to 0.01 and asks for shares x min_price pUSD, which carries up to 5
+# decimals on a 0.001 or 0.005 tick and 6 on a 0.0025 or 0.0001 tick: 10.37
+# shares floored at 0.973 ask for 10.09001. No SELL refused for its amounts is
+# on record (2026-10-22 production logs, the SDKs' issue trackers), and every
+# official client signs these amounts. The exchange's limit for a SELL's pUSD is still
+# unknown, and a close refused that way would stay uncertain and go out again
+# after each stuck-closing reopen, so a SELL goes on the same grid: its shares
+# keep their 2 decimals and its pUSD rounds up to 0.0001. That lifts the
+# order's price (taker / maker) by under 0.0001 / shares, so a SELL stays at or
+# above its floor; at ticks 0.01 and 0.1 nothing changes.
+#
+# Either move leaves a resting order exactly at the limit out of reach (an ask
+# at a BUY's cap, a bid at a SELL's floor): the exchange matches only once the
+# order's price reaches the resting one. github.com/Polymarket/py-sdk/issues/291
+# is the BUY side of that.
+_MAKER_STEP = 10_000   # 2 decimals in base units (both amounts carry 6 decimals)
+_TAKER_STEP = 100      # 4 decimals in base units
 
 
-def market_buy_amounts(maker: int, taker: int) -> tuple[int, int]:
-    """A market BUY's (maker, taker) base units on the CLOB's grid: the pUSD
-    offered rounds down to a cent and the shares asked round up to 0.0001.
-    Both moves can only lower maker / taker, the order's price. On a 0.01 or
-    0.1 tick the SDK's amounts are already on the grid and come back
-    unchanged."""
-    return maker // _CENT * _CENT, -(-taker // _SHARE_STEP) * _SHARE_STEP
+def market_order_amounts(maker: int, taker: int) -> tuple[int, int]:
+    """A market order's (maker, taker) base units on the CLOB's grid: the
+    maker amount rounds down to 2 decimals and the taker amount up to 4. A BUY
+    (pUSD for shares) is priced maker / taker and a SELL (shares for pUSD)
+    taker / maker, so a BUY's price can only fall and a SELL's can only rise:
+    each keeps its cap or its floor. On a 0.01 or 0.1 tick the SDK's amounts
+    are already on the grid and come back unchanged."""
+    return maker // _MAKER_STEP * _MAKER_STEP, -(-taker // _TAKER_STEP) * _TAKER_STEP
 
 
 class TradingClient(AsyncSecureClient):
-    """AsyncSecureClient that signs every market BUY on the CLOB's grid
-    (market_buy_amounts). wallet.make_clob_client builds every client as one.
+    """AsyncSecureClient that signs every market order on the CLOB's grid
+    (market_order_amounts). wallet.make_clob_client builds every client as one.
 
     The amounts are part of the signed order, so _sign_order is the last place
     they can change. In polymarket-client 0.6.0 it is the one signing step for
     limit (GTC/GTD) and market (FOK/FAK) orders, and it receives the draft the
-    SDK priced. Only FOK/FAK BUY drafts change here.
-    tests/test_execution_price_band.py sends a real BUY through this class and
-    reads the order that reaches POST /order, so an SDK release that signs
-    somewhere else fails that test."""
+    SDK priced. Only FOK/FAK drafts change here.
+    tests/test_execution_price_band.py sends a real BUY and a real SELL through
+    this class and reads the order that reaches POST /order, so an SDK release
+    that signs somewhere else fails those tests."""
 
     async def _sign_order(self, draft, *, post_only: bool):
-        if draft.side == "BUY" and draft.order_type in ("FOK", "FAK"):
-            maker, taker = market_buy_amounts(draft.offered_amount, draft.requested_amount)
+        if draft.order_type in ("FOK", "FAK"):
+            maker, taker = market_order_amounts(draft.offered_amount, draft.requested_amount)
             draft = replace(draft, offered_amount=maker, requested_amount=taker)
         return await super()._sign_order(draft, post_only=post_only)
 
@@ -210,7 +228,7 @@ class TradingClient(AsyncSecureClient):
 # the exchange's verdict on the order we sent, given before anything matched:
 # a FOK that cannot fill completely is killed whole, and the balance /
 # allowance check and the check of a market order's amounts (see
-# market_buy_amounts) run before matching. polymarket-client 0.6.0 raises them
+# market_order_amounts) run before matching. polymarket-client 0.6.0 raises them
 # as RequestRejectedError(status=400) carrying the server's text, or returns
 # the first two as RejectedOrder(code='fok_not_filled' / 'not_enough_balance')
 # (polymarket/models/clob/order_response.py). It has no code for the amounts
@@ -453,8 +471,11 @@ async def place_market_order(
         # 400 carrying one of the texts in _terminal_rejection, meaning the
         # order was refused outright and nothing executed. A 4xx with any other
         # text stays ambiguous: the 2026-08-23 cap incident (three BUYs
-        # reported failed, all filled) is why that is the default. Preflight
-        # failures above still return cleanly without setting either flag.
+        # reported failed, all filled) is why that is the default. A SELL's
+        # refusal stays ambiguous whatever its text: stuck-closing recovery
+        # settles it from the wallet, and the exchange's wording for a SELL
+        # off the amounts grid has never been seen. Preflight failures above
+        # still return cleanly without setting either flag.
         label = "insufficient_liquidity" if type(e).__name__ == "InsufficientLiquidityError" else "api_error"
         res.reason = f"{label}: {e}"
         rejection = ""

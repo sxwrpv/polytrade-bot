@@ -9,7 +9,9 @@ fenced, no SELL of the position could run. Now:
   - (2026-10-19) a BUY the exchange refused outright (FOK kill, not enough
     balance / allowance) is a definite failure and leaves no fence at all;
   - (2026-10-22) so is a market BUY refused for the decimals of its amounts,
-    and execution.TradingClient signs every market BUY within them.
+    and execution.TradingClient signs every market BUY within them;
+  - (2026-10-23) TradingClient signs every market SELL within them too, and a
+    SELL the exchange refuses still stays uncertain for stuck-closing recovery.
 """
 from __future__ import annotations
 
@@ -824,7 +826,10 @@ class TerminalRejectionTests(unittest.IsolatedAsyncioTestCase):
     async def test_a_sell_keeps_todays_classification(self):
         """Stuck-closing recovery settles an uncertain SELL from the wallet, and
         also finalizes a row whose shares are already gone, the usual reason a
-        SELL is refused for balance. Only the BUY fence changed."""
+        SELL is refused for balance. Only the BUY fence changed. The amounts
+        text stays uncertain on a SELL as well: the exchange's wording for a
+        SELL off the grid has never been seen, and TradingClient signs every
+        market SELL on it."""
         sell_amounts = INVALID_AMOUNTS.replace("market buy orders", "market sell orders")
         for text in (FOK_KILLED, NO_BALANCE, INVALID_AMOUNTS, sell_amounts):
             with self.subTest(text):
@@ -953,6 +958,40 @@ class RefusedBuyTests(FenceDb):
                 self.assertEqual(4.0, await self.other_token_reservation(engine),
                                  "the fenced $8 stays reserved")
                 await self.db.execute("DELETE FROM copy_open_claims")
+
+
+class FineTickCloseTests(FenceDb):
+    """A close on a 0.001 tick through the engine and the pinned SDK."""
+
+    def close_engine(self) -> CopyEngine:
+        book, pm = ThousandthTickBook(), self.pm()
+        pm.get_geoblock = book.get_geoblock
+        pm.get_orderbook = book.get_orderbook
+        return CopyEngine(self.db, pm)
+
+    async def test_a_fine_tick_close_end_to_end(self):
+        """20.37 shares floored at 0.951, 2% under the 0.97 bid. The SDK's own
+        client asks for 19.37187 pUSD. TradingClient, which every production
+        client is, asks for 19.3719, and the row closes at the floor or above.
+        No exchange refusal of a SELL for its amounts is on record, so the
+        offline exchange fills both."""
+        for cls, taker in ((AsyncSecureClient, "19371870"),
+                           (execution.TradingClient, "19371900")):
+            with self.subTest(cls.__name__):
+                row = await self.position(shares=20.37)
+                exchange = offline_clob.Exchange(tick="0.001")
+                async with offline_clob.client(exchange, cls) as sdk:
+                    await self.close_engine()._execute(USER, sdk, Action(
+                        kind="close", token_id=TOKEN, side="SELL", amount=row["shares"],
+                        row=row), slippage=2.0)
+                [order] = exchange.orders
+                self.assertEqual(("SELL", "20370000", taker),
+                                 (order["side"], order["makerAmount"], order["takerAmount"]))
+                closed = await self.row()
+                self.assertEqual("closed", closed["status"])
+                self.assertAlmostEqual(0.951, closed["exit_price"], places=5)
+                await self.db.execute("DELETE FROM trade_events")
+                await self.db.execute("DELETE FROM copy_positions")
 
 
 if __name__ == "__main__":
