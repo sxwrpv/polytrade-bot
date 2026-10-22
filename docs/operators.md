@@ -23,7 +23,7 @@ Do not publish or document IP-only operational access. Keep backend ports, dashb
 
 ## Withdrawals
 
-Withdrawals are off until `WITHDRAWALS_ENABLED=1` (see [Configuration](configuration.md)). A withdrawal whose pUSD left the wallet without a confirmed delivery moves to `attention`: the app logs `WITHDRAW ATTENTION` at ERROR, Telegram tells the user PolyTrade is following up, and `/api/ready` counts it under `withdrawals_attention`. Two unresolved ones pause withdrawals for everyone.
+Withdrawals are off until `WITHDRAWALS_ENABLED=1` (see [Configuration](configuration.md)). A withdrawal whose pUSD left the wallet without a confirmed delivery moves to `attention`: the app logs `WITHDRAW ATTENTION` at ERROR, Telegram tells the user PolyTrade is following up, and `/api/ready` counts it under `withdrawals_attention`. Two unresolved ones pause withdrawals for everyone. Unless the bridge reported the transfer failed, the app checks an `attention` withdrawal again every five minutes for a day: once the USDC payment to the destination shows up on Polygon, it moves to `confirmed` by itself and Telegram tells the user it is complete. The bridge's `/status` txHash is not always a Polygon transaction, so the payment is read from the chain.
 
 Follow it up with the bridge provider using the bridge address and transaction hash from the log, then close it inside the app container:
 

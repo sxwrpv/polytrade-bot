@@ -119,7 +119,7 @@ def format_withdrawal_alert(event: dict) -> str:
                  f"To: <b>{to}</b> on Polygon"]
         footer = "The bridge is converting it to USDC. This usually takes under a minute."
     elif kind == "confirmed":
-        status = "✅ <b>WITHDRAWAL DELIVERED</b>"
+        status = "✅ <b>WITHDRAWAL COMPLETE</b>"
         delivered = html.escape(str(event.get("delivered_usd") or amount))
         facts = [f"Delivered: <b>{delivered} USDC</b>", f"To: <b>{to}</b> on Polygon"]
         footer = link

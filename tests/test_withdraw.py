@@ -139,7 +139,7 @@ class Chain:
         self.log_queries.append((token, sender, recipient, from_block, to_block))
         return [entry for entry in self.logs
                 if entry["address"] == token.lower()
-                and entry["topics"][1] == w._topic(sender)
+                and (sender is None or entry["topics"][1] == w._topic(sender))
                 and entry["topics"][2] == w._topic(recipient)]
 
 
@@ -401,6 +401,23 @@ class PolygonReaderTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(w.ChainReadError) as caught:
             await reader.block_number()
         self.assertNotIn("secret-key-123", str(caught.exception))
+
+    async def test_log_queries_stay_within_the_public_endpoints_range(self):
+        asked = []
+
+        def handler(request):
+            query = json.loads(request.content)["params"][0]
+            start, end = int(query["fromBlock"], 16), int(query["toBlock"], 16)
+            if end - start >= w.LOG_CHUNK_BLOCKS:     # drpc's free plan refuses 500 blocks
+                return httpx.Response(400, json={"error": {"message": "range too large"}})
+            asked.append((start, end, query["topics"][1]))
+            return httpx.Response(200, json={"result": [{"blockNumber": hex(start)}]})
+
+        reader = w.PolygonReader("https://rpc.example",
+                                 client=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+        logs = await reader.transfer_logs(w.USDC, None, DEST, 1000, 1250)
+        self.assertEqual(asked, [(1000, 1099, None), (1100, 1199, None), (1200, 1250, None)])
+        self.assertEqual(len(logs), 3)
 
 
 class WithdrawFlowTests(WithdrawTestCase):
@@ -713,6 +730,84 @@ class WithdrawFlowTests(WithdrawTestCase):
         stored = await self.row(bridging)
         self.assertEqual(stored["status"], "attention")
         self.assertEqual(stored["delivered_units"], 2_500_000)
+
+    async def test_the_delivery_is_read_from_the_chain_when_the_bridge_hash_is_not_on_polygon(self):
+        # 2026-10-22: /status named txHashes Polygonscan did not know, and the
+        # USDC payment was a transaction of its own.
+        self.make()
+        bridging = await self.insert("bridging", 3_000_000, key="hash-0001", hours_ago=0.01,
+                                     bridge_address=BRIDGE, bridge_baseline=0, submit_block=990,
+                                     bridging_at=w._iso(NOW - 30), min_out_units=2_999_406)
+        self.bridge.history = [bridge_entry(3_000_000, tx="0x" + "ab" * 32)]
+        payment = transfer_log(w.USDC, SOLVER, DEST, 3_000_000, DELIVERY_TX)
+        self.chain.logs.append(payment)
+        self.chain.receipts[DELIVERY_TX] = receipt(payment)
+        await self.service.reconcile()
+        stored = await self.row(bridging)
+        self.assertEqual((stored["status"], stored["delivery_tx_hash"], stored["delivered_units"]),
+                         ("confirmed", DELIVERY_TX, 3_000_000))
+        self.assertEqual(self.chain.log_queries[-1][1:4], (None, DEST, 990))
+        self.assertEqual(self.kinds(), ["confirmed"])
+
+    async def test_a_transfer_that_cannot_be_the_delivery_is_left_alone(self):
+        self.make()
+        bridging = await self.insert("bridging", 3_000_000, key="near-0001", hours_ago=0.01,
+                                     bridge_address=BRIDGE, bridge_baseline=0, submit_block=990,
+                                     bridging_at=w._iso(NOW - 30), min_out_units=2_999_406)
+        self.bridge.history = [bridge_entry(3_000_000, tx=None)]
+        # Under the minimum, over the amount, and one another withdrawal already counts.
+        claimed = "0x" + "96" * 32
+        for amount, tx in ((2_000_000, "0x" + "c4" * 32), (40_000_000, "0x" + "d5" * 32),
+                           (3_000_000, claimed)):
+            payment = transfer_log(w.USDC, SOLVER, DEST, amount, tx)
+            self.chain.logs.append(payment)
+            self.chain.receipts[tx] = receipt(payment)
+        await self.insert("confirmed", 3_000_000, key="done-0001", delivery_tx_hash=claimed)
+        await self.service.reconcile()
+        self.assertEqual((await self.row(bridging))["status"], "bridging")
+        self.assertEqual(self.kinds(), [])
+
+    async def test_a_withdrawal_past_the_timeout_confirms_once_its_payment_is_on_chain(self):
+        self.make()
+        late = await self.insert("attention", 3_000_000, key="late-0001", hours_ago=0.6,
+                                 bridge_address=BRIDGE, bridge_baseline=0, submit_block=990,
+                                 bridge_status="COMPLETED", min_out_units=2_999_406,
+                                 attention_at=w._iso(NOW - 60),
+                                 error="The bridge has not delivered after 30 minutes.")
+        self.bridge.history = [bridge_entry(3_000_000, tx="0x" + "ab" * 32)]
+        await self.service.reconcile()
+        self.assertEqual((await self.row(late))["status"], "attention")
+        payment = transfer_log(w.USDC, SOLVER, DEST, 3_000_000, DELIVERY_TX)
+        self.chain.logs.append(payment)
+        self.chain.receipts[DELIVERY_TX] = receipt(payment)
+        # Checked again only once ATTENTION_RECHECK_SECONDS have passed.
+        asked = len(self.chain.log_queries)
+        await self.service.reconcile()
+        self.assertEqual(len(self.chain.log_queries), asked)
+        self.clock.t += w.ATTENTION_RECHECK_SECONDS
+        await self.service.reconcile()
+        stored = await self.row(late)
+        self.assertEqual((stored["status"], stored["delivery_tx_hash"], stored["error"]),
+                         ("confirmed", DELIVERY_TX, None))
+        self.assertIn("after the bridge timeout", stored["operator_note"])
+        self.assertEqual(self.kinds(), ["confirmed"])
+        self.assertIsNone(await self.service.paused_reason())
+
+    async def test_polytrade_wallets_are_refused_as_destinations(self):
+        # 2026-10-22: $3 went to another account's deposit wallet, where native
+        # USDC sits beside its pUSD and never shows up as cash.
+        self.make()
+        other_wallet = to_checksum_address("0x" + "6f" * 20)
+        other_signer = to_checksum_address("0x" + "70" * 20)
+        await self.db.execute(
+            "INSERT INTO users(id, signer_address, telegram_user_id, private_key_enc, created_at) "
+            "VALUES(?,?,?,?,?)", (other_wallet, other_signer, 77, "enc", w._iso(NOW)))
+        for address in (other_wallet, other_signer.lower()):
+            with self.assertRaises(w.WithdrawRefused) as caught:
+                await self.service.preview(self.user, "5.00", address)
+            self.assertEqual(caught.exception.status, 400)
+            self.assertIn("PolyTrade wallet", caught.exception.message)
+        self.assertEqual(self.bridge.created, 0)
 
     async def test_two_unresolved_attention_rows_pause_everyone(self):
         self.make()
