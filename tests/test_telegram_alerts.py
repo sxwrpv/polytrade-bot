@@ -6,14 +6,58 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import httpx
+
 from backend.core.copy_engine import Action, CopyEngine
 from backend.core.execution import OrderResult
 from backend.core.telegram_alerts import (
-    TelegramPositionNotifier, format_alert, format_position_alert, format_withdrawal_alert,
+    TelegramPositionNotifier, format_alert, format_deposit_alert, format_position_alert,
+    format_withdrawal_alert,
 )
 from backend.db.database import Database, now_iso
 
 DESTINATION = "0x3c3C3c3C3c3C3C3c3C3c3c3c3c3C3C3c3c3C3c3C"
+WALLET = "0x1a1A1A1A1a1A1A1a1A1a1a1a1a1a1a1A1A1a1a1a"
+DEPOSIT_TX = "0x" + "ab" * 32
+
+
+class DepositAlertTests(unittest.IsolatedAsyncioTestCase):
+    def event(self, **extra) -> dict:
+        return {"event": "deposit_received", "user_id": WALLET, "deposit_id": "d" * 32,
+                "amount_usd": "44.00", "tx_hash": DEPOSIT_TX, **extra}
+
+    def test_shows_the_amount_the_asset_the_short_wallet_and_a_polygonscan_link(self):
+        text = format_alert(self.event())
+        self.assertTrue(text.startswith("💰 <b>DEPOSIT RECEIVED</b>"))
+        for part in ("Amount: <b>$44.00</b>", "Arrived as: <b>pUSD</b>",
+                     "To: <b>0x1a1A…1a1a</b>, your PolyTrade wallet on Polygon",
+                     f'<a href="https://polygonscan.com/tx/{DEPOSIT_TX}">'):
+            self.assertIn(part, text)
+        self.assertNotIn(WALLET[2:].lower(), text.lower())
+        self.assertNotIn("Landed", text)
+
+    def test_a_late_alert_says_when_the_deposit_landed(self):
+        text = format_deposit_alert(self.event(landed_at="2026-10-22T12:54:02+00:00"))
+        self.assertIn("Landed: <b>22 Oct, 12:54 UTC</b>", text)
+        self.assertNotIn("Landed", format_deposit_alert(self.event(landed_at="not a time")))
+
+    async def test_it_goes_to_the_owners_chat_and_a_failure_is_logged_by_deposit_id(self):
+        db = AsyncMock()
+        db.fetchone.return_value = {"telegram_user_id": 12345}
+        http = AsyncMock()
+        http.post.return_value = SimpleNamespace(status_code=200)
+        await TelegramPositionNotifier(db, "bot-token", http=http)(self.event())
+        sent = http.post.await_args.kwargs["json"]
+        self.assertEqual((sent["chat_id"], sent["parse_mode"]), (12345, "HTML"))
+        self.assertIn("DEPOSIT RECEIVED", sent["text"])
+
+        http.post.side_effect = httpx.ConnectError("unreachable")
+        notifier = TelegramPositionNotifier(db, "bot-token", http=http, background=True)
+        with self.assertLogs("telegram_alerts", level="ERROR") as logs:
+            await notifier(self.event())
+            await notifier.aclose()
+        self.assertIn("alert failed for " + "d" * 32, logs.output[0])
+        self.assertNotIn(WALLET[2:].lower(), "\n".join(logs.output).lower())
 
 
 class WithdrawalAlertTests(unittest.TestCase):

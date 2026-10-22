@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
 import html
 import logging
 
@@ -99,15 +100,49 @@ def _short_address(address) -> str:
     return f"{text[:6]}…{text[-4:]}" if len(text) > 12 else text
 
 
+def _polygonscan_link(tx_hash) -> str:
+    tx = str(tx_hash or "").strip()
+    return (f'<a href="https://polygonscan.com/tx/{html.escape(tx, quote=True)}">'
+            "View transaction on Polygonscan</a>") if tx else ""
+
+
+def _utc_time(value) -> str:
+    """An ISO timestamp as '22 Oct, 12:54 UTC'; empty when it does not parse."""
+    try:
+        moment = dt.datetime.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return ""
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=dt.timezone.utc)
+    moment = moment.astimezone(dt.timezone.utc)
+    return f"{moment.day} {moment:%b}, {moment:%H:%M} UTC"
+
+
+def format_deposit_alert(event: dict) -> str:
+    """One message per deposit (backend/core/deposits.py), laid out like the
+    withdrawal alerts. The wallet appears shortened only."""
+    amount = html.escape(str(event.get("amount_usd") or "0.00"))
+    wallet = html.escape(_short_address(event.get("user_id")))
+    facts = [f"Amount: <b>${amount}</b>", "Arrived as: <b>pUSD</b>",
+             f"To: <b>{wallet}</b>, your PolyTrade wallet on Polygon"]
+    landed = _utc_time(event.get("landed_at"))
+    if landed:
+        # Only a late alert carries this (a scan catching up after downtime).
+        facts.append(f"Landed: <b>{landed}</b>")
+    lines = ["💰 <b>DEPOSIT RECEIVED</b>", "<blockquote>" + "\n".join(facts) + "</blockquote>"]
+    link = _polygonscan_link(event.get("tx_hash"))
+    if link:
+        lines.append(link)
+    return "\n".join(lines)
+
+
 def format_withdrawal_alert(event: dict) -> str:
     """One message per withdrawal step (backend/core/withdraw.py), laid out
     like the position alerts. The destination appears shortened only."""
     kind = str(event.get("event", "")).removeprefix("withdrawal_")
     amount = html.escape(str(event.get("amount_usd") or "0.00"))
     to = html.escape(_short_address(event.get("destination")))
-    tx = str(event.get("tx_hash") or "").strip()
-    link = (f'<a href="https://polygonscan.com/tx/{html.escape(tx, quote=True)}">'
-            "View transaction on Polygonscan</a>") if tx else ""
+    link = _polygonscan_link(event.get("tx_hash"))
     if kind == "requested":
         status = "🟡 <b>WITHDRAWAL REQUESTED</b>"
         facts = [f"Amount: <b>${amount}</b>", f"To: <b>{to}</b> on Polygon",
@@ -141,9 +176,17 @@ def format_withdrawal_alert(event: dict) -> str:
 
 
 def format_alert(event: dict) -> str:
-    if str(event.get("event", "")).startswith("withdrawal_"):
+    kind = str(event.get("event", ""))
+    if kind.startswith("withdrawal_"):
         return format_withdrawal_alert(event)
+    if kind.startswith("deposit_"):
+        return format_deposit_alert(event)
     return format_position_alert(event)
+
+
+def _subject(event: dict):
+    """The id of what an alert is about, for log lines (they carry no address)."""
+    return event.get("position_id") or event.get("withdrawal_id") or event.get("deposit_id")
 
 
 class TelegramAPIError(RuntimeError):
@@ -197,8 +240,7 @@ class TelegramPositionNotifier:
         try:
             self._queue.put_nowait(event)
         except asyncio.QueueFull:
-            log.warning("alert queue full — dropped alert for position %s",
-                        event.get("position_id"))
+            log.warning("alert queue full — dropped alert for %s", _subject(event))
 
     async def _drain(self) -> None:
         while True:
@@ -214,8 +256,7 @@ class TelegramPositionNotifier:
                         await asyncio.sleep(
                             min(30.0, max(self.RATE_LIMIT_FLOOR_SECONDS, exc.retry_after)))
             except Exception:
-                log.exception("alert failed for %s",
-                              event.get("position_id") or event.get("withdrawal_id"))
+                log.exception("alert failed for %s", _subject(event))
             finally:
                 self._queue.task_done()
             await asyncio.sleep(self.SEND_INTERVAL_SECONDS)

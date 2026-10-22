@@ -213,6 +213,31 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_withdrawals_open_per_user
 CREATE INDEX IF NOT EXISTS idx_withdrawals_user_requested
     ON withdrawals(user_id, requested_at);
 
+-- One row per deposit: pUSD that Polymarket's CollateralOnramp minted into a
+-- user's wallet (see backend/core/deposits.py). Its alert goes out only from
+-- the insert that creates the row, so the unique key is what keeps it to one
+-- message per deposit across rescans, restarts and processes. Rows are never
+-- deleted.
+CREATE TABLE IF NOT EXISTS deposits (
+    id            TEXT PRIMARY KEY,
+    user_id       TEXT NOT NULL REFERENCES users(id),
+    tx_hash       TEXT NOT NULL,                        -- the onramp transaction on Polygon
+    amount_units  INTEGER NOT NULL CHECK(amount_units > 0),   -- pUSD base units (6 dp)
+    block_number  INTEGER NOT NULL,
+    landed_at     TEXT NOT NULL,                        -- the block's timestamp
+    detected_at   TEXT NOT NULL,
+    UNIQUE(user_id, tx_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_deposits_user_landed
+    ON deposits(user_id, landed_at);
+
+-- How far each chain scan has read: the last block it finished.
+CREATE TABLE IF NOT EXISTS chain_cursors (
+    name        TEXT PRIMARY KEY,                       -- 'deposits'
+    last_block  INTEGER NOT NULL,
+    updated_at  TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS trader_cache (
     address           TEXT PRIMARY KEY,                -- proxyWallet
     display_name      TEXT,                            -- userName
@@ -306,7 +331,7 @@ CREATE INDEX IF NOT EXISTS idx_trader_cache_fill_exit_ratio_30d ON trader_cache(
 TABLES = ("users", "user_consents", "funding_acknowledgements",
           "wallet_creation_claims", "followed_traders", "copy_positions",
           "copy_open_claims", "trade_events", "product_events", "withdrawals",
-          "trader_cache")
+          "deposits", "chain_cursors", "trader_cache")
 
 # Idempotent ALTERs for DBs created before a column existed (CREATE TABLE IF NOT
 # EXISTS won't add columns to an existing table). Applied at startup; "duplicate
@@ -618,6 +643,25 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_withdrawals_open_per_user
 CREATE INDEX IF NOT EXISTS idx_withdrawals_user_requested
     ON withdrawals(user_id, requested_at);
 
+CREATE TABLE IF NOT EXISTS deposits (
+    id            TEXT PRIMARY KEY,
+    user_id       TEXT NOT NULL REFERENCES users(id),
+    tx_hash       TEXT NOT NULL,
+    amount_units  BIGINT NOT NULL CHECK(amount_units > 0),
+    block_number  BIGINT NOT NULL,
+    landed_at     TEXT NOT NULL,
+    detected_at   TEXT NOT NULL,
+    UNIQUE(user_id, tx_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_deposits_user_landed
+    ON deposits(user_id, landed_at);
+
+CREATE TABLE IF NOT EXISTS chain_cursors (
+    name        TEXT PRIMARY KEY,
+    last_block  BIGINT NOT NULL,
+    updated_at  TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS trader_cache (
     address           TEXT PRIMARY KEY,
     display_name      TEXT,
@@ -743,4 +787,6 @@ ALTER TABLE equity_snapshots ENABLE ROW LEVEL SECURITY;
 -- (migration 0009 covered databases built from migrations).
 ALTER TABLE product_events   ENABLE ROW LEVEL SECURITY;
 ALTER TABLE withdrawals      ENABLE ROW LEVEL SECURITY;
+ALTER TABLE deposits         ENABLE ROW LEVEL SECURITY;
+ALTER TABLE chain_cursors    ENABLE ROW LEVEL SECURITY;
 """

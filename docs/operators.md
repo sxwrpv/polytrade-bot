@@ -33,6 +33,10 @@ Follow it up with the bridge provider using the bridge address and transaction h
 
 `--delivered` checks the transaction on Polygon before it marks the withdrawal confirmed. Without `--yes` both are dry runs.
 
+## Deposit alerts
+
+The `deposits` loop reads each newly finalized Polygon block for pUSD that Polymarket's onramp minted into a user's wallet, and the bot messages that user once with the amount and a Polygonscan link. A transaction that also moves the wallet's positions out is a payout or a sale, and the log records it as `set aside`. Each deposit is a row in `deposits`, written before its alert, so a rescan, a restart or a second process sends nothing twice. `chain_cursors` holds the last block read: the scan resumes there after downtime, at most 24 hours back. A deposit logs `DEPOSIT <wallet prefix> +$<amount> pUSD tx=<hash>`. A loop that cannot read Polygon goes stale under `loops.deposits` in `/api/ready`. Apply `supabase/migrations/0013_deposits.sql` to lock both tables away from the Supabase API.
+
 ## Non-negotiable operating rules
 
 - Protect `.env`, the database, backups, Telegram token, Builder credentials, and `ENCRYPTION_SECRET` as secrets.

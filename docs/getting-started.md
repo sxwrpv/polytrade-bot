@@ -38,7 +38,7 @@ Anyone holding that key controls the signer, and PolyTrade cannot revoke a copy 
 
 Request deposit addresses in **User**, use only an asset and network shown as supported, verify address, asset, and network, then send a small test amount and confirm the balance before sending more.
 
-Deposits convert into Polymarket collateral (shown as pUSD). Conversion and indexing are not instant, and a matching address format is not proof that a token or network is supported.
+Deposits convert into Polymarket collateral (shown as pUSD). Conversion and indexing are not instant, and a matching address format is not proof that a token or network is supported. When a deposit reaches your wallet, the bot messages you in Telegram with the amount and a Polygonscan link.
 
 Withdrawals leave from **Account → Withdraw** as native USDC on Polygon. Read [Wallet and Funding](wallet-and-funding.md) before depositing.
 

@@ -36,5 +36,6 @@ os.environ.update({
     "STATS_REFRESH_AUTOSTART": "0",
     "EQUITY_SNAPSHOT_AUTOSTART": "0",
     "REDEEM_AUTOSTART": "0",
+    "DEPOSIT_ALERTS_AUTOSTART": "0",
     "SEED_ON_START": "0",
 })

@@ -13,6 +13,8 @@ Env toggles (useful for tests/dev):
   WITHDRAWALS_ENABLED=1        offer withdrawals to native USDC on Polygon and
                                run their reconcile loop (default off; see
                                backend/core/withdraw.py)
+  DEPOSIT_ALERTS_AUTOSTART=0   don't start the loop that messages a user on Telegram
+                               when a deposit lands (see backend/core/deposits.py)
 """
 from __future__ import annotations
 
@@ -34,8 +36,8 @@ from backend.config import (
     WITHDRAW_ALLOWED_TELEGRAM_IDS, WITHDRAWALS_ENABLED,
 )
 from backend.core import (
-    auth, dev_preview, equity, redeem, runtime_security, telemetry, trader_stats, wallet,
-    withdraw,
+    auth, deposits, dev_preview, equity, redeem, runtime_security, telemetry, trader_stats,
+    wallet, withdraw,
 )
 from backend.core.health import heartbeats, upstream
 from backend.core.copy_engine import CopyEngine
@@ -280,6 +282,37 @@ async def _withdraw_loop(app, stop: asyncio.Event) -> None:
             pass
 
 
+async def _deposit_loop(app, stop: asyncio.Event) -> None:
+    """Message each user on Telegram when a deposit lands in their wallet, once
+    per deposit (backend/core/deposits.py). It reads Polygon and queues alerts
+    and moves no funds. A heartbeat per completed pass."""
+    from backend.config import POLYGON_RPC_URL
+    # Polygon finalizes a block about every 1.5 s, so a pass reads ~20 blocks.
+    interval = float(os.environ.get("DEPOSIT_POLL_SECONDS", "30"))
+    heartbeats.register("deposits", interval)
+    chain = deposits.DepositChain(POLYGON_RPC_URL or redeem.default_rpc_url())
+    watcher = deposits.DepositWatcher(app.state.db, chain,
+                                      notify=app.state.position_notifier)
+    try:
+        while not stop.is_set():
+            try:
+                summary = await watcher.run_pass(stop=stop)
+                heartbeats.mark("deposits")
+                if summary.noteworthy():
+                    log.info("deposit pass: %s", summary.describe())
+            except deposits.ChainReadError as exc:
+                # The saved block stays put, so the next pass reads these again.
+                log.warning("deposit pass incomplete, retrying next pass: %s", exc)
+            except Exception:
+                log.exception("deposit pass failed (continuing)")
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=interval)
+            except asyncio.TimeoutError:
+                pass
+    finally:
+        await chain.aclose()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Before anything opens a file: make new DB/WAL/log files owner-only, then
@@ -377,6 +410,12 @@ async def lifespan(app: FastAPI):
 
     if os.environ.get("EQUITY_SNAPSHOT_AUTOSTART", "1") == "1":
         tasks.append(asyncio.create_task(_equity_snapshot_loop(app, stop)))
+
+    # On by default wherever the bot can message users: it only reads Polygon.
+    # A second process that runs it too sends nothing twice (each deposit is
+    # announced by the insert that records it).
+    if TELEGRAM_BOT_TOKEN and os.environ.get("DEPOSIT_ALERTS_AUTOSTART", "1") == "1":
+        tasks.append(asyncio.create_task(_deposit_loop(app, stop)))
 
     # Off unless asked for: it moves real tokens. Enable it on the single
     # production worker only, like the copy engine.
