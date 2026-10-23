@@ -56,6 +56,25 @@ COMPACTION_TIERS = (
 COMPACTION_SCAN_LIMIT = 50_000
 _DELETE_CHUNK = 400
 
+# The values that make two snapshots the same reading.
+_VALUE_COLUMNS = ("equity", "balance", "positions_value", "realized_pnl", "unrealized_pnl")
+# Under half a cent rounds to $0.00 everywhere the account is shown.
+_EMPTY_USD = 0.005
+
+
+def _is_empty(row) -> bool:
+    """An account with no cash and nothing held. Its next reading can only
+    repeat this one until money arrives, so a run of them is stored once and
+    get_series draws the rest of the run from that row."""
+    equity, held = row.get("equity"), row.get("positions_value")
+    return (equity is not None and held is not None
+            and abs(float(equity)) < _EMPTY_USD and abs(float(held)) < _EMPTY_USD)
+
+
+def _same_reading(a, b) -> bool:
+    return all(a.get(c) is not None and b.get(c) is not None
+               and round(float(a[c]), 2) == round(float(b[c]), 2) for c in _VALUE_COLUMNS)
+
 
 async def _cumulative_realized(db, user_id: str) -> float:
     val = await db.fetchval(
@@ -90,13 +109,22 @@ async def take_snapshot(db, user_id: str, client, pm) -> dict | None:
     realized = round(await _cumulative_realized(db, user_id), 2)
     equity = round(balance + positions_value, 2)
     ts = now_iso()
+    snapshot = {"ts": ts, "equity": equity, "balance": round(balance, 2),
+                "positions_value": positions_value, "realized_pnl": realized,
+                "unrealized_pnl": unrealized}
+    if _is_empty(snapshot):
+        # An empty account repeats its reading every pass, so only the first
+        # of a run is stored; get_series carries it forward to now.
+        last = await db.fetchone(
+            "SELECT equity, balance, positions_value, realized_pnl, unrealized_pnl "
+            "FROM equity_snapshots WHERE user_id = ? ORDER BY ts DESC LIMIT 1", (user_id,))
+        if last is not None and _same_reading(last, snapshot):
+            return snapshot
     await db.execute(
         "INSERT INTO equity_snapshots(user_id, ts, equity, balance, positions_value, "
         "realized_pnl, unrealized_pnl) VALUES(?,?,?,?,?,?,?)",
         (user_id, ts, equity, round(balance, 2), positions_value, realized, unrealized))
-    return {"ts": ts, "equity": equity, "balance": round(balance, 2),
-            "positions_value": positions_value, "realized_pnl": realized,
-            "unrealized_pnl": unrealized}
+    return snapshot
 
 
 async def snapshot_all(db, pm, client_for, *, concurrency: int = 1) -> int:
@@ -130,26 +158,59 @@ def _epoch(ts: str) -> float:
         return 0.0
 
 
-async def get_series(db, user_id: str, period: str = "7d") -> list[dict]:
+def _point(r) -> dict:
+    return {
+        "ts": r["ts"],
+        "equity": round(float(r["equity"] or 0.0), 2),
+        "balance": round(float(r["balance"] or 0.0), 2),
+        # total PnL at that instant = realized to date + open-position mark
+        "pnl": round(float(r["realized_pnl"] or 0.0) + float(r["unrealized_pnl"] or 0.0), 2),
+    }
+
+
+async def get_series(db, user_id: str, period: str = "7d", *,
+                     now: dt.datetime | None = None) -> list[dict]:
     """Downsampled equity/PnL series for the chart. One point per time bucket
     (last snapshot in the bucket wins), so 30d/all stay light and readable
-    while 7d keeps full 5-min resolution."""
+    while 7d keeps full 5-min resolution.
+
+    An empty account stores only the first snapshot of a run (take_snapshot),
+    so every bucket after an empty point, up to now, repeats that point. The
+    chart draws the same line the per-pass rows drew. A bucket after a point
+    with money in it stays a gap, as before: a missing reading there means the
+    read failed, and the value is unknown."""
     days, bucket = _BUCKETS.get(period, _BUCKETS["7d"])
-    cutoff = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=days)).isoformat()
+    reference = now or dt.datetime.now(dt.timezone.utc)
+    cutoff = (reference - dt.timedelta(days=days)).isoformat()
+    columns = "ts, equity, balance, positions_value, realized_pnl, unrealized_pnl"
     rows = await db.fetchall(
-        "SELECT ts, equity, balance, realized_pnl, unrealized_pnl FROM equity_snapshots "
+        f"SELECT {columns} FROM equity_snapshots "
         "WHERE user_id = ? AND ts >= ? ORDER BY ts", (user_id, cutoff))
-    by_bucket: dict[int, dict] = {}
+    # An empty run that began before the window fills the window from its start.
+    before = await db.fetchone(
+        f"SELECT {columns} FROM equity_snapshots "
+        "WHERE user_id = ? AND ts < ? ORDER BY ts DESC LIMIT 1", (user_id, cutoff))
+    by_bucket: dict[int, tuple[dict, bool]] = {}
     for r in rows:
-        key = int(_epoch(r["ts"]) // bucket)
-        by_bucket[key] = {
-            "ts": r["ts"],
-            "equity": round(float(r["equity"] or 0.0), 2),
-            "balance": round(float(r["balance"] or 0.0), 2),
-            # total PnL at that instant = realized to date + open-position mark
-            "pnl": round(float(r["realized_pnl"] or 0.0) + float(r["unrealized_pnl"] or 0.0), 2),
-        }
-    return [by_bucket[k] for k in sorted(by_bucket)]
+        by_bucket[int(_epoch(r["ts"]) // bucket)] = (_point(r), _is_empty(r))
+
+    def repeat(point: dict, key: int) -> dict:
+        start = dt.datetime.fromtimestamp(key * bucket, dt.timezone.utc)
+        return {**point, "ts": start.isoformat()}
+
+    series: list[dict] = []
+    carry = _point(before) if before is not None and _is_empty(before) else None
+    position = int(_epoch(cutoff) // bucket)
+    for key in sorted(by_bucket):
+        point, empty = by_bucket[key]
+        if carry is not None:
+            series.extend(repeat(carry, k) for k in range(position, key))
+        series.append(point)
+        carry = point if empty else None
+        position = key + 1
+    if carry is not None:
+        series.extend(repeat(carry, k) for k in range(position, int(reference.timestamp() // bucket) + 1))
+    return series
 
 
 async def compact_snapshots(
@@ -215,3 +276,32 @@ async def compact_snapshots(
             total += len(chunk)
 
     return total
+
+
+async def prune_flat_snapshots(db, *, scan_limit: int = COMPACTION_SCAN_LIMIT) -> int:
+    """Delete each empty-account snapshot that repeats the snapshot before it,
+    keeping the first row of every run. These are the rows take_snapshot no
+    longer writes, left from before it skipped them; get_series redraws the
+    run from its first row, so the chart does not change.
+
+    Bounded by `scan_limit` per call and safe to repeat: a removed row's
+    successor then follows an identical row too, so later passes finish the
+    run, and a run's first row never qualifies."""
+    rows = await db.fetchall(
+        "SELECT id FROM ("
+        " SELECT id, equity, balance, positions_value, realized_pnl, unrealized_pnl,"
+        "  LAG(id) OVER w AS prev_id, LAG(equity) OVER w AS prev_equity,"
+        "  LAG(balance) OVER w AS prev_balance, LAG(positions_value) OVER w AS prev_held,"
+        "  LAG(realized_pnl) OVER w AS prev_realized, LAG(unrealized_pnl) OVER w AS prev_unrealized"
+        " FROM equity_snapshots WINDOW w AS (PARTITION BY user_id ORDER BY ts, id)"
+        ") runs "
+        "WHERE prev_id IS NOT NULL AND ABS(equity) < ? AND ABS(positions_value) < ? "
+        "AND equity = prev_equity AND balance = prev_balance AND positions_value = prev_held "
+        "AND realized_pnl = prev_realized AND unrealized_pnl = prev_unrealized "
+        "ORDER BY id LIMIT ?", (_EMPTY_USD, _EMPTY_USD, scan_limit))
+    doomed = [r["id"] for r in rows]
+    for i in range(0, len(doomed), _DELETE_CHUNK):
+        chunk = doomed[i:i + _DELETE_CHUNK]
+        marks = ",".join("?" for _ in chunk)
+        await db.execute(f"DELETE FROM equity_snapshots WHERE id IN ({marks})", tuple(chunk))
+    return len(doomed)

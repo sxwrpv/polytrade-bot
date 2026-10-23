@@ -916,3 +916,25 @@ async def refresh_all(db, pm, *, limit: int = 200, concurrency: int = 8) -> int:
     if failed:
         log.info("wallet screener: %d refreshed, %d deferred to backoff", done, failed)
     return done
+
+
+async def prune_stale_traders(db, *, days: int = 30, now: dt.datetime | None = None) -> int:
+    """Delete cached traders nothing has refreshed for `days` days that no
+    follow (active or stopped) and no copied position refers to.
+
+    refresh_all rotates through every row and skips only rows in backoff, so a
+    row this stale is a wallet whose refreshes keep failing. Follows and
+    positions keep their rows, because the Mini App shows a leader's name and
+    stats from here. A pruned wallet that comes back through the leaderboard
+    seed or a screener view is cached again."""
+    reference = now or dt.datetime.now(dt.timezone.utc)
+    cutoff = (reference - dt.timedelta(days=days)).isoformat()
+    return await db.execute(
+        "DELETE FROM trader_cache WHERE last_refreshed < ? "
+        "AND COALESCE(last_refresh_success_at, '') < ? "
+        "AND COALESCE(stats_refreshed_at, '') < ? "
+        "AND NOT EXISTS (SELECT 1 FROM followed_traders f "
+        "  WHERE lower(f.trader_address) = lower(trader_cache.address)) "
+        "AND NOT EXISTS (SELECT 1 FROM copy_positions p "
+        "  WHERE lower(p.trader_address) = lower(trader_cache.address))",
+        (cutoff, cutoff, cutoff))

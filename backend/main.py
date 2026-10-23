@@ -143,8 +143,10 @@ async def _stats_refresh_loop(db, pm, stop: asyncio.Event) -> None:
 
 
 async def _telemetry_retention_loop(db, stop: asyncio.Event) -> None:
-    """Enforce the 90-day privacy window throughout long-running deployments."""
+    """Enforce the 90-day privacy window throughout long-running deployments,
+    keep equity snapshots compact, and once a day drop dead screener rows."""
     interval = 60 * 60
+    passes = 0
     while not stop.is_set():
         try:
             await asyncio.wait_for(stop.wait(), timeout=interval)
@@ -152,6 +154,7 @@ async def _telemetry_retention_loop(db, stop: asyncio.Event) -> None:
             pass
         if stop.is_set():
             break
+        passes += 1
         try:
             pruned = await telemetry.prune_product_events(db, retention_days=90)
             if pruned:
@@ -168,6 +171,22 @@ async def _telemetry_retention_loop(db, stop: asyncio.Event) -> None:
                 log.info("equity snapshots: compacted %d aged row(s)", collapsed)
         except Exception:
             log.exception("equity snapshot compaction failed (continuing)")
+        try:
+            # An empty account's repeated readings carry nothing its first
+            # one doesn't, and get_series redraws the run from that row.
+            flattened = await equity.prune_flat_snapshots(db)
+            if flattened:
+                log.info("equity snapshots: removed %d repeated empty-account row(s)", flattened)
+        except Exception:
+            log.exception("equity snapshot empty-run prune failed (continuing)")
+        if passes % 24 == 1:  # the first pass, then once a day
+            try:
+                dropped = await trader_stats.prune_stale_traders(db, days=30)
+                if dropped:
+                    log.info("wallet screener: dropped %d trader(s) unrefreshed for 30 days "
+                             "with no follow or position", dropped)
+            except Exception:
+                log.exception("wallet screener cache prune failed (continuing)")
 
 
 def _shared_client_factory(app):
