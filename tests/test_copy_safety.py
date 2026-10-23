@@ -479,6 +479,37 @@ class CopySafetyTests(unittest.IsolatedAsyncioTestCase):
         raw, _ = await engine._read_collateral(user, object())
         self.assertEqual(raw, 50.0)
 
+    async def test_a_buy_carries_the_cash_it_was_sized_from(self):
+        # 2026-10-22: five copies sized to the whole of a $6.32 balance were
+        # refused, because the exchange wants room for its fee estimate on
+        # top. The order carries the spendable cash as max_spend, and the SDK
+        # lowers the spend until both fit (execution.place_market_order).
+        orders = []
+
+        async def place(client, pm, token, side, amount, **kwargs):
+            orders.append((side, amount, kwargs.get("max_spend")))
+            return OrderResult(ok=True, filled_shares=amount / 0.5, avg_price=0.5)
+
+        async def get_positions(wallet, **kwargs):
+            return [position(value=2000.0)] if wallet == TRADER else []
+
+        async def get_all_positions(wallet, **kwargs):
+            return [], True
+
+        async def collateral(client):
+            return 6.316234
+
+        async def client_factory(user):
+            return object()
+
+        engine = CopyEngine(
+            self.db, SimpleNamespace(get_positions=get_positions,
+                                     get_all_positions=get_all_positions),
+            place_order=place, client_factory=client_factory, collateral_fn=collateral)
+        follow = await self.db.fetchone("SELECT * FROM followed_traders WHERE id='follow-1'")
+        await engine._handle_leader_trade(follow, leader_buy())
+        self.assertEqual([("BUY", 6.316234, 6.316234)], orders)
+
 
 # ---------------------------------------------------------------------------
 # Capital share: the copy takes the share of your free cash that the leader's
@@ -598,6 +629,34 @@ class CapitalShareSizingTests(unittest.TestCase):
         for junk in (-2, float("nan")):
             with self.subTest(junk=junk):
                 self.assertEqual(0.0, CopyEngine._follow_risk({"capital_multiplier": junk})["multiplier"])
+
+
+class SpendLimitPlanTests(unittest.TestCase):
+    """Each planned BUY carries the cash still free when it was sized, the
+    max_spend its order goes out with (Action.spend_limit)."""
+
+    def test_each_open_carries_the_cash_left_for_it(self):
+        holdings = [leader_holding("token-a", 2000.0), leader_holding("token-b", 2000.0)]
+        first, second = plan_actions(holdings, [], FOLLOW, 30.0, ratio_pct=1.0)
+        self.assertEqual((20.0, 30.0), (first.amount, first.spend_limit))
+        self.assertEqual((10.0, 10.0), (second.amount, second.spend_limit))
+
+    def test_an_increase_carries_the_cash_left_for_it(self):
+        [increase] = plan_actions([leader_holding(TOKEN, 4000.0)], [copy_row()], FOLLOW, 12.0,
+                                  ratio_pct=1.0)
+        self.assertEqual(("resize", "increase"), (increase.kind, increase.subkind))
+        self.assertEqual((12.0, 12.0), (increase.amount, increase.spend_limit))
+
+    def test_the_exposure_cap_leaves_the_cash_limit_alone(self):
+        # A copy held to $15 by MAX EXPOSURE still has all $100 of cash behind
+        # its fee: only the cash bounds max_spend.
+        [open_] = plan_actions([leader_holding("token-a", 2000.0)], [], FOLLOW, 100.0,
+                               ratio_pct=1.0, max_total_exposure=15.0)
+        self.assertEqual((15.0, 100.0), (open_.amount, open_.spend_limit))
+
+    def test_a_sell_carries_no_spend_limit(self):
+        [close] = plan_actions([], [copy_row()], FOLLOW, 12.0, ratio_pct=1.0)
+        self.assertEqual(("close", None), (close.kind, close.spend_limit))
 
 
 class FakeLeaderCash:

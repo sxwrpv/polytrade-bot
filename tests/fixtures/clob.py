@@ -30,6 +30,10 @@ INVALID_AMOUNTS = ("invalid amounts, the market buy orders maker amount supports
                    "accuracy of 2 decimals, taker amount a max of 4 decimals")
 # Its answer to a FOK it cannot fill whole (a 400; the SDK raises it).
 FOK_KILLED = "order couldn't be fully filled. FOK orders are fully filled or killed."
+# Its answer to a BUY whose spend plus fee estimate is more than the balance:
+# the 2026-10-22 production text up to the figures it goes on with.
+NOT_ENOUGH_BALANCE = ("not enough balance / allowance: the balance is not enough to cover "
+                      "the fee estimate")
 
 
 def units(amount: str) -> Decimal:
@@ -48,12 +52,37 @@ class Exchange:
     takes only asks at or below that price, and it spends the whole maker
     amount at the resting prices. A FOK those asks cannot fill whole is killed
     with the exchange's 400. Without `asks` every other order fills whole at
-    its own amounts."""
+    its own amounts.
 
-    def __init__(self, tick: str = "0.001", asks: tuple[tuple[str, str], ...] = ()):
+    Given a pUSD `balance`, it refuses a market BUY whose spend plus fee
+    estimate is more than that, with the exchange's 400 (NOT_ENOUGH_BALANCE).
+    The estimate is shares x r x (p(1 - p))^e at the order's price p, for the
+    market's taker fee `fee` = (r, e), served as /clob-markets' "fd", plus the
+    spend x the builder's taker rate, `builder_fee_bps`, served at
+    /fees/builder-fees/<code>. Paths starting with one in `unavailable` answer
+    503."""
+
+    def __init__(self, tick: str = "0.001", asks: tuple[tuple[str, str], ...] = (), *,
+                 fee: tuple[str, int] | None = None, balance: str | None = None,
+                 builder_fee_bps: int | None = None, unavailable: tuple[str, ...] = ()):
         self.tick = tick
         self.asks = [(Fraction(price), Fraction(shares)) for price, shares in asks]
+        self.fee = None if fee is None else (Fraction(fee[0]), int(fee[1]))
+        self.balance = None if balance is None else int(Decimal(balance) * 10**6)
+        self.builder_fee_bps = builder_fee_bps
+        self.unavailable = unavailable
         self.orders: list[dict] = []
+
+    def fee_estimate(self, maker: int, taker: int) -> int:
+        """A market BUY's fee estimate in pUSD base units."""
+        fee = Fraction(0)
+        if self.fee is not None:
+            rate, exponent = self.fee
+            price = Fraction(maker, taker)
+            fee += taker * rate * (price * (1 - price)) ** exponent
+        if self.builder_fee_bps:
+            fee += maker * Fraction(self.builder_fee_bps, 10_000)
+        return math.ceil(fee)
 
     def match_buy(self, maker: int, taker: int) -> tuple[int, int]:
         """(pUSD spent, shares bought) in base units for a market BUY."""
@@ -68,11 +97,18 @@ class Exchange:
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
+        if path.startswith(self.unavailable):
+            return httpx.Response(503, json={"error": "service unavailable"})
         if path == f"/markets-by-token/{TOKEN}":
             return httpx.Response(200, json={"condition_id": CONDITION})
         if path == f"/clob-markets/{CONDITION}":
-            return httpx.Response(200, json={"nr": False, "t": [{"t": TOKEN}],
-                                             "mts": self.tick})
+            market = {"nr": False, "t": [{"t": TOKEN}], "mts": self.tick}
+            if self.fee is not None:
+                market["fd"] = {"r": float(self.fee[0]), "e": self.fee[1], "to": True}
+            return httpx.Response(200, json=market)
+        if path.startswith("/fees/builder-fees/") and self.builder_fee_bps is not None:
+            return httpx.Response(200, json={"builder_maker_fee_rate_bps": 0,
+                                             "builder_taker_fee_rate_bps": self.builder_fee_bps})
         if path == "/order":
             sent = json.loads(request.content)
             order = sent["order"]
@@ -81,6 +117,12 @@ class Exchange:
             market_buy = sent["orderType"] in ("FOK", "FAK") and order["side"] == "BUY"
             if market_buy and (maker % 10_000 or taker % 100):
                 return httpx.Response(400, json={"error": INVALID_AMOUNTS})
+            if market_buy and self.balance is not None:
+                fee = self.fee_estimate(maker, taker)
+                if maker + fee > self.balance:
+                    return httpx.Response(400, json={"error": (
+                        f"{NOT_ENOUGH_BALANCE} -> balance: {self.balance}, "
+                        f"order amount: {maker}, fee: {fee}")})
             making, taking = maker, taker
             if market_buy and self.asks:
                 making, taking = self.match_buy(maker, taker)

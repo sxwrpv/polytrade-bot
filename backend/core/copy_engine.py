@@ -238,6 +238,10 @@ class Action:
     sizing_mode: str = POSITION_SHARE
     capital_weight: float | None = None  # capital share: cash_share of the leader's bet
     follower_cash: float | None = None   # capital share: the free cash it was applied to
+    # BUY: the spendable cash it was sized from. The exchange refuses a BUY
+    # whose spend plus its fee estimate is more than the balance, so the order
+    # carries this as its max_spend (execution.place_market_order).
+    spend_limit: float | None = None
 
 
 def plan_actions(
@@ -335,7 +339,7 @@ def plan_actions(
                     kind="open", token_id=token, condition_id=p.condition_id,
                     outcome=p.outcome.upper(), side="BUY", amount=amt, notional_usd=amt,
                     reference_price=p.avg_price, trader_shares=p.size, position=p,
-                    **sizing))
+                    spend_limit=cash_left, **sizing))
                 remaining -= amt
                 cash_left -= amt
                 open_count += 1
@@ -367,7 +371,8 @@ def plan_actions(
                     actions.append(Action(
                         kind="resize", subkind="increase", token_id=token, side="BUY",
                         amount=amt, notional_usd=amt, reference_price=p.cur_price,
-                        trader_shares=p.size, row=row, position=p, **sizing))
+                        trader_shares=p.size, row=row, position=p, spend_limit=cash_left,
+                        **sizing))
                     remaining -= amt
                     cash_left -= amt
                 else:
@@ -1246,6 +1251,7 @@ class CopyEngine:
                     redeemable=False, outcome=outcome, slug=slug,
                     title=title),
                 trader_address=trader,
+                spend_limit=available,
                 **sizing,
             )
             spent = await self._execute(user_id, client, action, slippage=frisk["slippage"])
@@ -1784,7 +1790,8 @@ class CopyEngine:
                         client, self.pm, action.token_id, "BUY", action.amount,
                         reference_price=action.reference_price,
                         max_slippage_pct=risk["slippage"],
-                        min_price=risk["min_price"], max_price=risk["max_price"])
+                        min_price=risk["min_price"], max_price=risk["max_price"],
+                        max_spend=action.spend_limit)
             except execution.PreflightError as exc:
                 # Failed before the submission boundary: nothing reached the
                 # exchange. Undo exactly what an unsubmitted attempt undoes.
