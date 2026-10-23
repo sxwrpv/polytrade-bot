@@ -112,7 +112,8 @@ class PreflightError(Exception):
     classifies as uncertain: a durable claim that no reconciliation can ever
     settle, because the wallet will never show shares for an order that was
     never sent. One 429 or timeout on /book froze that token for that user
-    permanently.
+    permanently. A failure while TradingClient prices or signs the order
+    (OrderNotSent) is reported the same way: nothing has been posted yet.
     """
 
     def __init__(self, stage: str, cause: BaseException) -> None:
@@ -247,10 +248,40 @@ def market_sell_amounts(maker: int, taker: int) -> tuple[int, int]:
     return maker // _MAKER_STEP * _MAKER_STEP, -(-taker // _TAKER_STEP) * _TAKER_STEP
 
 
-# The cap of the market BUY being prepared, for _sign_order, whose draft holds
-# the amounts the SDK priced and no price. A context variable belongs to one
-# task, so concurrent orders on one client each see their own cap.
-_market_buy_cap: ContextVar[Decimal | None] = ContextVar("market_buy_cap", default=None)
+# The exchange's smallest market BUY, $1 of pUSD in base units (py-sdk PR #292
+# gives the venue's $1 minimum for market orders).
+_MIN_MARKET_BUY = 1_000_000
+
+
+class OrderNotSent(Exception):
+    """A market order that failed while the SDK priced or signed it: a market
+    metadata or fee-rate read, a validation, the signature. In
+    polymarket-client 0.6.0 place_market_order posts only after
+    _prepare_and_sign_market_order returns, so nothing reached the exchange.
+    TradingClient raises it and place_market_order reports a PreflightError."""
+
+
+class SpendUnderMinimum(Exception):
+    """A market BUY whose spend, lowered to leave room for the exchange's fee
+    estimate (max_spend), fell under _MIN_MARKET_BUY. Sent, it would only
+    collect a refusal whose text the engine cannot classify."""
+
+
+@dataclass(frozen=True)
+class _BuyLimits:
+    cap: Decimal | None         # max_price
+    max_spend: Decimal | None   # the cash the spend and its fee estimate fit in
+    amount: Decimal | None      # the spend asked for
+
+
+def _decimal(value) -> Decimal | None:
+    return None if value is None else Decimal(str(value))
+
+
+# The limits of the market BUY being prepared, for _sign_order, whose draft
+# holds the amounts the SDK priced and none of the limits. A context variable
+# belongs to one task, so concurrent orders on one client each see their own.
+_market_buy: ContextVar[_BuyLimits | None] = ContextVar("market_buy", default=None)
 
 
 class TradingClient(AsyncSecureClient):
@@ -262,25 +293,39 @@ class TradingClient(AsyncSecureClient):
     they can change. In polymarket-client 0.6.0 it is the one signing step for
     limit (GTC/GTD) and market (FOK/FAK) orders, and it receives the draft the
     SDK priced; _prepare_and_sign_market_order, which create_market_order and
-    place_market_order both call, carries a BUY's cap to it. Only FOK/FAK
-    drafts change here.
+    place_market_order both call, carries a BUY's cap and max_spend to it, and
+    turns any failure before the order is posted into OrderNotSent. Only
+    FOK/FAK drafts change here.
     tests/test_execution_price_band.py sends real BUYs and SELLs through this
     class and reads the orders that reach POST /order, so an SDK release that
     signs or prices market orders somewhere else fails those tests."""
 
     async def _prepare_and_sign_market_order(self, **order):
-        cap = order.get("max_price") if order.get("side") == "BUY" else None
-        token = _market_buy_cap.set(None if cap is None else Decimal(str(cap)))
+        limits = None
+        if order.get("side") == "BUY":
+            limits = _BuyLimits(cap=_decimal(order.get("max_price")),
+                                max_spend=_decimal(order.get("max_spend")),
+                                amount=_decimal(order.get("amount")))
+        token = _market_buy.set(limits)
         try:
             return await super()._prepare_and_sign_market_order(**order)
+        except Exception as exc:
+            raise OrderNotSent(str(exc)) from exc
         finally:
-            _market_buy_cap.reset(token)
+            _market_buy.reset(token)
 
     async def _sign_order(self, draft, *, post_only: bool):
         if draft.order_type in ("FOK", "FAK"):
             if draft.side == "BUY":
+                limits = _market_buy.get()
                 maker, taker = market_buy_amounts(draft.offered_amount, draft.requested_amount,
-                                                  _market_buy_cap.get())
+                                                  limits.cap if limits else None)
+                if (limits is not None and limits.max_spend is not None
+                        and maker < _MIN_MARKET_BUY <= (limits.amount or 0) * 10**6):
+                    raise SpendUnderMinimum(
+                        f"${Decimal(maker) / 10**6} after the fee estimate is under the "
+                        f"exchange's $1 minimum (asked ${limits.amount}, "
+                        f"max_spend ${limits.max_spend})")
             else:
                 maker, taker = market_sell_amounts(draft.offered_amount, draft.requested_amount)
             draft = replace(draft, offered_amount=maker, requested_amount=taker)
@@ -444,11 +489,16 @@ async def place_market_order(
     max_slippage_pct: float = MAX_COPY_SLIPPAGE_PCT,
     min_price: float | None = None,
     max_price: float | None = None,
+    max_spend: float | None = None,
     check_geoblock: bool = True,
 ) -> OrderResult:
     """Market order (FOK — all-or-nothing). Used for ALL engine trades (owner
     switched copy BUYs from price-capped limit to market, 2026-07-03); the
-    pre-flight slippage check vs reference_price is the price gate."""
+    pre-flight slippage check vs reference_price is the price gate.
+
+    max_spend (BUY only) is the spendable cash the BUY was sized from: the
+    order's spend plus the exchange's fee estimate stays within it, and the
+    spend may come out lower than `amount`."""
     side = side.upper()
     res = OrderResult(ok=False, side=side, token_id=token_id, amount_usd=amount)
 
@@ -518,8 +568,16 @@ async def place_market_order(
 
     try:
         if side == "BUY":
+            # max_spend is the cash this BUY may use, its fee included. The
+            # exchange refuses a BUY whose spend plus its fee estimate is more
+            # than the balance: 2026-10-22, five copies sized to the whole of
+            # a $6.32 balance, on markets charging 0.03 x p(1 - p) per share,
+            # about $0.09 on top. Given max_spend, the SDK lowers the spend
+            # until both fit (adjust_buy_amount_for_fees, from the market's
+            # fee rate and the builder's taker rate).
             resp = await client.place_market_order(
                 token_id=token_id, side="BUY", amount=Decimal(str(amount)),
+                max_spend=_decimal(max_spend),
                 max_price=exchange_cap, order_type="FOK",
                 builder_code=_BUILDER_CODE)
         else:
@@ -527,6 +585,10 @@ async def place_market_order(
                 token_id=token_id, side="SELL", shares=amount, order_type="FOK",
                 min_price=exchange_floor,
                 builder_code=_BUILDER_CODE)
+    except OrderNotSent as exc:
+        # TradingClient failed while the SDK priced or signed the order, so
+        # nothing was posted (OrderNotSent).
+        raise PreflightError("order", exc.__cause__ or exc) from exc
     except Exception as e:
         # We crossed the SDK's submission boundary, so an exception is ambiguous
         # (the engine retains its durable claim and reconciles before any

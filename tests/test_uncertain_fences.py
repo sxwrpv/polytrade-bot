@@ -23,6 +23,7 @@ import os
 import tempfile
 import time
 import unittest
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -778,6 +779,16 @@ class LeaderPriceBook(Book):
                          neg_risk=False, last_trade_price=0.30)
 
 
+class FeeMarketBook(Book):
+    """A 0.01-tick book at 0.49 on a market charging a taker fee, like the
+    college-football spreads behind the 2026-10-22 balance refusals."""
+
+    async def get_orderbook(self, token_id):
+        return OrderBook(token_id=token_id, condition_id=COND, bids=(Level(0.48, 1000),),
+                         asks=(Level(0.49, 1000),), tick_size=0.01, min_order_size=5,
+                         neg_risk=False, last_trade_price=0.49)
+
+
 class TerminalRejectionTests(unittest.IsolatedAsyncioTestCase):
     """Which answers after submission prove that a BUY never executed."""
 
@@ -958,6 +969,33 @@ class RefusedBuyTests(FenceDb):
                     self.assertAlmostEqual(26.666666, row["shares"])
                     self.assertAlmostEqual(0.30, row["entry_price"], places=6)
                     self.assertEqual(8.0, row["notional_usd"])
+
+    async def test_the_2026_10_22_balance_refusal_end_to_end(self):
+        """$6.31 sized from all of $6.316234, on a 0.01-tick market charging
+        0.03 x p(1 - p) per share, through the engine and the pinned SDK. Sent
+        with no spend limit, as on 2026-10-22, it is refused for balance: the
+        claim goes and no fence is left. Carrying the $6.316234 as its spend
+        limit, the order spends $6.22, and the position opens at 0.49."""
+        for spend_limit, maker, opened in ((None, "6310000", 0), (6.316234, "6220000", 1)):
+            with self.subTest(spend_limit=spend_limit):
+                await self.db.execute("DELETE FROM copy_positions")
+                exchange = offline_clob.Exchange(tick="0.01", asks=(("0.49", "1000"),),
+                                                 fee=("0.03", 1), balance="6.316234")
+                engine = self.buy_engine(FeeMarketBook())
+                action = replace(self.open_action(price=0.49), amount=6.31, notional_usd=6.31,
+                                 spend_limit=spend_limit)
+                async with offline_clob.client(exchange, execution.TradingClient) as sdk:
+                    await engine._execute(USER, sdk, action)
+                [order] = exchange.orders
+                self.assertEqual(maker, order["makerAmount"])
+                self.assertEqual(0, await self.claims(), "no claim of any state is kept")
+                self.assertIn("no active BUY fences", await self.fence_list())
+                rows = await self.db.fetchall(
+                    "SELECT entry_price, notional_usd FROM copy_positions WHERE status='open'")
+                self.assertEqual(opened, len(rows))
+                for row in rows:
+                    self.assertAlmostEqual(6.22, row["notional_usd"])
+                    self.assertAlmostEqual(0.49, row["entry_price"], places=6)
 
     async def test_the_fill_or_kill_budget_brakes_the_retry(self):
         """2026-10-19: once the fence was cleared, the engine re-fired within

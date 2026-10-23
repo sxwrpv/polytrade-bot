@@ -513,5 +513,134 @@ class MarketSellGridTests(unittest.IsolatedAsyncioTestCase):
                                         / clob.units(order["makerAmount"]), Decimal(floor))
 
 
+class FeeMarketPM(FakePM):
+    """A 0.01-tick book with asks at `price` and a 5-share minimum, on a
+    market charging a taker fee, like the college-football spreads the
+    2026-10-22 balance refusals came from (asks at 0.49)."""
+
+    def __init__(self, price: float = 0.49):
+        self.price = price
+
+    async def get_orderbook(self, token_id):
+        return OrderBook(
+            token_id=token_id, condition_id=clob.CONDITION,
+            bids=(Level(round(self.price - 0.01, 2), 1000),), asks=(Level(self.price, 1000),),
+            tick_size=0.01, min_order_size=5, neg_risk=False,
+            last_trade_price=self.price,
+        )
+
+
+BUILDER = "0x" + "cd" * 32
+
+
+def fee_exchange(price: str = "0.49", **kwargs) -> clob.Exchange:
+    """The 2026-10-22 market: asks at 0.49, a taker fee of 0.03 x p(1 - p) per
+    share ("fd": r 0.03, e 1), and a wallet holding $6.316234 of pUSD."""
+    options = dict(tick="0.01", asks=((price, "100000"),), fee=("0.03", 1),
+                   balance="6.316234")
+    options.update(kwargs)
+    return clob.Exchange(**options)
+
+
+class FeeHeadroomTests(unittest.IsolatedAsyncioTestCase):
+    """The exchange refuses a market BUY whose spend plus fee estimate is more
+    than the balance. On 2026-10-22 five copies sized to the whole of a $6.32
+    balance were refused that way (production logs, 23:01-23:10Z): a $6.31
+    spend on these markets owes about $0.0965 on top. place_market_order hands
+    the cash a BUY was sized from to the SDK as max_spend, and the SDK lowers
+    the spend until spend and fee estimate fit (adjust_buy_amount_for_fees)."""
+
+    async def buy(self, exchange, amount, max_spend, *, price=0.49,
+                  cls=execution.TradingClient):
+        async with clob.client(exchange, cls) as sdk:
+            return await place_market_order(
+                sdk, FeeMarketPM(price), clob.TOKEN, "BUY", amount,
+                reference_price=price, max_slippage_pct=2,
+                min_price=0.10, max_price=0.98, max_spend=max_spend)
+
+    async def test_a_buy_sized_to_the_whole_balance_leaves_room_for_the_fee(self):
+        """Without max_spend the $6.31 BUY goes out and the exchange refuses it,
+        a definite failure as in production. With the $6.316234 it was sized
+        from, the spend drops to 6.316234 / (1 + 0.03 x 0.51) = $6.2211, $6.22
+        on the cent grid: spend and fee estimate fit, and it buys at 0.49."""
+        for max_spend, maker, fills in ((None, "6310000", False), (6.316234, "6220000", True)):
+            with self.subTest(max_spend=max_spend):
+                exchange = fee_exchange()
+                result = await self.buy(exchange, 6.31, max_spend)
+                [order] = exchange.orders
+                self.assertEqual(maker, order["makerAmount"])
+                self.assertEqual(fills, result.ok)
+                self.assertFalse(result.submission_uncertain)
+                if fills:
+                    spend, shares = int(order["makerAmount"]), int(order["takerAmount"])
+                    self.assertLessEqual(spend + exchange.fee_estimate(spend, shares),
+                                         exchange.balance)
+                    self.assertAlmostEqual(6.22, result.filled_shares * result.avg_price)
+                    self.assertAlmostEqual(0.49, result.avg_price, places=6)
+                else:
+                    self.assertEqual("not_enough_balance", result.exchange_rejection)
+                    self.assertIn(clob.NOT_ENOUGH_BALANCE, result.reason)
+
+    async def test_a_buy_well_inside_the_balance_keeps_its_spend(self):
+        """$5.00 plus its $0.0765 fee fits the $6.316234: the spend stays."""
+        exchange = fee_exchange()
+        result = await self.buy(exchange, 5.00, 6.316234)
+        [order] = exchange.orders
+        self.assertEqual("5000000", order["makerAmount"])
+        self.assertTrue(result.ok)
+
+    async def test_the_builders_taker_fee_is_left_room_too(self):
+        """With the builder code stamped on every order charging 1% to the
+        taker, the SDK reads that rate (/fees/builder-fees) and the spend drops
+        to 6.316234 / (1 + 0.0153 + 0.01) = $6.16."""
+        exchange = fee_exchange(builder_fee_bps=100)
+        with patch.object(execution, "_BUILDER_CODE", BUILDER):
+            result = await self.buy(exchange, 6.31, 6.316234)
+        [order] = exchange.orders
+        self.assertEqual("6160000", order["makerAmount"])
+        self.assertTrue(result.ok)
+        spend, shares = int(order["makerAmount"]), int(order["takerAmount"])
+        self.assertLessEqual(spend + exchange.fee_estimate(spend, shares), exchange.balance)
+
+    async def test_a_fee_cut_under_the_minimum_is_never_sent(self):
+        """$1.00 at 0.10 (10 shares, over the 5-share minimum) from $1.005 of
+        cash owes 10 x 0.03 x 0.09 = $0.027 of fee, so it would go out as
+        1.005 / 1.027 = $0.97, under the exchange's $1 market minimum.
+        TradingClient refuses to sign it, and place_market_order reports a
+        PreflightError: nothing reached the exchange, so the engine releases
+        the claim and leaves no fence."""
+        exchange = fee_exchange(price="0.10", balance="1.005")
+        with self.assertRaises(execution.PreflightError) as refused:
+            await self.buy(exchange, 1.00, 1.005, price=0.10)
+        self.assertEqual([], exchange.orders)
+        self.assertIn("SpendUnderMinimum", str(refused.exception))
+        self.assertIn("$0.97", str(refused.exception))
+        # Only the fee cut is stopped: $0.80 asked from $5.00 goes out as asked.
+        exchange = fee_exchange(price="0.10", balance="5.00")
+        result = await self.buy(exchange, 0.80, 5.00, price=0.10)
+        self.assertEqual(["800000"], [o["makerAmount"] for o in exchange.orders])
+        self.assertTrue(result.ok)
+
+    async def test_a_failure_before_the_order_is_posted_is_a_preflight_error(self):
+        """A market metadata read or the builder fee-rate read failing inside
+        the SDK happens before the order is posted. Through TradingClient it is
+        a PreflightError (nothing sent, claim released). The SDK's own client
+        gives the bare exception, which stays uncertain."""
+        for name, down in (("market metadata", "/clob-markets"),
+                           ("builder fee rate", "/fees/builder-fees")):
+            for cls, preflight in ((execution.TradingClient, True), (AsyncSecureClient, False)):
+                with self.subTest(name, cls=cls.__name__):
+                    exchange = fee_exchange(builder_fee_bps=100, unavailable=(down,))
+                    with patch.object(execution, "_BUILDER_CODE", BUILDER):
+                        if preflight:
+                            with self.assertRaises(execution.PreflightError) as refused:
+                                await self.buy(exchange, 6.31, 6.316234, cls=cls)
+                            self.assertEqual("order", refused.exception.stage)
+                        else:
+                            result = await self.buy(exchange, 6.31, 6.316234, cls=cls)
+                            self.assertTrue(result.submission_uncertain)
+                    self.assertEqual([], exchange.orders)
+
+
 if __name__ == "__main__":
     unittest.main()
