@@ -232,7 +232,7 @@ class LeaderEntry:
     user_name: str
     x_username: str
     verified: bool
-    vol: float
+    vol: float            # traded volume in SHARES on v2 boards; USD: get_user_volume
     pnl: float
     profile_image: str
 
@@ -503,6 +503,23 @@ class PolymarketClient:
         if isinstance(row, list):
             row = row[0] if row else None
         return LeaderEntry.from_api(row) if isinstance(row, dict) else None
+
+    async def get_user_volume(self, wallet_address: str, *, start: int | None = None,
+                              end: int | None = None) -> float | None:
+        """A wallet's traded volume in USD (`volume_usdc`) over [start, end],
+        epoch seconds floored to UTC days; omitted bounds cover its full
+        history. The leaderboard's `volume` counts shares, so USD volume comes
+        from here. A wallet with no trades is 0.0; None when the answer has no
+        row."""
+        params: dict[str, Any] = {"user": wallet_address}
+        if start:
+            params["start"] = int(start)
+        if end:
+            params["end"] = int(end)
+        row, _ = await self._v2_page("user-volume", params)
+        if not isinstance(row, dict) or row.get("volume_usdc") is None:
+            return None
+        return _f(row["volume_usdc"])
 
     # --- geoblock ----------------------------------------------------------
     async def get_geoblock(self) -> dict:

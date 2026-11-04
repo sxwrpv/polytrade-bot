@@ -55,6 +55,7 @@ class WalletAnalysisOrchestrationTests(unittest.IsolatedAsyncioTestCase):
             get_leaderboard_user=AsyncMock(return_value=SimpleNamespace(
                 pnl=123.0, vol=456.0, user_name="alice", x_username=None,
             )),
+            get_user_volume=AsyncMock(return_value=None),
         )
 
     async def test_profile_uses_one_bounded_fetch_path_and_reuses_rows_for_preview(self):

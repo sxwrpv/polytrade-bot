@@ -125,6 +125,19 @@ class RequestTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("all", pm.requests[0][1]["time_period"])
         self.assertIsNone(await pm.get_leaderboard_user(WALLET))
 
+    async def test_user_volume_reads_usd_over_a_window(self):
+        pm = FakeClient({"data": {"volume": 19826904.98, "volume_usdc": 12798634.16,
+                                  "trade_count": 13549}},
+                        {"data": {"volume": 0, "volume_usdc": 0, "trade_count": 0}},
+                        {"data": None})
+        self.assertEqual(12798634.16, await pm.get_user_volume(WALLET, start=100, end=200))
+        url, params = pm.requests[0]
+        self.assertEqual("https://data-api.polymarket.com/v2/user-volume", url)
+        self.assertEqual({"user": WALLET, "start": 100, "end": 200}, params)
+        self.assertEqual(0.0, await pm.get_user_volume(WALLET))
+        self.assertEqual({"user": WALLET}, pm.requests[1][1])
+        self.assertIsNone(await pm.get_user_volume(WALLET))
+
     async def test_redeem_rows_also_answer_to_their_v1_names(self):
         """copy_engine and trader_stats.realized_closings read conditionId and
         usdcSize from raw redeem rows."""
@@ -150,6 +163,10 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(2, found)
         self.assertEqual([None, "p2"], [c.kwargs["cursor"] for c in pm.get_leaderboard_page.call_args_list])
         self.assertEqual(2, upsert.await_count)
+        # Board volume counts shares, so discovery writes pnl and no volume_usd.
+        fields = upsert.await_args.args[2]
+        self.assertIn("total_pnl", fields)
+        self.assertNotIn("volume_usd", fields)
 
     async def test_a_failed_page_ends_its_feed_and_the_next_feed_runs(self):
         pm = AsyncMock()
