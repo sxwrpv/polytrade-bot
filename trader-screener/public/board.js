@@ -468,21 +468,32 @@ function renderBoard() {
   wrap.append(table);
   host.append(wrap);
 
+  // The live board reads each wallet's USD volume one wallet at a time after a
+  // restart. Until a wallet's volume arrives, the views ranked or floored by
+  // volume leave it out, and say so.
+  const loading = SOURCE === 'live' && M.VOLUME_SORTS.has(state.metric)
+    ? M.volumeUnknown(ds.traders, { cat: state.cat, period: state.period })
+    : 0;
+
   if (!list.length) {
     host.append(el('p', 'screener-state', state.view === 'saved'
       ? 'Nothing saved yet. Tap the heart on any wallet to keep it here, or paste an address into the search box.'
-      : state.metric === 'copy'
-        ? `No ${[...state.bands].map((b) => M.classDef(b).chip).join(' or ')} wallet in ${state.cat === 'all' ? 'this cohort' : state.cat} traded enough in this window. Try a longer period.`
-        : `No wallet in ${state.cat} clears the bar for this measure.`));
+      : loading > 0
+        ? 'USD volume for this window is still loading from Polymarket. Wallets join this view as it arrives; reload in a minute.'
+        : state.metric === 'copy'
+          ? `No ${[...state.bands].map((b) => M.classDef(b).chip).join(' or ')} wallet in ${state.cat === 'all' ? 'this cohort' : state.cat} traded enough in this window. Try a longer period.`
+          : `No wallet in ${state.cat} clears the bar for this measure.`));
   }
 
   const held = M.staleHeldBack(ds.traders, { cat: state.cat, period: state.period, asOf: asOf() });
   const unknown = M.lastTradeUnknown(ds.traders, { cat: state.cat, period: state.period });
-  if (state.view === 'all' && (held > 0 || unknown > 0)) {
+  const pending = list.length ? loading : 0;
+  if (state.view === 'all' && (held > 0 || unknown > 0 || pending > 0)) {
     const notes = [];
     if (held > 0) notes.push(`Lifetime totals never decay, so ${held.toLocaleString('en-US')} ${held === 1 ? 'wallet that has' : 'wallets that have'} not traded in ${M.STALE_DAYS} days ${held === 1 ? 'is' : 'are'} held back here. They still rank on Polymarket's all-time board. This one answers who you could copy today.`);
     // A failed lookup must not quietly bring dormant wallets back.
     if (unknown > 0) notes.push(`${unknown.toLocaleString('en-US')} ${unknown === 1 ? 'wallet’s last trade is' : 'wallets’ last trades are'} not known yet, so ${unknown === 1 ? 'it stays' : 'they stay'} on the board.`);
+    if (pending > 0) notes.push(`USD volume for ${pending.toLocaleString('en-US')} ${pending === 1 ? 'wallet' : 'wallets'} on this board is still loading from Polymarket. Until it arrives, this view leaves ${pending === 1 ? 'that wallet' : 'them'} out; reload in a minute.`);
     host.append(el('p', 'screener-state', notes.join(' ')));
   }
 

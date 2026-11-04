@@ -27,6 +27,25 @@ test('rate-based orders require the window volume floor', () => {
   assert.equal(M.buildBoard([thin, thick], { metric: 'pnl', period: 'd7' }).length, 2);
 });
 
+test('a wallet with no known volume leaves the views ranked or floored by volume', () => {
+  // The live board reads each wallet's USD volume after the leaderboard; until
+  // it arrives the wallet's volume is null, which the board shows as unknown.
+  const known = trader({ w: '0x' + '4'.repeat(40), d7Vol: 30_000 });
+  const loading = trader({ w: '0x' + '5'.repeat(40), d7Vol: null });
+  for (const direction of ['desc', 'asc']) {
+    assert.deepEqual(M.buildBoard([known, loading], { metric: 'vol', period: 'd7', direction }).map((t) => t.w), [known.w]);
+  }
+  assert.deepEqual(M.buildBoard([known, loading], { metric: 'roi', period: 'd7' }).map((t) => t.w), [known.w]);
+  assert.deepEqual(M.buildBoard([known, loading], { metric: 'copy', period: 'd7' }).map((t) => t.w), [known.w]);
+  assert.equal(M.buildBoard([known, loading], { metric: 'pnl', period: 'd7' }).length, 2, 'the PnL view keeps it');
+  assert.ok([...M.VOLUME_SORTS].every((sort) => ['copy', 'roi', 'vol'].includes(sort)));
+  assert.equal(M.volumeUnknown([known, loading], { period: 'd7' }), 1);
+  assert.equal(M.volumeUnknown([known, loading], { period: 'd7', cat: 'Crypto' }), 0, 'counted inside the category');
+  assert.equal(M.roiIn(loading, 'd7'), null);
+  const [head, line] = M.toCsv([loading], 'd7').split('\n');
+  assert.equal(line.split(',')[head.split(',').indexOf('volume_usd')], '', 'the CSV leaves its volume empty');
+});
+
 test('Copy Score orders by band first and money only as tie-break', () => {
   const rich = trader({ w: '0x' + 'a'.repeat(40), copyClass: 'marginal', copyNet: 3, d7: 9_000_000 });
   const poorA = trader({ w: '0x' + 'b'.repeat(40), copyClass: 'strong', copyNet: 11, d7: 10 });

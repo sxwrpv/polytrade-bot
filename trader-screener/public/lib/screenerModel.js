@@ -143,6 +143,8 @@ export function buildBoard(traders, {
   let rows = inCategory(traders, cat);
   if (period === 'all') rows = rows.filter((t) => tradedRecently(t, asOf));
   if (metric === 'copy' || metric === 'roi') rows = rows.filter((t) => volumeIn(t, period) >= minVolume[period]);
+  // A wallet whose volume is unknown has no place in a volume order.
+  if (metric === 'vol') rows = rows.filter((t) => Number.isFinite(volumeIn(t, period)));
   rows = rows.filter((t) => passesFilters(t, filters, period));
   const flip = direction === 'asc' ? (cmp) => (a, b) => cmp(b, a) : (cmp) => cmp;
   if (metric !== 'copy') return [...rows].sort(flip(comparator(metric, period)));
@@ -368,6 +370,16 @@ export function staleHeldBack(traders, { cat = 'all', period, asOf }) {
 export function lastTradeUnknown(traders, { cat = 'all', period }) {
   if (period !== 'all') return 0;
   return inCategory(traders, cat).filter((t) => !t.lastTradeDay).length;
+}
+
+/** The sorts that rank or floor wallets by their window volume. */
+export const VOLUME_SORTS = new Set(['copy', 'roi', 'vol']);
+
+/** Wallets whose volume for the window is unknown. The volume floors and the
+ *  volume order cannot place them, so those views leave them out, and the
+ *  board says how many. */
+export function volumeUnknown(traders, { cat = 'all', period }) {
+  return inCategory(traders, cat).filter((t) => !Number.isFinite(volumeIn(t, period))).length;
 }
 
 // --- angle boards -----------------------------------------------------------

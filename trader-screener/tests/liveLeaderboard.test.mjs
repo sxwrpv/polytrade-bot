@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  buildLiveUniverse, createLastTradeLookup, fetchLiveUniverse, periodToLeaderboardWindow,
+  buildLiveUniverse, createLastTradeLookup, createLiveBoards, createUsdVolumeLookup, fetchLiveUniverse,
+  periodToLeaderboardWindow,
 } from '../lib/liveLeaderboard.mjs';
 import { polymarketFetch } from '../lib/polymarket.mjs';
 
@@ -42,6 +43,7 @@ test('live leaderboard money and identity replace snapshot values while Copy Sco
     volumeRows: [{ rank: 3, user_id: wallet, user_name: 'Live Name', pnl: 500, volume: 700 }],
     snapshot,
     fetchedAt: '2026-08-26T15:00:00.000Z',
+    volumes: new Map([[wallet, 420]]),
   });
   assert.equal(universe.meta.source, 'live-polymarket-leaderboard');
   assert.equal(universe.meta.generatedAt, '2026-08-26T15:00:00.000Z');
@@ -58,9 +60,29 @@ test('live leaderboard money and identity replace snapshot values while Copy Sco
   assert.equal(row.verified, true);
   assert.equal(row.liveRank, 3);
   assert.equal(row.d7, 500);
-  assert.equal(row.d7Vol, 700);
+  assert.equal(row.d7Vol, 420, 'the USD volume read for the window');
+  assert.equal(universe.meta.volumeUnknown, 0);
   assert.equal(row.copyNet, 12);
   assert.equal(row.openVal, null, 'stale open value must not survive into a live row');
+});
+
+test('board volume is the USD read alone, and unknown until that read arrives', () => {
+  // v2 leaderboard rows count volume in shares; the board's volume, ROI and
+  // volume floors are dollars. With no USD volume read yet, volume is unknown.
+  for (const period of ['d7', 'd30', 'all']) {
+    const universe = buildLiveUniverse({
+      period,
+      pnlRows: [{ user_id: wallet, pnl: 500, volume: 1_000_000 }],
+      volumeRows: [{ user_id: other, pnl: 5, volume: 9_000_000 }],
+      snapshot,
+      fetchedAt: '2026-08-26T15:00:00.000Z',
+      volumes: new Map([[other, 3_100_000]]),
+    });
+    const vol = (t) => (period === 'd7' ? t.d7Vol : period === 'd30' ? t.d30Vol : t.vol);
+    assert.equal(vol(universe.traders.find((t) => t.w === wallet)), null);
+    assert.equal(vol(universe.traders.find((t) => t.w === other)), 3_100_000);
+    assert.equal(universe.meta.volumeUnknown, 1);
+  }
 });
 
 test('the live PnL and volume cohorts are unioned and wallets without a score overlay remain unscored', () => {
@@ -71,12 +93,13 @@ test('the live PnL and volume cohorts are unioned and wallets without a score ov
     volumeRows: [{ user_id: other, pnl: 10, volume: 900 }],
     snapshot,
     fetchedAt: '2026-08-26T15:00:00.000Z',
+    volumes: new Map([[wallet, 150], [other, 600]]),
   });
   assert.equal(universe.traders.length, 2);
   assert.equal(universe.traders.find((x) => x.w === wallet).copyNet, 12, 'the overlay joins on the lower-cased wallet');
   const row = universe.traders.find((x) => x.w === other);
   assert.equal(row.d30, 10);
-  assert.equal(row.d30Vol, 900);
+  assert.equal(row.d30Vol, 600);
   assert.equal(row.copyClass, null);
   assert.equal(row.copyNet, null);
   assert.equal(row.activeDays, null, 'stale snapshot metrics must not leak into live rows');
@@ -89,12 +112,13 @@ test('missing leaderboard numerics remain unavailable rather than becoming zero'
     pnlRows: [{ user_id: wallet, pnl: null, volume: '' }],
     snapshot,
     fetchedAt: '2026-08-26T15:00:00.000Z',
+    volumes: new Map([[wallet, '']]),
   });
   assert.equal(universe.traders[0].d7, null);
   assert.equal(universe.traders[0].d7Vol, null);
 });
 
-test('live universe reads each top 100 in one v2 request and asks for their last trades', async () => {
+test('live universe reads each top 100 in one v2 request and asks for their last trades and USD volumes', async () => {
   const calls = [];
   const fetchImpl = async (url) => {
     calls.push(new URL(url));
@@ -105,8 +129,13 @@ test('live universe reads each top 100 in one v2 request and asks for their last
     asked = wallets;
     return new Map([[wallets[0], '2026-08-20']]);
   };
+  let volumesAsked;
+  const usdVolumes = async (wallets, period) => {
+    volumesAsked = { wallets, period };
+    return new Map([[wallets[0], 75_000]]);
+  };
   const universe = await fetchLiveUniverse({
-    period: 'd30', snapshot, fetchImpl, fetchedAt: '2026-08-26T15:00:00.000Z', lastTradeDays,
+    period: 'd30', snapshot, fetchImpl, fetchedAt: '2026-08-26T15:00:00.000Z', lastTradeDays, usdVolumes,
   });
   assert.equal(calls.length, 2, 'a full first page is the whole list: its cursor is not followed');
   for (const sortBy of ['PNL', 'VOLUME']) {
@@ -121,10 +150,13 @@ test('live universe reads each top 100 in one v2 request and asks for their last
   assert.equal(asked.length, 100);
   assert.equal(new Set(asked).size, 100, 'each wallet is looked up once');
   assert.equal(universe.traders.length, 100);
+  assert.deepEqual(volumesAsked, { wallets: asked, period: 'd30' }, 'volumes are read for the board\'s own window');
   const first = universe.traders.find((t) => t.w === asked[0]);
   assert.equal(first.d30, 100);
-  assert.equal(first.d30Vol, 200);
+  assert.equal(first.d30Vol, 75_000, 'the USD volume read for the window');
   assert.equal(first.lastTradeDay, '2026-08-20');
+  assert.equal(universe.traders.find((t) => t.w === asked[1]).d30Vol, null);
+  assert.equal(universe.meta.volumeUnknown, 99);
   assert.equal(universe.meta.generatedAt, '2026-08-26T15:00:00.000Z');
 });
 
@@ -330,4 +362,196 @@ test('boards and every other Polymarket read share one budget: ten at once, then
   assert.equal(sent.length, 12, 'two leaderboard pages and ten other reads');
   assert.ok(sent[9] < 50, 'a burst of ten goes at once');
   assert.ok(sent[10] >= 150 && sent[11] >= 350, `then one every 200 ms (${sent.slice(10).join(', ')} ms)`);
+});
+
+// --- USD volume ---------------------------------------------------------------
+
+const userVolume = (usd, shares = usd * 2) => ({
+  ok: true, status: 200, json: async () => ({ data: { volume: shares, volume_usdc: usd, trade_count: 3 } }),
+});
+
+test('USD volumes are read from /v2/user-volume for the board\'s own window, as background work', async () => {
+  const NOW = Date.UTC(2026, 10, 4, 12, 30);
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    const u = new URL(url);
+    calls.push({ u, init });
+    return userVolume(u.searchParams.get('user') === wallet ? 1234.5 : 50);
+  };
+  const lookup = createUsdVolumeLookup({ fetchImpl, perSecond: 1000, now: () => NOW });
+  const week = await lookup([wallet, other], 'd7');
+  assert.equal(week.get(wallet), 1234.5, 'volume_usdc, the dollars');
+  assert.equal(week.get(other), 50);
+  const end = NOW / 1000;
+  const [first] = calls;
+  assert.equal(`${first.u.origin}${first.u.pathname}`, 'https://data-api.polymarket.com/v2/user-volume');
+  assert.equal(first.u.searchParams.get('user'), wallet);
+  assert.equal(first.u.searchParams.get('start'), String(end - 7 * 86_400), 'the seven days the week board ranks');
+  assert.equal(first.u.searchParams.get('end'), String(end));
+  assert.ok(calls.every((c) => c.init.background === true), 'background work through the shared gate');
+
+  assert.equal((await lookup([wallet], 'd30')).get(wallet), 1234.5);
+  assert.equal(calls[2].u.searchParams.get('start'), String(end - 30 * 86_400));
+  assert.equal((await lookup([wallet], 'all')).get(wallet), 1234.5);
+  assert.equal(calls[3].u.searchParams.has('start'), false, 'all time sends no bounds');
+  assert.equal(calls[3].u.searchParams.has('end'), false);
+  assert.equal(calls.length, 4, 'each wallet and window is its own read');
+  await assert.rejects(lookup([wallet], 'd90'), /unsupported period/);
+});
+
+test('a USD volume is kept per wallet and window, renewed behind the board, and kept when a renewal fails', async () => {
+  let clock = Date.UTC(2026, 10, 4);
+  let usd = 100;
+  let failing = false;
+  let calls = 0;
+  const fetchImpl = async () => {
+    calls += 1;
+    return failing ? { ok: false, status: 503, json: async () => ({}) } : userVolume(usd);
+  };
+  const lookup = createUsdVolumeLookup({ fetchImpl, perSecond: 1000, refreshAfterMs: 60_000, now: () => clock });
+  assert.equal((await lookup([wallet], 'd7')).get(wallet), 100);
+  usd = 200;
+  clock += 30_000;
+  assert.equal((await lookup([wallet], 'd7')).get(wallet), 100);
+  assert.equal(calls, 1, 'a board refresh inside the renewal time reads nothing again');
+
+  clock += 40_000;
+  failing = true;
+  assert.equal((await lookup([wallet], 'd7')).get(wallet), 100, 'an old volume is still served at once');
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(calls, 2, 'and renewed behind the board');
+  assert.equal((await lookup([wallet], 'd7')).get(wallet), 100, 'a failed renewal keeps the volume already known');
+  assert.equal(calls, 2, 'and the wallet is not asked again for two minutes');
+
+  clock += 2 * 60_000;
+  failing = false;
+  await lookup([wallet], 'd7');
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal((await lookup([wallet], 'd7')).get(wallet), 200);
+  assert.equal(calls, 3);
+});
+
+test('a USD volume that cannot be read stays unknown, and one six hours old is dropped', async () => {
+  let clock = Date.UTC(2026, 10, 4);
+  let answer = () => ({ ok: false, status: 400, json: async () => ({}) });
+  const fetchImpl = async () => answer();
+  const lookup = createUsdVolumeLookup({ fetchImpl, perSecond: 1000, now: () => clock });
+  assert.equal((await lookup([wallet], 'all')).has(wallet), false, 'a failed read is left out, not guessed');
+
+  answer = () => ({ ok: true, status: 200, json: async () => ({ data: null }) });
+  assert.equal((await lookup([other], 'all')).has(other), false, 'a read with no dollar figure is a failed read');
+
+  answer = () => userVolume(5);
+  clock += 2 * 60_000;
+  assert.equal((await lookup([wallet], 'all')).get(wallet), 5);
+  answer = () => ({ ok: false, status: 503, json: async () => ({}) });
+  clock += 6 * 60 * 60_000;
+  assert.equal((await lookup([wallet], 'all')).has(wallet), false, 'past six hours with every renewal failing');
+});
+
+test('USD volume reads go out one at a time and at most perSecond a second', async () => {
+  let clock = 0;
+  const started = [];
+  let inFlight = 0;
+  let mostInFlight = 0;
+  const fetchImpl = async () => {
+    started.push(clock);
+    inFlight += 1;
+    mostInFlight = Math.max(mostInFlight, inFlight);
+    await Promise.resolve();
+    clock += 100;
+    inFlight -= 1;
+    return userVolume(1);
+  };
+  const lookup = createUsdVolumeLookup({
+    fetchImpl, perSecond: 2, now: () => clock, sleep: async (ms) => { clock += ms; },
+  });
+  const wallets = Array.from({ length: 5 }, (_, i) => '0x' + String(i).repeat(40));
+  const [week, month] = await Promise.all([lookup(wallets, 'd7'), lookup(wallets.slice(0, 2), 'd30')]);
+  assert.equal(started.length, 7, 'one read per wallet and window');
+  assert.equal(mostInFlight, 1);
+  for (let i = 1; i < started.length; i += 1) {
+    assert.ok(started[i] - started[i - 1] >= 500, `read ${i} went out ${started[i] - started[i - 1]} ms after the last`);
+  }
+  assert.equal(week.size, 5);
+  assert.equal(month.size, 2);
+});
+
+test('a board built with the USD volume lookup carries each wallet\'s volume_usdc', async () => {
+  const fetchImpl = async (url) => {
+    const u = new URL(url);
+    if (u.pathname === '/v2/leaderboard') return { ok: true, json: async () => v2Page(boardRows(0, 3)) };
+    const n = parseInt(u.searchParams.get('user').slice(2), 16);
+    return userVolume(n * 1000, n * 7000);
+  };
+  const usdVolumes = createUsdVolumeLookup({ fetchImpl, perSecond: 1000 });
+  const universe = await fetchLiveUniverse({ period: 'd7', snapshot, fetchImpl, usdVolumes });
+  assert.deepEqual(universe.traders.map((t) => t.d7Vol).sort((a, b) => a - b), [1000, 2000, 3000]);
+  assert.equal(universe.meta.volumeUnknown, 0);
+});
+
+// --- the live boards ----------------------------------------------------------
+
+test('a board is built once a minute and shared by visitors who ask together', async () => {
+  let clock = 0;
+  let builds = 0;
+  const build = async (period) => {
+    builds += 1;
+    await Promise.resolve();
+    return { meta: { volumeUnknown: 0 }, period, build: builds };
+  };
+  const boards = createLiveBoards({ build, now: () => clock });
+  const [a, b] = await Promise.all([boards('d7'), boards('d7')]);
+  assert.equal(builds, 1);
+  assert.equal(a, b);
+  clock += 59_000;
+  assert.equal(await boards('d7'), a);
+  assert.equal(builds, 1);
+  clock += 1_000;
+  assert.equal((await boards('d7')).build, 2, 'a minute-old board is rebuilt');
+  assert.equal((await boards('d30')).period, 'd30', 'each window is its own board');
+  assert.equal(builds, 3);
+});
+
+test('a board still filling in USD volumes is rebuilt behind the visitor every 15 s', async () => {
+  let clock = 0;
+  let unknownLeft = 50;
+  let builds = 0;
+  const build = async () => {
+    builds += 1;
+    return { meta: { volumeUnknown: unknownLeft }, build: builds };
+  };
+  const boards = createLiveBoards({ build, now: () => clock });
+  const first = await boards('d7');
+  clock += 10_000;
+  assert.equal(await boards('d7'), first);
+  assert.equal(builds, 1, 'younger than 15 s, it is served as built');
+  clock += 5_000;
+  unknownLeft = 0;
+  assert.equal(await boards('d7'), first, 'the visitor gets the board already built at once');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(builds, 2, 'and the rebuild runs behind');
+  const second = await boards('d7');
+  assert.equal(second.build, 2);
+  clock += 30_000;
+  assert.equal(await boards('d7'), second);
+  assert.equal(builds, 2, 'a board with every volume known waits out its minute');
+});
+
+test('a failed rebuild behind a visitor keeps the board already built', async () => {
+  let clock = 0;
+  let failing = false;
+  const build = async () => {
+    if (failing) throw new Error('Polymarket leaderboard 503');
+    return { meta: { volumeUnknown: 3 } };
+  };
+  const boards = createLiveBoards({ build, now: () => clock });
+  const first = await boards('d7');
+  failing = true;
+  clock += 20_000;
+  assert.equal(await boards('d7'), first);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(await boards('d7'), first, 'still served after the failed rebuild');
+  clock += 60_000;
+  await assert.rejects(boards('d7'), /503/, 'a minute-old board is rebuilt in front of the visitor');
 });

@@ -6,7 +6,9 @@ import { fileURLToPath } from 'node:url';
 import * as pm from './lib/polymarket.mjs';
 import { buildProfile } from './lib/metrics.mjs';
 import * as screener from './lib/publicScreener.mjs';
-import { createLastTradeLookup, fetchLiveUniverse } from './lib/liveLeaderboard.mjs';
+import {
+  createLastTradeLookup, createLiveBoards, createUsdVolumeLookup, fetchLiveUniverse,
+} from './lib/liveLeaderboard.mjs';
 import {
   canonicalClientIdentity, ConcurrencyGate, createCoalescer, createRateLimiter, TtlLruCache,
 } from './lib/serviceGuards.mjs';
@@ -101,28 +103,25 @@ const profileCache = new TtlLruCache({ max: 16, ttlMs: 5 * 60 * 1000 });
 const profileInflight = createCoalescer();
 const profileGate = new ConcurrencyGate(2);
 const LIVE_PROFILE_DEADLINE_MS = 30_000;
-const liveLeaderboardCache = new TtlLruCache({ max: 3, ttlMs: 60 * 1000 });
-const liveLeaderboardInflight = createCoalescer();
-// One per process, so the per-wallet last-trade cache is shared by all three windows.
+// One of each per process, so the per-wallet caches are shared by all three windows.
 const lastTradeDays = createLastTradeLookup();
+const usdVolumes = createUsdVolumeLookup();
 
-async function liveLeaderboard(period) {
-  const hit = liveLeaderboardCache.get(period);
-  if (hit !== undefined) return hit;
-  return liveLeaderboardInflight.run(period, async () => {
-    const cached = liveLeaderboardCache.get(period);
-    if (cached !== undefined) return cached;
+// Each board is rebuilt at most once a minute, and every 15 s behind the
+// visitor while its USD volumes are still filling in (see createLiveBoards).
+const liveLeaderboard = createLiveBoards({
+  build: async (period) => {
     const deadline = new AbortController();
     const timer = setTimeout(() => deadline.abort(new Error('live leaderboard deadline exceeded')), 15_000);
     try {
-      const rows = await fetchLiveUniverse({ period, snapshot: dataset, signal: deadline.signal, lastTradeDays });
-      liveLeaderboardCache.set(period, rows);
-      return rows;
+      return await fetchLiveUniverse({
+        period, snapshot: dataset, signal: deadline.signal, lastTradeDays, usdVolumes,
+      });
     } finally {
       clearTimeout(timer);
     }
-  });
-}
+  },
+});
 
 async function traderProfile(wallet) {
   const hit = profileCache.get(wallet);
@@ -316,9 +315,12 @@ server.listen(PORT, () => {
   console.log(`  snapshot ${dataset.meta.generatedAt}  ·  ${dataset.traders.length.toLocaleString()} traders`);
   console.log(`  data dir ${DATA_DIR}  ·  reload every ${RELOAD_SECONDS}s`);
   console.log(`  trader pages pull live from data-api.polymarket.com\n`);
-  // Queue every window's wallets now, so the paced last-trade lookups are under
-  // way before the first visitor asks instead of starting with them.
+  // Queue every window's wallets now, so the paced last-trade and USD volume
+  // lookups are under way before the first visitor asks. One board at a time,
+  // the 7D board first since it opens first, so its wallets head the queues.
   if (DATA_MODE === 'live') {
-    for (const period of ['d7', 'd30', 'all']) liveLeaderboard(period).catch(() => {});
+    (async () => {
+      for (const period of ['d7', 'd30', 'all']) await liveLeaderboard(period).catch(() => {});
+    })();
   }
 });
