@@ -45,13 +45,14 @@ _PERIODS = {"7d": 7, "30d": 30, "90d": 90}
 # the wallet screener. Keep this beside the calculations: UI copy and external
 # documentation may consume it, but neither is allowed to give a metric a
 # stronger provenance than the implementation below actually provides.
-_TRADE_ENDPOINT = "GET https://data-api.polymarket.com/activity?user={address}&type=TRADE"
-_REDEEM_ENDPOINT = "GET https://data-api.polymarket.com/activity?user={address}&type=REDEEM"
-_POSITIONS_ENDPOINT = "GET https://data-api.polymarket.com/positions?user={address}"
+_TRADE_ENDPOINT = "GET https://data-api.polymarket.com/v2/activity?user={address}&type=TRADE"
+_REDEEM_ENDPOINT = "GET https://data-api.polymarket.com/v2/activity?user={address}&type=REDEEM"
+_POSITIONS_ENDPOINT = "GET https://data-api.polymarket.com/v2/positions?user={address}"
 _LEADERBOARD_USER_ENDPOINT = (
-    "GET https://data-api.polymarket.com/v1/leaderboard?category=OVERALL&"
-    "timePeriod=ALL&orderBy=PNL&user={address}"
+    "GET https://data-api.polymarket.com/v2/leaderboard?category=overall&"
+    "time_period=all&sort_by=PNL&user={address}"
 )
+_USER_VOLUME_ENDPOINT = "GET https://data-api.polymarket.com/v2/user-volume?user={address}"
 _ACTIVITY_ENDPOINTS = (_TRADE_ENDPOINT, _REDEEM_ENDPOINT, _POSITIONS_ENDPOINT)
 # Fetch limits applied by refresh_trader_analysis. The contract publishes them
 # from these same names, so it cannot describe limits the code does not apply.
@@ -185,20 +186,23 @@ SCREENER_METRIC_CONTRACT = {
     ),
     "volume_usd": _metric_contract(
         formula=(
-            "Official vol from the first user-filtered ALL leaderboard row; after an "
-            "explicit no-row result, preserve an existing non-null cached value of "
-            "unknown/legacy provenance, or if missing sum(usd_size) over fetched TRADE rows."
+            "Official volume_usdc from the first (only) row /v2/user-volume returns "
+            "for the wallet's full history (the leaderboard's volume counts shares); "
+            "a failed lookup preserves the cached value; after an explicit no-row "
+            "leaderboard result with no volume answer, preserve an existing non-null "
+            "cached value of unknown/legacy provenance, or if missing sum(usd_size) "
+            "over fetched TRADE rows."
         ),
-        source_endpoint=(_LEADERBOARD_USER_ENDPOINT, _TRADE_ENDPOINT),
+        source_endpoint=(_USER_VOLUME_ENDPOINT, _TRADE_ENDPOINT),
         time_window=(
-            "ALL only for the official leaderboard value; fallback is fetch-bounded "
+            "Full history for the official value; fallback is fetch-bounded "
             "activity and has no broader coverage claim."
         ),
         provenance="official_with_reconstructed_fallback",
         sortable=False, filterable=False, label="Total Volume",
         tooltip=(
-            "Polymarket's official ALL-period volume when returned; after explicit "
-            "no-row, a missing value may use a partial sum of fetched TRADE rows."
+            "Polymarket's official full-history volume in USD when returned; after "
+            "explicit no-row, a missing value may use a partial sum of fetched TRADE rows."
         ),
         limits={
             "official_requests": 1, "official_request_row_limit": None,
@@ -516,8 +520,9 @@ async def seed_from_leaderboard(db, pm, *, period="MONTH", order_by="PNL", limit
     """Discover top traders with one cheap API call.
 
     Every period contributes identity/profile fields. Only ALL entries may
-    populate total_pnl/volume_usd: values from MONTH/WEEK/DAY must never be
-    cached in columns whose public contract identifies them as ALL-period.
+    populate total_pnl: values from MONTH/WEEK/DAY must never be cached in
+    columns whose public contract identifies them as ALL-period. volume_usd is
+    filled by the refresh from /v2/user-volume, since board volume counts shares.
     """
     entries = await pm.get_leaderboard(period=period, order_by=order_by, limit=limit)
     for e in entries:
@@ -529,15 +534,15 @@ async def seed_from_leaderboard(db, pm, *, period="MONTH", order_by="PNL", limit
         }
         if period.upper() == "ALL":
             fields["total_pnl"] = e.pnl
-            fields["volume_usd"] = e.vol
         await _upsert(db, e.proxy_wallet, fields)
     return len(entries)
 
 
 # Discovery feeds, deepest first. The leaderboard API pages at 50 rows and
 # paginates far past rank 1000 (verified live 2026-07-02: MONTH×VOL offset 1900
-# still returns wallets doing ~$70k/month). ALL-period feeds carry the
-# LIFETIME pnl/vol, which is what total_pnl/volume_usd mean — the recency
+# still returns wallets doing ~$70k/month; v2 pages the same depth by cursor).
+# ALL-period feeds carry the LIFETIME pnl, which is what total_pnl means (their
+# volume counts shares; volume_usd comes from /v2/user-volume) — the recency
 # feeds (MONTH/WEEK/DAY) only contribute profile fields for wallets that are
 # active right now but not big enough all-time.
 _PAGE = 50
@@ -562,16 +567,18 @@ async def discover_active_wallets(db, pm, *, target: int = 2000) -> int:
     """
     seen: set[str] = set()
     for period, order_by, pages, authoritative in _DISCOVERY_FEEDS:
+        cursor = None
         for page in range(pages):
             if len(seen) >= target:
                 return len(seen)
             try:
-                entries = await pm.get_leaderboard(
-                    period=period, order_by=order_by, limit=_PAGE, offset=page * _PAGE)
+                entries, cursor = await pm.get_leaderboard_page(
+                    period=period, order_by=order_by, limit=_PAGE, cursor=cursor)
             except Exception:
-                log.exception("discovery page failed (%s %s p%d) — continuing",
+                # A feed pages by cursor, so a failed page ends that feed.
+                log.exception("discovery page failed (%s %s p%d) — next feed",
                               period, order_by, page)
-                continue
+                break
             if not entries:
                 break                       # feed exhausted
             for e in entries:
@@ -584,10 +591,11 @@ async def discover_active_wallets(db, pm, *, target: int = 2000) -> int:
                     "x_username": e.x_username,
                     "verified": int(e.verified),
                 }
-                if authoritative:           # lifetime numbers only from ALL feeds
-                    fields["total_pnl"] = e.pnl
-                    fields["volume_usd"] = e.vol
+                if authoritative:           # lifetime pnl only from ALL feeds;
+                    fields["total_pnl"] = e.pnl     # their volume counts shares
                 await _upsert(db, e.proxy_wallet, fields)
+            if not cursor:
+                break                       # last page of this feed
     return len(seen)
 
 
@@ -637,21 +645,23 @@ def _freeze_activity_row(value: Any) -> Any:
 
 async def _fetch_activity_window(fetch, days: int, max_pages: int) -> tuple[list, bool]:
     """Page through a most-recent-first activity fetcher until the window is
-    covered or the page budget runs out. Returns (rows, covered): covered=False
-    means the wallet is so active the oldest fetched row is still inside the
-    window — stats then honestly reflect partial coverage (surfaced to the UI
-    via history_days)."""
+    covered or the page budget runs out. `fetch(limit=, cursor=)` returns
+    (rows, next_cursor). Returns (rows, covered): covered=False means the
+    wallet is so active the oldest fetched row is still inside the window —
+    stats then honestly reflect partial coverage (surfaced to the UI via
+    history_days)."""
     cutoff = time.time() - days * 86400
     rows: list = []
     seen: set[Any] = set()
-    for page in range(max_pages):
-        batch = await fetch(limit=_PAGE_SIZE, offset=page * _PAGE_SIZE)
+    cursor = None
+    for _ in range(max_pages):
+        batch, cursor = await fetch(limit=_PAGE_SIZE, cursor=cursor)
         for row in batch:
             identity = _freeze_activity_row(row)
             if identity not in seen:
                 seen.add(identity)
                 rows.append(row)
-        if len(batch) < _PAGE_SIZE:
+        if not cursor or not batch:
             return rows, True                    # feed exhausted — full coverage
         oldest = batch[-1] if not isinstance(batch[-1], dict) else None
         oldest_ts = (oldest.timestamp if oldest is not None
@@ -668,18 +678,19 @@ async def refresh_trader_analysis(address: str, db, pm) -> TraderAnalysis:
     positions) — run for the traders shown on the board, and periodically for
     the whole cache (see `refresh_all`).
 
-    total_pnl/volume_usd prefer the leaderboard's per-user filter — the
-    official ALL-period numbers Polymarket shows. An explicit no-row result may
+    total_pnl prefers the leaderboard's per-user filter and volume_usd the
+    wallet's /v2/user-volume USD figure — the official full-history numbers
+    Polymarket shows. An explicit no-row result may
     fill missing cache values with fetch-bounded reconstructions; a lookup
     exception preserves both totals. Existing non-null values are also
     preserved on no-row and have unknown/legacy provenance without a source
     column.
     """
     trades, trades_covered = await _fetch_activity_window(
-        lambda limit, offset: pm.get_trade_history(address, limit=limit, offset=offset),
+        lambda limit, cursor: pm.trade_history_page(address, limit=limit, cursor=cursor),
         days=90, max_pages=_MAX_TRADE_PAGES)
     redeems, _ = await _fetch_activity_window(
-        lambda limit, offset: pm.get_redeems(address, limit=limit, offset=offset),
+        lambda limit, cursor: pm.redeems_page(address, limit=limit, cursor=cursor),
         days=90, max_pages=_MAX_REDEEM_PAGES)
     positions = await pm.get_positions(address, size_threshold=0,
                                        limit=_POSITIONS_LIMIT)
@@ -747,7 +758,6 @@ async def refresh_trader_analysis(address: str, db, pm) -> TraderAnalysis:
         official = None
     if official is not None:
         stats["total_pnl"] = official.pnl
-        stats["volume_usd"] = official.vol
         if official.user_name:
             stats["display_name"] = official.user_name
         if official.x_username:
@@ -762,6 +772,16 @@ async def refresh_trader_analysis(address: str, db, pm) -> TraderAnalysis:
             stats["total_pnl"] = round(total_realized + unrealized, 2)
         if existing is None or existing["volume_usd"] is None:
             stats["volume_usd"] = round(sum(t.usd_size for t in trades), 2)
+    # Lifetime USD volume: Data API v2's board volume counts shares, so the
+    # official USD figure is /v2/user-volume's volume_usdc over full history.
+    # It covers any wallet, ranked or not; a failed lookup keeps the cache.
+    try:
+        volume_usd = await pm.get_user_volume(address)
+    except Exception:
+        log.exception("official volume lookup failed for %s (preserving cached volume)", address)
+        volume_usd = None
+    if volume_usd is not None:
+        stats["volume_usd"] = round(volume_usd, 2)
     for period_key, days in _PERIODS.items():
         m = _period_metrics(closings, trades, days)
         stats[f"winrate_{period_key}"] = m["winrate"]

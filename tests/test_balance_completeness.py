@@ -13,10 +13,11 @@ def anyio_backend():
 
 
 def pm_fixture(*, complete=True):
-    p = SimpleNamespace(size=1, current_value=1, cash_pnl=0, redeemable=False)
+    row = dict(current_size=1, current_value=1, unrealized_pnl=0, redeemable=False)
+    full_page = ([row] * 500, 'next-page')
     pm = PolymarketClient.__new__(PolymarketClient)
-    pm.get_positions = AsyncMock(side_effect=([p] * 500, [p]) if complete else None,
-                                 return_value=[p] * 500)
+    pm._v2_page = AsyncMock(side_effect=(full_page, ([row], None)) if complete else None,
+                            return_value=full_page)
     return pm
 
 

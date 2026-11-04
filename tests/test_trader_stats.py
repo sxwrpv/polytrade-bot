@@ -148,10 +148,10 @@ class ScreenerMetricContractTests(unittest.TestCase):
         metadata = self.contract()["total_pnl"]
         self.assertEqual(
             (
-                "GET https://data-api.polymarket.com/v1/leaderboard?category=OVERALL&timePeriod=ALL&orderBy=PNL&user={address}",
-                "GET https://data-api.polymarket.com/activity?user={address}&type=TRADE",
-                "GET https://data-api.polymarket.com/activity?user={address}&type=REDEEM",
-                "GET https://data-api.polymarket.com/positions?user={address}",
+                "GET https://data-api.polymarket.com/v2/leaderboard?category=overall&time_period=all&sort_by=PNL&user={address}",
+                "GET https://data-api.polymarket.com/v2/activity?user={address}&type=TRADE",
+                "GET https://data-api.polymarket.com/v2/activity?user={address}&type=REDEEM",
+                "GET https://data-api.polymarket.com/v2/positions?user={address}",
             ),
             metadata["source_endpoint"],
         )
@@ -307,38 +307,45 @@ class LeaderboardSeedProvenanceTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("total_pnl", fields)
         self.assertNotIn("volume_usd", fields)
 
-    async def test_all_seed_may_cache_official_all_period_totals(self):
+    async def test_all_seed_caches_official_pnl_and_leaves_volume_to_user_volume(self):
+        """Data API v2 board volume counts shares, so it never lands in
+        volume_usd; the refresh fills that from /v2/user-volume."""
         pm = SimpleNamespace(get_leaderboard=AsyncMock(return_value=[self.entry()]))
         with patch.object(trader_stats, "_upsert", new=AsyncMock()) as upsert:
             await trader_stats.seed_from_leaderboard(object(), pm, period="ALL")
 
         fields = upsert.await_args.args[2]
         self.assertEqual(123.0, fields["total_pnl"])
-        self.assertEqual(456.0, fields["volume_usd"])
+        self.assertNotIn("volume_usd", fields)
 
 
 class OfficialLookupFallbackTests(unittest.IsolatedAsyncioTestCase):
     @staticmethod
-    def pm(official_result):
+    def pm(official_result, volume_result=None):
         pm = SimpleNamespace(
             get_trade_history=AsyncMock(), get_redeems=AsyncMock(),
             get_positions=AsyncMock(return_value=[]),
             get_leaderboard_user=AsyncMock(),
+            get_user_volume=AsyncMock(),
         )
         if isinstance(official_result, Exception):
             pm.get_leaderboard_user.side_effect = official_result
         else:
             pm.get_leaderboard_user.return_value = official_result
+        if isinstance(volume_result, Exception):
+            pm.get_user_volume.side_effect = volume_result
+        else:
+            pm.get_user_volume.return_value = volume_result
         return pm
 
-    async def refresh_fields(self, official_result, existing):
+    async def refresh_fields(self, official_result, existing, volume_result=None):
         async def fetchone(sql, _params):
             if "SELECT *" in sql:
                 return {"address": "0xabc"}
             return existing
 
         db = SimpleNamespace(fetchone=AsyncMock(side_effect=fetchone))
-        pm = self.pm(official_result)
+        pm = self.pm(official_result, volume_result)
         with (
             patch.object(trader_stats, "_fetch_activity_window", new=AsyncMock(side_effect=[([], True), ([], True)])),
             patch.object(trader_stats, "_upsert", new=AsyncMock()) as upsert,
@@ -359,6 +366,20 @@ class OfficialLookupFallbackTests(unittest.IsolatedAsyncioTestCase):
     async def test_explicit_no_row_preserves_existing_values_of_unknown_provenance(self):
         fields = await self.refresh_fields(None, {"total_pnl": 12.0, "volume_usd": 34.0})
         self.assertNotIn("total_pnl", fields)
+        self.assertNotIn("volume_usd", fields)
+
+    async def test_user_volume_is_the_official_usd_volume_for_any_wallet(self):
+        board_row = SimpleNamespace(pnl=5.0, vol=9999.0, user_name="", x_username="")
+        for official in (board_row, None):
+            with self.subTest(board_row=official is not None):
+                fields = await self.refresh_fields(official, None, volume_result=789.254)
+                self.assertEqual(789.25, fields["volume_usd"])
+
+    async def test_failed_volume_lookup_preserves_the_cached_volume(self):
+        board_row = SimpleNamespace(pnl=5.0, vol=9999.0, user_name="", x_username="")
+        fields = await self.refresh_fields(board_row, {"total_pnl": 1.0, "volume_usd": 34.0},
+                                           volume_result=RuntimeError("upstream"))
+        self.assertEqual(5.0, fields["total_pnl"])
         self.assertNotIn("volume_usd", fields)
 
 
@@ -463,7 +484,7 @@ class DeterministicMetricFixtureTests(unittest.TestCase):
 
 class DeterministicRefreshFixtureTests(unittest.IsolatedAsyncioTestCase):
     async def refresh_fields(self, *, official, trades, redeems=(), positions=(),
-                             trades_covered=True):
+                             trades_covered=True, official_volume=None):
         async def fetchone(sql, _params):
             if "SELECT *" in sql:
                 return {"address": "0xfixture"}
@@ -473,6 +494,7 @@ class DeterministicRefreshFixtureTests(unittest.IsolatedAsyncioTestCase):
         pm = SimpleNamespace(
             get_positions=AsyncMock(return_value=list(positions)),
             get_leaderboard_user=AsyncMock(return_value=official),
+            get_user_volume=AsyncMock(return_value=official_volume),
         )
         with (
             patch.object(
@@ -492,9 +514,10 @@ class DeterministicRefreshFixtureTests(unittest.IsolatedAsyncioTestCase):
             official=activity.OFFICIAL_LEADERBOARD_PNL,
             trades=activity.PARTIAL_SELL_TRADES,
             positions=[activity.PARTIAL_SELL_REMAINDER],
+            official_volume=321.5,
         )
         self.assertEqual(activity.OFFICIAL_LEADERBOARD_PNL.pnl, fields["total_pnl"])
-        self.assertEqual(activity.OFFICIAL_LEADERBOARD_PNL.vol, fields["volume_usd"])
+        self.assertEqual(321.5, fields["volume_usd"])
 
     async def test_absent_official_pnl_uses_only_fetch_bounded_reconstruction(self):
         trades = [
