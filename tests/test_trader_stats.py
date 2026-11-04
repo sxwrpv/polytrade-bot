@@ -148,10 +148,10 @@ class ScreenerMetricContractTests(unittest.TestCase):
         metadata = self.contract()["total_pnl"]
         self.assertEqual(
             (
-                "GET https://data-api.polymarket.com/v1/leaderboard?category=OVERALL&timePeriod=ALL&orderBy=PNL&user={address}",
-                "GET https://data-api.polymarket.com/activity?user={address}&type=TRADE",
-                "GET https://data-api.polymarket.com/activity?user={address}&type=REDEEM",
-                "GET https://data-api.polymarket.com/positions?user={address}",
+                "GET https://data-api.polymarket.com/v2/leaderboard?category=overall&time_period=all&sort_by=PNL&user={address}",
+                "GET https://data-api.polymarket.com/v2/activity?user={address}&type=TRADE",
+                "GET https://data-api.polymarket.com/v2/activity?user={address}&type=REDEEM",
+                "GET https://data-api.polymarket.com/v2/positions?user={address}",
             ),
             metadata["source_endpoint"],
         )

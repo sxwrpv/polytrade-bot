@@ -49,8 +49,8 @@ class WalletAnalysisOrchestrationTests(unittest.IsolatedAsyncioTestCase):
     @staticmethod
     def pm(*, trades=None):
         return SimpleNamespace(
-            get_trade_history=AsyncMock(return_value=list(trades or [])),
-            get_redeems=AsyncMock(return_value=[]),
+            trade_history_page=AsyncMock(return_value=(list(trades or []), None)),
+            redeems_page=AsyncMock(return_value=([], None)),
             get_positions=AsyncMock(return_value=[PreviewPosition("token-1")]),
             get_leaderboard_user=AsyncMock(return_value=SimpleNamespace(
                 pnl=123.0, vol=456.0, user_name="alice", x_username=None,
@@ -69,8 +69,8 @@ class WalletAnalysisOrchestrationTests(unittest.IsolatedAsyncioTestCase):
                 ADDRESS.upper().replace("0X", "0x"), user={"id": "viewer"}, db=db, pmc=pm,
             )
 
-        pm.get_trade_history.assert_awaited_once_with(ADDRESS, limit=1000, offset=0)
-        pm.get_redeems.assert_awaited_once_with(ADDRESS, limit=1000, offset=0)
+        pm.trade_history_page.assert_awaited_once_with(ADDRESS, limit=1000, cursor=None)
+        pm.redeems_page.assert_awaited_once_with(ADDRESS, limit=1000, cursor=None)
         pm.get_positions.assert_awaited_once_with(
             ADDRESS, size_threshold=0, limit=500,
         )
@@ -125,19 +125,19 @@ class WalletAnalysisOrchestrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(trades, analysis.trades)
         self.assertEqual(trades, analysis.recent_trades)
         self.assertEqual(1, pm.get_positions.await_count)
-        self.assertEqual(1, pm.get_trade_history.await_count)
+        self.assertEqual(1, pm.trade_history_page.await_count)
 
     async def test_trade_fetch_failure_propagates_and_writes_no_zero_cache(self):
         pm = self.pm()
-        pm.get_trade_history.side_effect = RuntimeError("activity unavailable")
+        pm.trade_history_page.side_effect = RuntimeError("activity unavailable")
 
         with patch.object(trader_stats, "_upsert", new=AsyncMock()) as upsert:
             with self.assertRaisesRegex(RuntimeError, "activity unavailable"):
                 await trader_stats.refresh_trader_analysis(ADDRESS, self.db(), pm)
 
         upsert.assert_not_awaited()
-        pm.get_trade_history.assert_awaited_once_with(ADDRESS, limit=1000, offset=0)
-        pm.get_redeems.assert_not_awaited()
+        pm.trade_history_page.assert_awaited_once_with(ADDRESS, limit=1000, cursor=None)
+        pm.redeems_page.assert_not_awaited()
         pm.get_positions.assert_not_awaited()
         pm.get_leaderboard_user.assert_not_awaited()
 
@@ -155,7 +155,7 @@ class WalletAnalysisOrchestrationTests(unittest.IsolatedAsyncioTestCase):
         )
         second = [first[-1], same_tx_distinct_fill, first[-1]]
         pm = self.pm()
-        pm.get_trade_history.side_effect = [first, second]
+        pm.trade_history_page.side_effect = [(first, "page-2"), (second, None)]
 
         with patch.object(trader_stats, "_upsert", new=AsyncMock()) as upsert:
             analysis = await trader_stats.refresh_trader_analysis(ADDRESS, self.db(), pm)
@@ -166,10 +166,10 @@ class WalletAnalysisOrchestrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([first[-1], same_tx_distinct_fill], analysis.trades[-2:])
         self.assertEqual(
             [
-                call(ADDRESS, limit=1000, offset=0),
-                call(ADDRESS, limit=1000, offset=1000),
+                call(ADDRESS, limit=1000, cursor=None),
+                call(ADDRESS, limit=1000, cursor="page-2"),
             ],
-            pm.get_trade_history.await_args_list,
+            pm.trade_history_page.await_args_list,
         )
 
     async def test_recent_preview_is_globally_newest_first_unique_and_capped(self):
@@ -190,7 +190,7 @@ class WalletAnalysisOrchestrationTests(unittest.IsolatedAsyncioTestCase):
             ],
         ]
         pm = self.pm()
-        pm.get_trade_history.side_effect = [first, second]
+        pm.trade_history_page.side_effect = [(first, "page-2"), (second, None)]
 
         with patch.object(trader_stats, "_upsert", new=AsyncMock()):
             analysis = await trader_stats.refresh_trader_analysis(ADDRESS, self.db(), pm)
@@ -207,13 +207,16 @@ class WalletAnalysisOrchestrationTests(unittest.IsolatedAsyncioTestCase):
     async def test_activity_walk_stops_at_four_page_bound(self):
         now = int(time.time())
         fetch = AsyncMock(side_effect=[
-            [
-                PreviewTrade(
-                    timestamp=now, asset=f"page-{page}-row-{i}",
-                    tx_hash=f"page-{page}-tx-{i}",
-                )
-                for i in range(1000)
-            ]
+            (
+                [
+                    PreviewTrade(
+                        timestamp=now, asset=f"page-{page}-row-{i}",
+                        tx_hash=f"page-{page}-tx-{i}",
+                    )
+                    for i in range(1000)
+                ],
+                f"after-page-{page}",
+            )
             for page in range(4)
         ])
 
@@ -225,10 +228,10 @@ class WalletAnalysisOrchestrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(covered)
         self.assertEqual(
             [
-                call(limit=1000, offset=0),
-                call(limit=1000, offset=1000),
-                call(limit=1000, offset=2000),
-                call(limit=1000, offset=3000),
+                call(limit=1000, cursor=None),
+                call(limit=1000, cursor="after-page-0"),
+                call(limit=1000, cursor="after-page-1"),
+                call(limit=1000, cursor="after-page-2"),
             ],
             fetch.await_args_list,
         )
@@ -254,7 +257,9 @@ class WalletAnalysisOrchestrationTests(unittest.IsolatedAsyncioTestCase):
             **overlap,
             "metadata": {"legs": ["yes", 2]},
         }
-        fetch = AsyncMock(side_effect=[[dict(row) for row in first], [overlap, distinct]])
+        fetch = AsyncMock(side_effect=[
+            ([dict(row) for row in first], "page-2"), ([overlap, distinct], None),
+        ])
 
         rows, covered = await trader_stats._fetch_activity_window(
             fetch, days=90, max_pages=2,
@@ -268,28 +273,28 @@ class WalletAnalysisOrchestrationTests(unittest.IsolatedAsyncioTestCase):
         now = int(time.time())
         first = [PreviewTrade(timestamp=now, asset=f"token-{i}") for i in range(1000)]
         pm = self.pm()
-        pm.get_trade_history.side_effect = [first, RuntimeError("trade page two failed")]
+        pm.trade_history_page.side_effect = [(first, "page-2"), RuntimeError("trade page two failed")]
 
         with patch.object(trader_stats, "_upsert", new=AsyncMock()) as upsert:
             with self.assertRaisesRegex(RuntimeError, "trade page two failed"):
                 await trader_stats.refresh_trader_analysis(ADDRESS, self.db(), pm)
 
-        self.assertEqual(2, pm.get_trade_history.await_count)
-        pm.get_redeems.assert_not_awaited()
+        self.assertEqual(2, pm.trade_history_page.await_count)
+        pm.redeems_page.assert_not_awaited()
         pm.get_positions.assert_not_awaited()
         pm.get_leaderboard_user.assert_not_awaited()
         upsert.assert_not_awaited()
 
     async def test_redeem_failure_propagates_without_later_calls_or_upsert(self):
         pm = self.pm()
-        pm.get_redeems.side_effect = RuntimeError("redeems unavailable")
+        pm.redeems_page.side_effect = RuntimeError("redeems unavailable")
 
         with patch.object(trader_stats, "_upsert", new=AsyncMock()) as upsert:
             with self.assertRaisesRegex(RuntimeError, "redeems unavailable"):
                 await trader_stats.refresh_trader_analysis(ADDRESS, self.db(), pm)
 
-        pm.get_trade_history.assert_awaited_once()
-        pm.get_redeems.assert_awaited_once()
+        pm.trade_history_page.assert_awaited_once()
+        pm.redeems_page.assert_awaited_once()
         pm.get_positions.assert_not_awaited()
         pm.get_leaderboard_user.assert_not_awaited()
         upsert.assert_not_awaited()
@@ -302,8 +307,8 @@ class WalletAnalysisOrchestrationTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(RuntimeError, "positions unavailable"):
                 await trader_stats.refresh_trader_analysis(ADDRESS, self.db(), pm)
 
-        pm.get_trade_history.assert_awaited_once()
-        pm.get_redeems.assert_awaited_once()
+        pm.trade_history_page.assert_awaited_once()
+        pm.redeems_page.assert_awaited_once()
         pm.get_positions.assert_awaited_once()
         pm.get_leaderboard_user.assert_not_awaited()
         upsert.assert_not_awaited()

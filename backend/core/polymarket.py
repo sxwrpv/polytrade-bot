@@ -110,6 +110,31 @@ def _i(v: Any, default: int = 0) -> int:
         return default
 
 
+def _field(d: dict, v2: str, v1: str, default: Any = None) -> Any:
+    """A data-api field by its v2 (snake_case) name, falling back to its v1
+    (camelCase) name. Data API v1 was retired on 2026-11-02; its names stay
+    readable for fixtures and rows recorded before the move."""
+    value = d.get(v2)
+    return d.get(v1, default) if value is None else value
+
+
+# v1 spellings callers still pass, mapped to their v2 names.
+_POSITION_SORTS = {"CURRENT": "CURRENT_VALUE"}
+_LEADERBOARD_SORTS = {"VOL": "VOLUME"}
+# v2 activity fields under the v1 names the raw-row readers use
+# (trader_stats.realized_closings, copy_engine's redeem settlement).
+_ACTIVITY_V1_NAMES = {
+    "proxy_wallet": "proxyWallet", "condition_id": "conditionId", "token_id": "asset",
+    "usdc_size": "usdcSize", "transaction_hash": "transactionHash",
+    "outcome_index": "outcomeIndex", "event_slug": "eventSlug",
+}
+
+
+def _with_v1_names(row: dict) -> dict:
+    """A raw v2 activity row that also answers to its v1 field names."""
+    return {**row, **{v1: row[v2] for v2, v1 in _ACTIVITY_V1_NAMES.items() if v2 in row}}
+
+
 # ---------------------------------------------------------------------------
 # Frozen response shapes
 # ---------------------------------------------------------------------------
@@ -175,28 +200,28 @@ class Position:
     @classmethod
     def from_api(cls, d: dict) -> "Position":
         return cls(
-            proxy_wallet=str(d.get("proxyWallet", "")),
-            asset=str(d.get("asset", "")),
-            condition_id=str(d.get("conditionId", "")),
-            size=_f(d.get("size")),
-            avg_price=_f(d.get("avgPrice")),
-            cur_price=_f(d.get("curPrice")),
-            initial_value=_f(d.get("initialValue")),
-            current_value=_f(d.get("currentValue")),
-            cash_pnl=_f(d.get("cashPnl")),
-            percent_pnl=_f(d.get("percentPnl")),
-            realized_pnl=_f(d.get("realizedPnl")),
+            proxy_wallet=str(_field(d, "proxy_wallet", "proxyWallet", "")),
+            asset=str(_field(d, "token_id", "asset", "")),
+            condition_id=str(_field(d, "condition_id", "conditionId", "")),
+            size=_f(_field(d, "current_size", "size")),
+            avg_price=_f(_field(d, "avg_price", "avgPrice")),
+            cur_price=_f(_field(d, "current_price", "curPrice")),
+            initial_value=_f(_field(d, "entry_cost_usdc", "initialValue")),
+            current_value=_f(_field(d, "current_value", "currentValue")),
+            cash_pnl=_f(_field(d, "unrealized_pnl", "cashPnl")),
+            percent_pnl=_f(_field(d, "percent_pnl", "percentPnl")),
+            realized_pnl=_f(_field(d, "realized_pnl", "realizedPnl")),
             redeemable=bool(d.get("redeemable", False)),
             mergeable=bool(d.get("mergeable", False)),
-            negative_risk=bool(d.get("negativeRisk", False)),
+            negative_risk=bool(_field(d, "negative_risk", "negativeRisk", False)),
             outcome=str(d.get("outcome", "")),
-            outcome_index=_i(d.get("outcomeIndex")),
-            opposite_asset=str(d.get("oppositeAsset", "")),
+            outcome_index=_i(_field(d, "outcome_index", "outcomeIndex")),
+            opposite_asset=str(_field(d, "opposite_token_id", "oppositeAsset", "")),
             title=str(d.get("title", "")),
             slug=str(d.get("slug", "")),
             icon=str(d.get("icon", "")),
-            event_slug=str(d.get("eventSlug", "")),
-            end_date=str(d.get("endDate", "")),
+            event_slug=str(_field(d, "event_slug", "eventSlug", "")),
+            end_date=str(_field(d, "end_date", "endDate", "")),
         )
 
 
@@ -213,15 +238,17 @@ class LeaderEntry:
 
     @classmethod
     def from_api(cls, d: dict) -> "LeaderEntry":
+        # A v2 board row carries `rank`; a v2 single-user row carries
+        # `rank_pnl`/`rank_volume`.
         return cls(
-            rank=_i(d.get("rank")),
-            proxy_wallet=str(d.get("proxyWallet", "")),
-            user_name=str(d.get("userName", "")),
-            x_username=str(d.get("xUsername", "")),
-            verified=bool(d.get("verifiedBadge", False)),
-            vol=_f(d.get("vol")),
+            rank=_i(d.get("rank", d.get("rank_pnl"))),
+            proxy_wallet=str(_field(d, "user_id", "proxyWallet", "")),
+            user_name=str(_field(d, "user_name", "userName", "")),
+            x_username=str(_field(d, "x_username", "xUsername", "")),
+            verified=bool(_field(d, "verified", "verifiedBadge", False)),
+            vol=_f(_field(d, "volume", "vol")),
             pnl=_f(d.get("pnl")),
-            profile_image=str(d.get("profileImage", "")),
+            profile_image=str(_field(d, "profile_image", "profileImage", "")),
         )
 
 
@@ -244,19 +271,19 @@ class Trade:
     @classmethod
     def from_api(cls, d: dict) -> "Trade":
         return cls(
-            proxy_wallet=str(d.get("proxyWallet", "")),
+            proxy_wallet=str(_field(d, "proxy_wallet", "proxyWallet", "")),
             timestamp=_i(d.get("timestamp")),
-            condition_id=str(d.get("conditionId", "")),
+            condition_id=str(_field(d, "condition_id", "conditionId", "")),
             side=str(d.get("side", "")),
-            asset=str(d.get("asset", "")),
+            asset=str(_field(d, "token_id", "asset", "")),
             outcome=str(d.get("outcome", "")),
-            outcome_index=_i(d.get("outcomeIndex")),
+            outcome_index=_i(_field(d, "outcome_index", "outcomeIndex")),
             price=_f(d.get("price")),
             size=_f(d.get("size")),
-            usd_size=_f(d.get("usdcSize")),
+            usd_size=_f(_field(d, "usdc_size", "usdcSize")),
             title=str(d.get("title", "")),
             slug=str(d.get("slug", "")),
-            tx_hash=str(d.get("transactionHash", "")),
+            tx_hash=str(_field(d, "transaction_hash", "transactionHash", "")),
         )
 
 
@@ -357,31 +384,53 @@ class PolymarketClient:
             last_trade_price=_f(d.get("last_trade_price")),
         )
 
+    # --- data-api v2 ---------------------------------------------------------
+    # Data API v1 was retired on 2026-11-02; every route now answers 410. v2
+    # wraps rows in {"data", "pagination"}, pages by an opaque cursor (an
+    # `offset` parameter is a 400), and names fields in snake_case.
+    async def _v2_page(self, route: str, params: dict) -> tuple[Any, str | None]:
+        """One /v2 page: (data, next_cursor). next_cursor is None on the last
+        page and for unpaginated routes."""
+        d = await self._get(f"{DATA_API}/v2/{route}", params)
+        if not isinstance(d, dict):
+            return None, None
+        pagination = d.get("pagination")
+        cursor = pagination.get("next_cursor") if isinstance(pagination, dict) else None
+        return d.get("data"), (cursor or None)
+
     # --- positions ---------------------------------------------------------
+    @staticmethod
+    def _positions_params(wallet_address: str, size_threshold: float, sort_by: str,
+                          market: str | None) -> dict:
+        # status defaults to OPEN, the superset v1 /positions served: it holds
+        # settled-but-unredeemed winners and still-held losers (row status
+        # REDEEMABLE, `redeemable` true), verified live 2026-11-04.
+        params = {
+            "user": wallet_address,
+            "filter_type": "TOKENS",
+            "filter_amount": size_threshold,
+            "sort_by": _POSITION_SORTS.get(sort_by, sort_by),
+            "sort_direction": "DESC",
+        }
+        if market:
+            # condition filter — a targeted, truncation-proof read of one
+            # market's position (v1 called it `market`)
+            params["condition"] = market
+        return params
+
     async def get_positions(
         self,
         wallet_address: str,
         *,
         size_threshold: float = 1.0,
         limit: int = 500,
-        offset: int = 0,
         sort_by: str = "CURRENT",
         market: str | None = None,
     ) -> list[Position]:
-        params = {
-            "user": wallet_address,
-            "sizeThreshold": size_threshold,
-            "limit": limit,
-            "offset": offset,
-            "sortBy": sort_by,
-            "sortDirection": "DESC",
-        }
-        if market:
-            # condition-id filter (verified live 2026-07-12) — a targeted,
-            # truncation-proof read of one market's position
-            params["market"] = market
-        d = await self._get(f"{DATA_API}/positions", params)
-        return [Position.from_api(p) for p in d] if isinstance(d, list) else []
+        """The first page of the wallet's positions, up to `limit` rows."""
+        params = self._positions_params(wallet_address, size_threshold, sort_by, market)
+        rows, _ = await self._v2_page("positions", {**params, "limit": limit})
+        return [Position.from_api(p) for p in rows] if isinstance(rows, list) else []
 
     async def get_all_positions(
         self,
@@ -391,58 +440,69 @@ class PolymarketClient:
         page_size: int = 500,
         max_pages: int = 6,
     ) -> tuple[list[Position], bool]:
-        """Every position the wallet holds, paged past the endpoint's per-call
-        cap (offset pagination verified live 2026-07-12). Returns
-        (positions, complete): complete=False means the wallet holds more than
-        page_size*max_pages positions and the list is truncated — callers must
-        NOT treat absence from a truncated list as proof a position was exited
-        (whale leaders really do hold 500+ open positions)."""
+        """Every position the wallet holds, following the cursor past the
+        per-page cap. Returns (positions, complete): complete=False means the
+        wallet holds more than page_size*max_pages positions and the list is
+        truncated — callers must NOT treat absence from a truncated list as
+        proof a position was exited (whale leaders really do hold 500+ open
+        positions)."""
+        params = {**self._positions_params(wallet_address, size_threshold, "CURRENT", None),
+                  "limit": page_size}
         out: list[Position] = []
-        for page in range(max_pages):
-            batch = await self.get_positions(
-                wallet_address, size_threshold=size_threshold,
-                limit=page_size, offset=page * page_size)
-            out.extend(batch)
-            if len(batch) < page_size:
+        for _ in range(max_pages):
+            rows, cursor = await self._v2_page("positions", params)
+            if isinstance(rows, list):
+                out.extend(Position.from_api(p) for p in rows)
+            if not cursor:
                 return out, True
+            # The cursor binds status and sort; the anchor and filters go along.
+            params = {**params, "cursor": cursor}
         return out, False
 
     # --- leaderboard -------------------------------------------------------
-    async def get_leaderboard(
+    async def get_leaderboard_page(
         self,
         *,
         period: str = "MONTH",     # DAY | WEEK | MONTH | ALL
         order_by: str = "PNL",     # PNL | VOL
         category: str = "OVERALL",
         limit: int = 50,
-        offset: int = 0,
-    ) -> list[LeaderEntry]:
-        d = await self._get(
-            f"{DATA_API}/v1/leaderboard",
-            {
-                "category": category,
-                "timePeriod": period,
-                "orderBy": order_by,
-                "limit": limit,
-                "offset": offset,
-            },
-        )
-        return [LeaderEntry.from_api(e) for e in d] if isinstance(d, list) else []
+        cursor: str | None = None,
+    ) -> tuple[list[LeaderEntry], str | None]:
+        """One leaderboard page and the cursor of the next one (None at the end)."""
+        params: dict[str, Any] = {
+            "category": category.lower(),
+            "time_period": period.lower(),
+            "sort_by": _LEADERBOARD_SORTS.get(order_by.upper(), order_by.upper()),
+            "limit": limit,
+        }
+        if cursor:
+            params["cursor"] = cursor
+        rows, next_cursor = await self._v2_page("leaderboard", params)
+        entries = [LeaderEntry.from_api(e) for e in rows] if isinstance(rows, list) else []
+        return entries, next_cursor
+
+    async def get_leaderboard(self, **kwargs) -> list[LeaderEntry]:
+        """The first leaderboard page (see get_leaderboard_page)."""
+        entries, _ = await self.get_leaderboard_page(**kwargs)
+        return entries
 
     async def get_leaderboard_user(self, wallet_address: str,
                                    period: str = "ALL") -> "LeaderEntry | None":
         """Official lifetime (or windowed) pnl/vol for ONE wallet — the same
-        numbers polymarket.com shows on the profile page. The leaderboard
-        endpoint accepts a `user` filter (verified live 2026-07-05), so this is
-        the authoritative source for total_pnl/volume_usd regardless of rank."""
-        d = await self._get(
-            f"{DATA_API}/v1/leaderboard",
-            {"category": "OVERALL", "timePeriod": period, "orderBy": "PNL",
+        numbers polymarket.com shows on the profile page. With a `user` filter
+        the board answers that wallet's own row as `data` (rank_pnl and
+        rank_volume in place of rank), or `data: null` for an unknown wallet,
+        so this is the authoritative source for total_pnl/volume_usd
+        regardless of rank."""
+        row, _ = await self._v2_page(
+            "leaderboard",
+            {"category": "overall", "time_period": period.lower(), "sort_by": "PNL",
              "user": wallet_address},
         )
-        if isinstance(d, list) and d:
-            return LeaderEntry.from_api(d[0])
-        return None
+        if isinstance(row, list):
+            row = row[0] if row else None
+        return LeaderEntry.from_api(row) if isinstance(row, dict) else None
 
     # --- geoblock ----------------------------------------------------------
     async def get_geoblock(self) -> dict:
@@ -503,26 +563,38 @@ class PolymarketClient:
         return {str(t.get("token_id")): (1.0 if t.get("winner") else 0.0)
                 for t in tokens}
 
-    async def get_redeems(self, wallet_address: str, limit: int = 50,
-                          offset: int = 0) -> list[dict]:
+    async def _activity_page(self, wallet_address: str, kind: str, limit: int,
+                             cursor: str | None) -> tuple[list[dict], str | None]:
+        """One most-recent-first page of one activity type (limit up to 1000),
+        and the cursor of the next page. The filters go along with the cursor."""
+        params: dict[str, Any] = {"user": wallet_address, "type": kind, "limit": limit}
+        if cursor:
+            params["cursor"] = cursor
+        rows, next_cursor = await self._v2_page("activity", params)
+        return (rows if isinstance(rows, list) else []), next_cursor
+
+    async def redeems_page(self, wallet_address: str, limit: int = 50,
+                           cursor: str | None = None) -> tuple[list[dict], str | None]:
+        """A page of REDEEM rows (v2 fields plus their v1 names) and the next
+        page's cursor."""
+        rows, next_cursor = await self._activity_page(wallet_address, "REDEEM", limit, cursor)
+        return [_with_v1_names(r) for r in rows if isinstance(r, dict)], next_cursor
+
+    async def get_redeems(self, wallet_address: str, limit: int = 50) -> list[dict]:
         """REDEEM activity — how much a wallet was paid when resolved positions
         were redeemed (winners redeem $1/share; losers produce no payout).
         Used to finalize copy positions whose market died before we could exit,
         and by trader_stats to credit hold-to-resolution wins as realized PnL."""
-        d = await self._get(
-            f"{DATA_API}/activity",
-            {"user": wallet_address, "type": "REDEEM", "limit": limit,
-             "offset": offset},
-        )
-        return d if isinstance(d, list) else []
+        rows, _ = await self.redeems_page(wallet_address, limit)
+        return rows
 
-    async def get_trade_history(
-        self, wallet_address: str, limit: int = 100, offset: int = 0
-    ) -> list[Trade]:
-        """Most-recent-first TRADE activity. The endpoint accepts limit up to
-        at least 1000 and offset pagination (both verified live 2026-07-02)."""
-        d = await self._get(
-            f"{DATA_API}/activity",
-            {"user": wallet_address, "type": "TRADE", "limit": limit, "offset": offset},
-        )
-        return [Trade.from_api(t) for t in d] if isinstance(d, list) else []
+    async def trade_history_page(self, wallet_address: str, limit: int = 100,
+                                 cursor: str | None = None) -> tuple[list[Trade], str | None]:
+        """A page of TRADE activity and the next page's cursor."""
+        rows, next_cursor = await self._activity_page(wallet_address, "TRADE", limit, cursor)
+        return [Trade.from_api(t) for t in rows if isinstance(t, dict)], next_cursor
+
+    async def get_trade_history(self, wallet_address: str, limit: int = 100) -> list[Trade]:
+        """Most-recent-first TRADE activity, the first `limit` rows."""
+        trades, _ = await self.trade_history_page(wallet_address, limit)
+        return trades

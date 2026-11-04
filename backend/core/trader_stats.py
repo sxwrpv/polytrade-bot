@@ -45,12 +45,12 @@ _PERIODS = {"7d": 7, "30d": 30, "90d": 90}
 # the wallet screener. Keep this beside the calculations: UI copy and external
 # documentation may consume it, but neither is allowed to give a metric a
 # stronger provenance than the implementation below actually provides.
-_TRADE_ENDPOINT = "GET https://data-api.polymarket.com/activity?user={address}&type=TRADE"
-_REDEEM_ENDPOINT = "GET https://data-api.polymarket.com/activity?user={address}&type=REDEEM"
-_POSITIONS_ENDPOINT = "GET https://data-api.polymarket.com/positions?user={address}"
+_TRADE_ENDPOINT = "GET https://data-api.polymarket.com/v2/activity?user={address}&type=TRADE"
+_REDEEM_ENDPOINT = "GET https://data-api.polymarket.com/v2/activity?user={address}&type=REDEEM"
+_POSITIONS_ENDPOINT = "GET https://data-api.polymarket.com/v2/positions?user={address}"
 _LEADERBOARD_USER_ENDPOINT = (
-    "GET https://data-api.polymarket.com/v1/leaderboard?category=OVERALL&"
-    "timePeriod=ALL&orderBy=PNL&user={address}"
+    "GET https://data-api.polymarket.com/v2/leaderboard?category=overall&"
+    "time_period=all&sort_by=PNL&user={address}"
 )
 _ACTIVITY_ENDPOINTS = (_TRADE_ENDPOINT, _REDEEM_ENDPOINT, _POSITIONS_ENDPOINT)
 # Fetch limits applied by refresh_trader_analysis. The contract publishes them
@@ -562,16 +562,18 @@ async def discover_active_wallets(db, pm, *, target: int = 2000) -> int:
     """
     seen: set[str] = set()
     for period, order_by, pages, authoritative in _DISCOVERY_FEEDS:
+        cursor = None
         for page in range(pages):
             if len(seen) >= target:
                 return len(seen)
             try:
-                entries = await pm.get_leaderboard(
-                    period=period, order_by=order_by, limit=_PAGE, offset=page * _PAGE)
+                entries, cursor = await pm.get_leaderboard_page(
+                    period=period, order_by=order_by, limit=_PAGE, cursor=cursor)
             except Exception:
-                log.exception("discovery page failed (%s %s p%d) — continuing",
+                # A feed pages by cursor, so a failed page ends that feed.
+                log.exception("discovery page failed (%s %s p%d) — next feed",
                               period, order_by, page)
-                continue
+                break
             if not entries:
                 break                       # feed exhausted
             for e in entries:
@@ -588,6 +590,8 @@ async def discover_active_wallets(db, pm, *, target: int = 2000) -> int:
                     fields["total_pnl"] = e.pnl
                     fields["volume_usd"] = e.vol
                 await _upsert(db, e.proxy_wallet, fields)
+            if not cursor:
+                break                       # last page of this feed
     return len(seen)
 
 
@@ -637,21 +641,23 @@ def _freeze_activity_row(value: Any) -> Any:
 
 async def _fetch_activity_window(fetch, days: int, max_pages: int) -> tuple[list, bool]:
     """Page through a most-recent-first activity fetcher until the window is
-    covered or the page budget runs out. Returns (rows, covered): covered=False
-    means the wallet is so active the oldest fetched row is still inside the
-    window — stats then honestly reflect partial coverage (surfaced to the UI
-    via history_days)."""
+    covered or the page budget runs out. `fetch(limit=, cursor=)` returns
+    (rows, next_cursor). Returns (rows, covered): covered=False means the
+    wallet is so active the oldest fetched row is still inside the window —
+    stats then honestly reflect partial coverage (surfaced to the UI via
+    history_days)."""
     cutoff = time.time() - days * 86400
     rows: list = []
     seen: set[Any] = set()
-    for page in range(max_pages):
-        batch = await fetch(limit=_PAGE_SIZE, offset=page * _PAGE_SIZE)
+    cursor = None
+    for _ in range(max_pages):
+        batch, cursor = await fetch(limit=_PAGE_SIZE, cursor=cursor)
         for row in batch:
             identity = _freeze_activity_row(row)
             if identity not in seen:
                 seen.add(identity)
                 rows.append(row)
-        if len(batch) < _PAGE_SIZE:
+        if not cursor or not batch:
             return rows, True                    # feed exhausted — full coverage
         oldest = batch[-1] if not isinstance(batch[-1], dict) else None
         oldest_ts = (oldest.timestamp if oldest is not None
@@ -676,10 +682,10 @@ async def refresh_trader_analysis(address: str, db, pm) -> TraderAnalysis:
     column.
     """
     trades, trades_covered = await _fetch_activity_window(
-        lambda limit, offset: pm.get_trade_history(address, limit=limit, offset=offset),
+        lambda limit, cursor: pm.trade_history_page(address, limit=limit, cursor=cursor),
         days=90, max_pages=_MAX_TRADE_PAGES)
     redeems, _ = await _fetch_activity_window(
-        lambda limit, offset: pm.get_redeems(address, limit=limit, offset=offset),
+        lambda limit, cursor: pm.redeems_page(address, limit=limit, cursor=cursor),
         days=90, max_pages=_MAX_REDEEM_PAGES)
     positions = await pm.get_positions(address, size_threshold=0,
                                        limit=_POSITIONS_LIMIT)

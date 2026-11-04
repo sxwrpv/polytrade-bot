@@ -98,16 +98,18 @@ class RejectionClassificationTests(unittest.IsolatedAsyncioTestCase):
 
 class PaginationTests(unittest.IsolatedAsyncioTestCase):
     class PagedClient(PolymarketClient):
+        """A wallet of `total` positions behind a Data API v2 cursor."""
+
         def __init__(self, total):
             self.total = total
             self.calls = []
 
-        async def get_positions(self, wallet, *, size_threshold=1.0, limit=500,
-                                offset=0, sort_by="CURRENT"):
-            self.calls.append((limit, offset))
-            remaining = max(0, self.total - offset)
-            return [wallet_position(f"tok-{offset + i}")
-                    for i in range(min(limit, remaining))]
+        async def _v2_page(self, route, params):
+            self.calls.append(dict(params))
+            start = int(params.get("cursor") or 0)
+            end = min(self.total, start + int(params["limit"]))
+            rows = [{"token_id": f"tok-{i}", "current_size": 10.0} for i in range(start, end)]
+            return rows, (str(end) if end < self.total else None)
 
     async def test_get_all_positions_pages_past_the_per_call_cap(self):
         pm = self.PagedClient(total=1234)
@@ -115,6 +117,11 @@ class PaginationTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(complete)
         self.assertEqual(1234, len(positions))
         self.assertEqual(1234, len({p.asset for p in positions}))
+        # Each page after the first follows the cursor with the same anchor,
+        # and no request carries the offset v2 refuses.
+        self.assertNotIn("cursor", pm.calls[0])
+        self.assertEqual(["500", "1000"], [c["cursor"] for c in pm.calls[1:]])
+        self.assertTrue(all(c["user"] == USER and "offset" not in c for c in pm.calls))
 
     async def test_truncated_fetch_is_flagged_incomplete(self):
         pm = self.PagedClient(total=10_000)
