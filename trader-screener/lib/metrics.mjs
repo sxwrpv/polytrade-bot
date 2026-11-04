@@ -1,7 +1,8 @@
 /* Wallet metrics, reconstructed from Polymarket's public account tape.
  *
- * The tape is /activity: every fill, redemption, split, merge, reward and
- * rebate, with a USDC amount on each. /positions supplies what is still held.
+ * The tape is /v2/activity: every fill, redemption, split, merge, reward and
+ * rebate, with a USDC amount on each. /v2/positions supplies what is still
+ * held. lib/polymarket.mjs hands both over under the camelCase names below.
  * Nothing else is available without an indexer, and where the tape cannot
  * answer a question this module returns null rather than a plausible number.
  *

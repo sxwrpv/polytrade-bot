@@ -141,16 +141,15 @@ function head() {
   return box;
 }
 
-/* Polymarket's public activity endpoint refuses any offset past 5000, so a
- * busy wallet's tape is its most recent 5500 rows and nothing earlier. Every
- * total on this page is therefore a total over that window, not a lifetime
- * one, and saying so is the difference between a partial figure and a wrong
- * one. */
+/* The screener reads at most 5,500 activity rows per wallet (ACTIVITY_CEILING
+ * in lib/polymarket.mjs), so a busy wallet's tape is its most recent 5,500
+ * rows. Every total on this page then covers that window only, and saying so
+ * is the difference between a partial figure and a wrong one. */
 function truncationNotice() {
   const box = el('div', 'notice');
   box.append(el('strong', null, 'Partial history'));
   box.append(el('p', null,
-    `Polymarket's public API serves at most 5,500 activity rows per wallet, and this one has more. ` +
+    `The screener reads at most 5,500 activity rows per wallet from Polymarket, and this one has more. ` +
     `Everything below is computed over the most recent ${data.trades.length >= 200 ? '5,500 rows' : 'available rows'} ` +
     `— ${data.summary.trades.toLocaleString('en-US')} fills across ${data.summary.markets.toLocaleString('en-US')} markets, ` +
     `back to ${data.series.length ? data.series[0].date : 'an unknown date'}. Every total here covers this window only.`));

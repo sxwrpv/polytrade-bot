@@ -180,18 +180,25 @@ test('a feed that stopped at worthless positions still builds a profile, and say
 
 // --- Polymarket positions feed ---------------------------------------------
 
-/** A fake /positions feed: `total` rows sorted by value, 500 a page. */
+/** A fake /v2/positions feed: `total` rows sorted by value. The first request
+ *  names the page size; each page's cursor carries the next row and that size. */
 function positionsFeed(total, valueAt, { failFirst = null } = {}) {
   const calls = [];
   let failed = false;
   const fetchImpl = async (url) => {
     const u = new URL(url);
-    const offset = Number(u.searchParams.get('offset'));
-    calls.push(offset);
+    calls.push(u);
     if (failFirst && !failed) { failed = true; return { ok: false, status: failFirst, json: async () => ({}) }; }
-    const count = Math.max(0, Math.min(Number(u.searchParams.get('limit')), total - offset));
-    const rows = Array.from({ length: count }, (_, i) => ({ conditionId: `c${offset + i}`, currentValue: valueAt(offset + i) }));
-    return { ok: true, status: 200, json: async () => rows };
+    const cursor = u.searchParams.get('cursor');
+    const [from, size] = cursor ? cursor.split(':').map(Number) : [0, Number(u.searchParams.get('limit'))];
+    const count = Math.max(0, Math.min(size, total - from));
+    const data = Array.from({ length: count }, (_, i) => ({ condition_id: `c${from + i}`, current_value: valueAt(from + i) }));
+    const next = from + count < total ? `${from + count}:${size}` : null;
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ data, pagination: { limit: size, offset: from, has_more: next != null, next_cursor: next } }),
+    };
   };
   return { calls, fetchImpl };
 }
@@ -210,6 +217,8 @@ test('under 3,000 positions the whole list is read, $0 positions included', asyn
   assert.equal(rows.length, 1200);
   assert.equal(rows.complete, true);
   assert.equal(rows.worthlessSkipped, false);
+  assert.equal(rows[0].conditionId, 'c0', 'rows arrive under the names the metrics read');
+  assert.equal(rows[0].currentValue, 5);
 });
 
 test('past 3,000 positions reading stops at the first page that ends on a $0 position', async () => {
@@ -219,7 +228,7 @@ test('past 3,000 positions reading stops at the first page that ends on a $0 pos
   assert.equal(rows.length, 3000);
   assert.equal(rows.complete, true);
   assert.equal(rows.worthlessSkipped, true);
-  assert.ok(Math.max(...feed.calls) < 6600, 'the $0 tail is never paged through');
+  assert.equal(feed.calls.length, 3, 'the $0 tail is never paged through');
 });
 
 test('a list that still has value at the ceiling is refused as too big, with no retry advice', async () => {
@@ -228,6 +237,7 @@ test('a list that still has value at the ceiling is refused as too big, with no 
   assert.equal(rows.length, POSITIONS_CEILING);
   assert.equal(rows.complete, false);
   assert.equal(rows.overCeiling, POSITIONS_CEILING);
+  assert.equal(feed.calls.length, POSITIONS_CEILING / 1000, 'no page past the ceiling is asked for');
   const tape = [];
   tape.complete = true;
   assert.throws(() => buildProfile({
@@ -236,17 +246,62 @@ test('a list that still has value at the ceiling is refused as too big, with no 
   }), (error) => error.status === 422 && /more than 10,000 open positions/.test(error.message));
 });
 
+test('a list that ends exactly at the ceiling is read whole', async () => {
+  const feed = positionsFeed(POSITIONS_CEILING, () => 1);
+  const rows = await withFetch(feed.fetchImpl, () => positions(someWallet));
+  assert.equal(rows.length, POSITIONS_CEILING);
+  assert.equal(rows.complete, true);
+  assert.equal(rows.overCeiling, null);
+});
+
 test('a 429 is retried and a 400 ends the read as incomplete', async () => {
   const throttled = positionsFeed(300, () => 3, { failFirst: 429 });
   const rows = await withFetch(throttled.fetchImpl, () => positions(someWallet));
   assert.equal(rows.length, 300);
   assert.equal(rows.complete, true);
-  assert.deepEqual(throttled.calls, [0, 0]);
+  assert.equal(throttled.calls.length, 2);
+  assert.ok(throttled.calls.every((u) => u.searchParams.get('limit') === '1000' && !u.searchParams.has('cursor')),
+    'the retry asks for the same first page');
 
   const refused = positionsFeed(300, () => 3, { failFirst: 400 });
   const none = await withFetch(refused.fetchImpl, () => positions(someWallet));
   assert.equal(none.complete, false);
-  assert.deepEqual(refused.calls, [0]);
+  assert.equal(refused.calls.length, 1);
+});
+
+test('positions page by cursor and restate the wallet and filters on every page', async () => {
+  const feed = positionsFeed(2500, () => 1);
+  const rows = await withFetch(feed.fetchImpl, () => positions(someWallet));
+  assert.equal(rows.length, 2500);
+  assert.equal(rows.complete, true);
+  assert.equal(feed.calls.length, 3);
+  const [first, ...rest] = feed.calls;
+  assert.equal(`${first.origin}${first.pathname}`, 'https://data-api.polymarket.com/v2/positions');
+  assert.equal(first.searchParams.get('limit'), '1000');
+  assert.equal(first.searchParams.has('cursor'), false);
+  for (const u of rest) {
+    assert.ok(u.searchParams.get('cursor'));
+    assert.equal(u.searchParams.has('limit'), false, 'the cursor carries the page size');
+  }
+  for (const u of feed.calls) {
+    assert.equal(u.searchParams.get('user'), someWallet, 'v2 refuses a cursor without its anchor');
+    assert.equal(u.searchParams.get('sort_by'), 'CURRENT_VALUE');
+    assert.equal(u.searchParams.get('sort_direction'), 'DESC');
+    // 1 share, v1's default size threshold; v2's own default floor is 0.1.
+    assert.equal(u.searchParams.get('filter_type'), 'TOKENS');
+    assert.equal(u.searchParams.get('filter_amount'), '1');
+    assert.equal(u.searchParams.has('offset'), false, 'v2 answers any offset with a 400');
+    assert.equal(u.searchParams.has('status'), false, 'the default OPEN status includes settled tokens still held');
+  }
+});
+
+test('an empty page that still names a cursor ends the read as incomplete', async () => {
+  const fetchImpl = async () => ({
+    ok: true, status: 200, json: async () => ({ data: [], pagination: { next_cursor: 'again' } }),
+  });
+  const rows = await withFetch(fetchImpl, () => positions(someWallet));
+  assert.equal(rows.length, 0);
+  assert.equal(rows.complete, false);
 });
 
 // --- Copy Score ------------------------------------------------------------
