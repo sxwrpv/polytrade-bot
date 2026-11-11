@@ -51,7 +51,7 @@ export function createStore(storage = globalThis.localStorage, now = () => Date.
       const value = JSON.parse(raw);
       if (!Array.isArray(value)) return null;
       // The legacy shape is a bare array of addresses; the current one is records.
-      return value.map((v) => (typeof v === 'string' ? v : v)).length ? value : [];
+      return value;
     } catch {
       return null;
     }

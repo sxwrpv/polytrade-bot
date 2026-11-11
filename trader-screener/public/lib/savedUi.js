@@ -14,6 +14,44 @@ const HEART_ON = '♥';
 const HEART_OFF = '♡';
 
 /**
+ * The save buttons on the page, kept in step with the store through one
+ * subscription. A button is repainted while it is in the document and
+ * forgotten once it has left, so a table that re-renders leaves nothing
+ * behind. The sweep runs when the store changes and once after each batch of
+ * new buttons, so a button has to be attached in the turn it is made.
+ * @param {(fn: () => void) => void} defer  runs the sweep after the current turn.
+ */
+export function liveButtons(store, defer = (fn) => queueMicrotask(fn)) {
+  const live = new Map(); // button -> its paint
+  let subscribed = false;
+  let sweepQueued = false;
+
+  const sweep = () => {
+    for (const btn of live.keys()) if (!btn.isConnected) live.delete(btn);
+  };
+  const repaint = () => {
+    sweep();
+    for (const paint of live.values()) paint();
+  };
+
+  return {
+    track(btn, paint) {
+      live.set(btn, paint);
+      if (!subscribed) {
+        subscribed = true;
+        store.subscribe(repaint);
+      }
+      if (sweepQueued) return;
+      sweepQueued = true;
+      defer(() => { sweepQueued = false; sweep(); });
+    },
+    size: () => live.size,
+  };
+}
+
+const buttons = liveButtons(saved);
+
+/**
  * A save toggle for one wallet.
  * @param {() => object} meta  read lazily, so the snapshot is whatever the row
  *   knows at the moment of saving rather than at the moment of rendering.
@@ -42,7 +80,7 @@ export function saveButton(wallet, meta = () => ({})) {
     }
     paint();
   };
-  saved.subscribe(paint);
+  buttons.track(btn, paint);
   return btn;
 }
 
@@ -231,12 +269,8 @@ export function savedDrawer({ lookup = () => new Map() } = {}) {
   return { open: show, close: hide, element: panel };
 }
 
-function exportSaved(rows, cohort) {
-  const cell = (v) => {
-    if (v == null || (typeof v === 'number' && !Number.isFinite(v))) return '';
-    const s = String(v);
-    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-  };
+/** The saved list as CSV, one line per wallet in the order given. */
+export function savedCsv(rows, cohort) {
   const header = ['wallet', 'name', 'copy_class', 'copy_score', 'pnl_usd', 'saved_at', 'source'];
   const lines = [header.join(',')];
   for (const rec of rows) {
@@ -249,9 +283,13 @@ function exportSaved(rows, cohort) {
       live ? live.pnl : rec.pnl,
       rec.savedAt ? new Date(rec.savedAt).toISOString() : '',
       live ? 'current cohort' : 'as saved',
-    ].map(cell).join(','));
+    ].map(M.csvCell).join(','));
   }
-  const url = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' }));
+  return lines.join('\n');
+}
+
+function exportSaved(rows, cohort) {
+  const url = URL.createObjectURL(new Blob([savedCsv(rows, cohort)], { type: 'text/csv;charset=utf-8' }));
   const a = document.createElement('a');
   a.href = url;
   a.download = `saved-wallets-${new Date().toISOString().slice(0, 10)}.csv`;

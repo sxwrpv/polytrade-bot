@@ -968,8 +968,12 @@ function wireSearch() {
   const input = $('#q');
   const hits = $('#hits');
   let timer;
+  // Every keystroke takes the next number. A reply paints only while its
+  // number is still the newest, so one that lands late is dropped.
+  let searchRequest = 0;
   input.oninput = () => {
     clearTimeout(timer);
+    const request = ++searchRequest;
     const raw = input.value;
     const direct = M.resolveAddress(raw);
     hits.replaceChildren();
@@ -981,6 +985,7 @@ function wireSearch() {
     if (raw.trim().length < 2) { hits.hidden = true; return; }
     timer = setTimeout(async () => {
       const r = await api.search(raw.trim()).catch(() => ({ hits: [] }));
+      if (request !== searchRequest) return;
       hits.replaceChildren();
       for (const h of r.hits) hits.append(hitRow(h));
       hits.hidden = !r.hits.length;

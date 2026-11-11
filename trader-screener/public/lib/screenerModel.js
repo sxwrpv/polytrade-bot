@@ -104,10 +104,12 @@ export function smartMoneyNarrative(index) {
 
 export const pnlIn = (t, period) => (period === 'd7' ? t.d7 : period === 'd30' ? t.d30 : t.pnl);
 export const volumeIn = (t, period) => (period === 'd7' ? t.d7Vol : period === 'd30' ? t.d30Vol : t.vol);
-/** ROI is undefined without volume; a zero-volume wallet is not a 0% wallet. */
+/** ROI is undefined without volume; a zero-volume wallet is not a 0% wallet.
+ *  An unknown PnL leaves the ROI unknown as well. */
 export function roiIn(t, period) {
   const v = volumeIn(t, period);
-  return v > 0 ? (pnlIn(t, period) / v) * 100 : null;
+  const pnl = pnlIn(t, period);
+  return v > 0 && Number.isFinite(pnl) ? (pnl / v) * 100 : null;
 }
 export const bandOf = (t) => normClass(t.copyClass);
 
@@ -591,13 +593,25 @@ export function decodeState(search, defaults) {
 
 // --- export -----------------------------------------------------------------
 
+/** The characters that make a spreadsheet run a cell as a formula when one of
+ *  them opens it: =, +, -, @, tab and carriage return. */
+const FORMULA_LEAD = /^[=+\-@\t\r]/;
+
+/**
+ * One CSV cell. An absent value is an empty cell. A number is written as it
+ * is, so a negative figure stays numeric. Any other value that opens with a
+ * formula character gets a leading single quote, which makes a spreadsheet
+ * read the cell as text: wallet names are chosen by their owners.
+ */
+export function csvCell(v) {
+  if (v == null || (typeof v === 'number' && !Number.isFinite(v))) return '';
+  let s = String(v);
+  if (typeof v !== 'number' && FORMULA_LEAD.test(s)) s = `'${s}`;
+  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
 /** The board as it is currently shown, as CSV. Absent stays empty, never 0. */
 export function toCsv(rows, period) {
-  const cell = (v) => {
-    if (v == null || (typeof v === 'number' && !Number.isFinite(v))) return '';
-    const s = String(v);
-    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-  };
   const header = [
     'rank', 'wallet', 'name', 'copy_class', 'copy_score', 'roi_pct', 'pnl_usd',
     'open_value_usd', 'volume_usd', 'win_rate', 'active_days', 'avg_fill_usd',
@@ -612,7 +626,7 @@ export function toCsv(rows, period) {
       pnlIn(t, period), t.openVal, volumeIn(t, period), t.winRate, t.activeDays,
       t.avgSize, t.maxDD, t.maker, t.niche, (t.cats ?? []).join(' '),
       t.lastTradeDay, isHardToMirror(t) ? 'yes' : 'no',
-    ].map(cell).join(','));
+    ].map(csvCell).join(','));
   });
   return lines.join('\n');
 }
