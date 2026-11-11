@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
 import { join, dirname, extname, resolve, sep } from 'node:path';
@@ -6,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import * as pm from './lib/polymarket.mjs';
 import { buildProfile } from './lib/metrics.mjs';
 import * as screener from './lib/publicScreener.mjs';
+import { assertDataset, assertSmi } from './lib/snapshot.mjs';
 import {
   createLastTradeLookup, createLiveBoards, createUsdVolumeLookup, fetchLiveUniverse,
 } from './lib/liveLeaderboard.mjs';
@@ -50,6 +52,8 @@ const DATA_DIR = process.env.SCREENER_DATA_DIR || join(ROOT, 'data');
 const RELOAD_SECONDS = Number(process.env.SNAPSHOT_RELOAD_SECONDS || 300);
 
 let dataset = null, smi = null;
+// What /api/dataset sends: the dataset serialised once per load, and its ETag.
+let datasetBody = null, datasetEtag = null;
 let snapshotMtime = 0;
 
 async function readSnapshotFiles() {
@@ -60,11 +64,19 @@ async function readSnapshotFiles() {
   return { dataset: JSON.parse(ds), smi: JSON.parse(sm) };
 }
 
+/** Make `next` the snapshot being served. The dataset is about 3.7 MB of
+ *  JSON, so it is serialised here, once, and every /api/dataset request sends
+ *  these bytes. */
+function useSnapshot(next) {
+  dataset = next.dataset;
+  smi = next.smi;
+  datasetBody = Buffer.from(JSON.stringify(dataset));
+  datasetEtag = `W/"${createHash('sha256').update(datasetBody).digest('base64url')}"`;
+}
+
 async function loadSnapshot() {
   try {
-    const next = await readSnapshotFiles();
-    dataset = next.dataset;
-    smi = next.smi;
+    useSnapshot(await readSnapshotFiles());
     snapshotMtime = (await stat(join(DATA_DIR, 'dataset.json'))).mtimeMs;
   } catch (e) {
     console.error(`\n  No snapshot found in ${DATA_DIR}. Run:  node scripts/ingest.mjs\n`);
@@ -83,15 +95,18 @@ export async function reloadSnapshotIfChanged() {
   if (mtime === snapshotMtime) return false;
   try {
     const next = await readSnapshotFiles();
+    // Checked before the swap: a file with the wrong shape throws here, while
+    // the snapshot in memory is still the one being served.
+    assertDataset(next.dataset);
+    assertSmi(next.smi);
     const was = dataset?.meta?.generatedAt;
-    dataset = next.dataset;
-    smi = next.smi;
+    useSnapshot(next);
     snapshotMtime = mtime;
     console.log(`  snapshot reloaded  ${was} -> ${dataset.meta.generatedAt}` +
                 `  ·  ${dataset.traders.length.toLocaleString()} traders`);
     return true;
   } catch (e) {
-    // Half-written file, bad JSON, whatever: keep serving what we have and
+    // Half-written file, bad JSON, wrong shape: keep serving what we have and
     // try again next tick. mtime is deliberately NOT advanced.
     console.error(`  snapshot reload failed, keeping the loaded one: ${e.message}`);
     return false;
@@ -142,7 +157,7 @@ async function traderProfile(wallet) {
       const [tape, open, rankRows, value, cash] = await Promise.all([
         pm.activity(wallet, options),
         pm.positions(wallet, options),
-        pm.ranks(wallet, options).catch(() => ({})),
+        pm.ranks(wallet, options),
         pm.portfolioValue(wallet, options),
         pm.cashBalance(wallet, options),
       ]);
@@ -196,30 +211,54 @@ const apiError = (res, error, fallback = 500) => {
   return json(res, code, { detail: String(error.message || error) });
 };
 
+/** Whether an If-None-Match header names `etag`. The comparison is the weak
+ *  one (RFC 9110 13.1.2): a W/ prefix on either side is set aside. */
+const etagMatches = (header, etag) => {
+  if (!header) return false;
+  const opaque = (tag) => tag.trim().replace(/^W\//, '');
+  return header.split(',').some((tag) => tag.trim() === '*' || opaque(tag) === opaque(etag));
+};
+
 const PUBLIC_ROOT = resolve(ROOT, 'public');
-async function serveStatic(res, rel) {
+async function serveStatic(req, res, rel) {
   const requested = String(rel || '').replace(/^[/\\]+/, '');
   const path = resolve(PUBLIC_ROOT, requested);
   if (path !== PUBLIC_ROOT && !path.startsWith(`${PUBLIC_ROOT}${sep}`)) return false;
   try {
     const s = await stat(path);
     if (!s.isFile()) throw new Error('not a file');
+    // no-cache makes a browser revalidate on every load. The tag is the file's
+    // size and mtime, so a file that has not changed costs a 304 and no read.
+    const etag = `W/"${s.size.toString(16)}-${Math.trunc(s.mtimeMs).toString(16)}"`;
+    if (etagMatches(req.headers['if-none-match'], etag)) {
+      res.writeHead(304, { etag, 'cache-control': 'no-cache' });
+      res.end();
+      return true;
+    }
     const body = await readFile(path);
-    res.writeHead(200, { 'content-type': MIME[extname(path)] || 'application/octet-stream', 'cache-control': 'no-cache' });
+    res.writeHead(200, { 'content-type': MIME[extname(path)] || 'application/octet-stream', 'cache-control': 'no-cache', etag });
     res.end(body);
     return true;
   } catch { return false; }
 }
 
 const server = createServer(async (req, res) => {
-  const url = new URL(req.url, `http://localhost:${PORT}`);
-  const requestPath = url.pathname;
-  // Production Caddy strips this prefix. Accept it directly too so the exact
-  // production URLs can be exercised without a local reverse proxy.
-  const p = requestPath === '/screener' || requestPath === '/screener/'
-    ? '/'
-    : requestPath.startsWith('/screener/') ? requestPath.slice('/screener'.length) : requestPath;
   try {
+    // A request target such as "//" is no URL, and new URL throws on it.
+    let url;
+    try {
+      url = new URL(req.url, `http://localhost:${PORT}`);
+    } catch {
+      res.writeHead(400, { 'content-type': 'text/plain; charset=utf-8' });
+      return res.end('Bad request');
+    }
+    const requestPath = url.pathname;
+    // Production Caddy strips this prefix. Accept it directly too so the exact
+    // production URLs can be exercised without a local reverse proxy.
+    const p = requestPath === '/screener' || requestPath === '/screener/'
+      ? '/'
+      : requestPath.startsWith('/screener/') ? requestPath.slice('/screener'.length) : requestPath;
+
     if (p === '/api/health') {
       /* Build revision and data mode are here so a post-deploy check can
        * prove WHICH build answered, not merely that something did. The
@@ -274,7 +313,14 @@ const server = createServer(async (req, res) => {
       } catch (error) { return apiError(res, error); }
     }
 
-    if (p === '/api/dataset') return json(res, 200, dataset);
+    if (p === '/api/dataset') {
+      if (etagMatches(req.headers['if-none-match'], datasetEtag)) {
+        res.writeHead(304, { etag: datasetEtag });
+        return res.end();
+      }
+      res.writeHead(200, { 'content-type': MIME['.json'], 'content-length': datasetBody.length, etag: datasetEtag });
+      return res.end(datasetBody);
+    }
     if (p === '/api/smi') return json(res, 200, smi);
     if (p === '/api/search') return json(res, 200, { hits: searchLocal(url.searchParams.get('q') || '') });
 
@@ -287,12 +333,12 @@ const server = createServer(async (req, res) => {
     }
 
     if (p === '/' || p === '/index.html') {
-      if (await serveStatic(res, 'index.html')) return;
+      if (await serveStatic(req, res, 'index.html')) return;
     }
     if (/^\/trader\/0x[a-fA-F0-9]{40}\/?$/.test(p)) {
-      if (await serveStatic(res, 'trader.html')) return;
+      if (await serveStatic(req, res, 'trader.html')) return;
     }
-    if (await serveStatic(res, p)) return;
+    if (await serveStatic(req, res, p)) return;
 
     res.writeHead(404, { 'content-type': 'text/plain' });
     res.end('404');
@@ -301,6 +347,12 @@ const server = createServer(async (req, res) => {
     res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' });
     res.end('Internal server error');
   }
+});
+
+// A promise that rejects with nothing awaiting it would end the process, and
+// every visitor's session with it. It is logged here and the server goes on.
+process.on('unhandledRejection', (reason) => {
+  console.error('unhandled rejection', reason);
 });
 
 await loadSnapshot();
