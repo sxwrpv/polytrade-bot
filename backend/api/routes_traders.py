@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import asyncio
 import re
+import time
 import uuid
+from collections import deque
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from typing import Literal
@@ -22,6 +24,35 @@ from backend.db.database import now_iso
 
 router = APIRouter()
 _ADDR_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
+
+# Per-user budget for the on-demand profile. Each lookup spends several
+# Polymarket requests and a cache write on hosts the copy engine shares; a
+# person opening wallets by hand stays far below this.
+PROFILE_RATE_LIMIT = 30
+PROFILE_RATE_WINDOW_SECONDS = 60.0
+
+# user id -> recent profile lookup timestamps. Keys are signed-in accounts, so
+# the map is bounded by the users table.
+_profile_requests: dict[str, deque[float]] = {}
+
+
+def reset_rate_limits() -> None:
+    """Test helper: drop every bucket."""
+    _profile_requests.clear()
+
+
+def _enforce_profile_rate_limit(user_id: str) -> None:
+    now = time.monotonic()
+    bucket = _profile_requests.setdefault(user_id, deque())
+    while bucket and now - bucket[0] > PROFILE_RATE_WINDOW_SECONDS:
+        bucket.popleft()
+    if len(bucket) >= PROFILE_RATE_LIMIT:
+        raise HTTPException(
+            status_code=429,
+            detail="too many wallet lookups — try again in a minute",
+            headers={"Retry-After": str(int(PROFILE_RATE_WINDOW_SECONDS))},
+        )
+    bucket.append(now)
 
 
 class FollowBody(BaseModel):
@@ -115,10 +146,12 @@ async def trader_profile(address: str, user=Depends(get_current_user),
 
     This endpoint computes and caches windowed stats. The public standalone
     screener remains cache-only and never invokes this upstream-spending path.
+    Rate limited per signed-in user (PROFILE_RATE_LIMIT a minute).
     """
     address = address.lower()
     if not _ADDR_RE.match(address):
         raise HTTPException(400, "invalid wallet address (expected 0x + 40 hex)")
+    _enforce_profile_rate_limit(str(user["id"]))
     analysis = await trader_stats.refresh_trader_analysis(address, db, pmc)
     return {**analysis.stats,
             "positions": [asdict(p) for p in analysis.positions],

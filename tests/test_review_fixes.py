@@ -112,22 +112,22 @@ class PaginationTests(unittest.IsolatedAsyncioTestCase):
             return rows, (str(end) if end < self.total else None)
 
     async def test_get_all_positions_pages_past_the_per_call_cap(self):
-        pm = self.PagedClient(total=1234)
+        pm = self.PagedClient(total=2345)
         positions, complete = await pm.get_all_positions(USER)
         self.assertTrue(complete)
-        self.assertEqual(1234, len(positions))
-        self.assertEqual(1234, len({p.asset for p in positions}))
+        self.assertEqual(2345, len(positions))
+        self.assertEqual(2345, len({p.asset for p in positions}))
         # Each page after the first follows the cursor with the same anchor,
         # and no request carries the offset v2 refuses.
         self.assertNotIn("cursor", pm.calls[0])
-        self.assertEqual(["500", "1000"], [c["cursor"] for c in pm.calls[1:]])
+        self.assertEqual(["1000", "2000"], [c["cursor"] for c in pm.calls[1:]])
         self.assertTrue(all(c["user"] == USER and "offset" not in c for c in pm.calls))
 
     async def test_truncated_fetch_is_flagged_incomplete(self):
         pm = self.PagedClient(total=10_000)
         positions, complete = await pm.get_all_positions(USER, max_pages=2)
         self.assertFalse(complete)
-        self.assertEqual(1000, len(positions))
+        self.assertEqual(2000, len(positions))
 
     def test_plan_actions_never_closes_on_a_truncated_position_list(self):
         row = {"token_id": TOKEN, "shares": 10.0, "notional_usd": 5.0,

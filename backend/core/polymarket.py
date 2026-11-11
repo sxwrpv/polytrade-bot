@@ -135,6 +135,35 @@ def _with_v1_names(row: dict) -> dict:
     return {**row, **{v1: row[v2] for v2, v1 in _ACTIVITY_V1_NAMES.items() if v2 in row}}
 
 
+class MalformedResponseError(ValueError):
+    """A data-api answer that parsed as JSON and does not fit the request: a
+    list route without a row list, or one wallet's row naming another wallet.
+    A ValueError, like the one a body that is no JSON raises in _get, so every
+    caller handles it as the failed read it is."""
+
+
+class _Page(tuple):
+    """One /v2 answer, unpacking as (data, next_cursor). has_more is the
+    envelope's own flag."""
+
+    has_more = False
+
+    def __new__(cls, data: Any, next_cursor: str | None, has_more: bool = False) -> "_Page":
+        page = super().__new__(cls, (data, next_cursor))
+        page.has_more = has_more
+        return page
+
+
+def _rows(route: str, data: Any) -> list:
+    """The rows of one /v2 list page. A wallet with no rows answers
+    `data: []`, so any other shape is a failed read: an empty list in its
+    place would say the wallet holds nothing."""
+    if not isinstance(data, list):
+        raise MalformedResponseError(
+            f"/v2/{route} answered {type(data).__name__} where a row list belongs")
+    return data
+
+
 # ---------------------------------------------------------------------------
 # Frozen response shapes
 # ---------------------------------------------------------------------------
@@ -390,13 +419,16 @@ class PolymarketClient:
     # `offset` parameter is a 400), and names fields in snake_case.
     async def _v2_page(self, route: str, params: dict) -> tuple[Any, str | None]:
         """One /v2 page: (data, next_cursor). next_cursor is None on the last
-        page and for unpaginated routes."""
+        page and for unpaginated routes. List routes pass `data` through
+        _rows; the single-row routes take an object or null as it comes."""
         d = await self._get(f"{DATA_API}/v2/{route}", params)
         if not isinstance(d, dict):
-            return None, None
+            return _Page(None, None)
         pagination = d.get("pagination")
-        cursor = pagination.get("next_cursor") if isinstance(pagination, dict) else None
-        return d.get("data"), (cursor or None)
+        if not isinstance(pagination, dict):
+            return _Page(d.get("data"), None)
+        return _Page(d.get("data"), pagination.get("next_cursor") or None,
+                     bool(pagination.get("has_more")))
 
     # --- positions ---------------------------------------------------------
     @staticmethod
@@ -427,34 +459,40 @@ class PolymarketClient:
         sort_by: str = "CURRENT",
         market: str | None = None,
     ) -> list[Position]:
-        """The first page of the wallet's positions, up to `limit` rows."""
+        """The first page of the wallet's positions, up to `limit` rows. A
+        page without a row list raises MalformedResponseError."""
         params = self._positions_params(wallet_address, size_threshold, sort_by, market)
         rows, _ = await self._v2_page("positions", {**params, "limit": limit})
-        return [Position.from_api(p) for p in rows] if isinstance(rows, list) else []
+        return [Position.from_api(p) for p in _rows("positions", rows)]
 
     async def get_all_positions(
         self,
         wallet_address: str,
         *,
         size_threshold: float = 1.0,
-        page_size: int = 500,
-        max_pages: int = 6,
+        page_size: int = 1000,
+        max_pages: int = 3,
     ) -> tuple[list[Position], bool]:
         """Every position the wallet holds, following the cursor past the
         per-page cap. Returns (positions, complete): complete=False means the
-        wallet holds more than page_size*max_pages positions and the list is
-        truncated — callers must NOT treat absence from a truncated list as
-        proof a position was exited (whale leaders really do hold 500+ open
-        positions)."""
+        wallet holds more than page_size*max_pages positions, or the last page
+        read reported has_more and named no cursor, and the list is truncated —
+        callers must NOT treat absence from a truncated list as proof a
+        position was exited (whale leaders really do hold 500+ open
+        positions). A page without a row list raises MalformedResponseError.
+
+        /v2/positions serves up to 1,000 rows a page and refuses a larger
+        limit (verified live in the 2026-11 review)."""
         params = {**self._positions_params(wallet_address, size_threshold, "CURRENT", None),
                   "limit": page_size}
         out: list[Position] = []
         for _ in range(max_pages):
-            rows, cursor = await self._v2_page("positions", params)
-            if isinstance(rows, list):
-                out.extend(Position.from_api(p) for p in rows)
+            page = await self._v2_page("positions", params)
+            rows, cursor = page
+            out.extend(Position.from_api(p) for p in _rows("positions", rows))
             if not cursor:
-                return out, True
+                # has_more with no cursor: rows remain that this walk cannot reach.
+                return out, not getattr(page, "has_more", False)
             # The cursor binds status and sort; the anchor and filters go along.
             params = {**params, "cursor": cursor}
         return out, False
@@ -479,8 +517,7 @@ class PolymarketClient:
         if cursor:
             params["cursor"] = cursor
         rows, next_cursor = await self._v2_page("leaderboard", params)
-        entries = [LeaderEntry.from_api(e) for e in rows] if isinstance(rows, list) else []
-        return entries, next_cursor
+        return [LeaderEntry.from_api(e) for e in _rows("leaderboard", rows)], next_cursor
 
     async def get_leaderboard(self, **kwargs) -> list[LeaderEntry]:
         """The first leaderboard page (see get_leaderboard_page)."""
@@ -494,7 +531,9 @@ class PolymarketClient:
         the board answers that wallet's own row as `data` (rank_pnl and
         rank_volume in place of rank), or `data: null` for an unknown wallet,
         so this is the authoritative source for total_pnl/volume_usd
-        regardless of rank."""
+        regardless of rank. A row that names another wallet raises
+        MalformedResponseError: it says nothing about this one, and the
+        caller keeps what it has, as after any failed lookup."""
         row, _ = await self._v2_page(
             "leaderboard",
             {"category": "overall", "time_period": period.lower(), "sort_by": "PNL",
@@ -502,7 +541,14 @@ class PolymarketClient:
         )
         if isinstance(row, list):
             row = row[0] if row else None
-        return LeaderEntry.from_api(row) if isinstance(row, dict) else None
+        if not isinstance(row, dict):
+            return None
+        entry = LeaderEntry.from_api(row)
+        # A row without a user_id is taken as the answer to the `user` filter.
+        if entry.proxy_wallet and entry.proxy_wallet.lower() != wallet_address.lower():
+            raise MalformedResponseError(
+                "/v2/leaderboard answered another wallet's row for a user filter")
+        return entry
 
     async def get_user_volume(self, wallet_address: str, *, start: int | None = None,
                               end: int | None = None) -> float | None:
@@ -588,7 +634,7 @@ class PolymarketClient:
         if cursor:
             params["cursor"] = cursor
         rows, next_cursor = await self._v2_page("activity", params)
-        return (rows if isinstance(rows, list) else []), next_cursor
+        return _rows("activity", rows), next_cursor
 
     async def redeems_page(self, wallet_address: str, limit: int = 50,
                            cursor: str | None = None) -> tuple[list[dict], str | None]:

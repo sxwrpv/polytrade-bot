@@ -194,7 +194,7 @@ _PROVENANCE = {
 # Sortable expressions, whitelisted per (sort, period) — never interpolated
 # from user input.
 _SORT_COLUMNS = {
-    (sort, period): f"{'winrate' if sort == 'winrate' else sort}_{period}"
+    (sort, period): f"{sort}_{period}"
     for sort in SORTS for period in PERIODS
 }
 

@@ -32,10 +32,11 @@ from copy import deepcopy
 from dataclasses import asdict, dataclass, is_dataclass
 from typing import TYPE_CHECKING, Any
 
+from backend.core.polymarket import Trade
 from backend.db.database import now_iso
 
 if TYPE_CHECKING:
-    from backend.core.polymarket import Position, Trade
+    from backend.core.polymarket import Position
 
 log = logging.getLogger("trader_stats")
 
@@ -647,9 +648,9 @@ async def _fetch_activity_window(fetch, days: int, max_pages: int) -> tuple[list
     """Page through a most-recent-first activity fetcher until the window is
     covered or the page budget runs out. `fetch(limit=, cursor=)` returns
     (rows, next_cursor). Returns (rows, covered): covered=False means the
-    wallet is so active the oldest fetched row is still inside the window —
-    stats then honestly reflect partial coverage (surfaced to the UI via
-    history_days)."""
+    wallet is so active the oldest fetched row is still inside the window, or
+    a page came back empty while the feed still named a cursor — stats then
+    honestly reflect partial coverage (surfaced to the UI via history_days)."""
     cutoff = time.time() - days * 86400
     rows: list = []
     seen: set[Any] = set()
@@ -657,12 +658,15 @@ async def _fetch_activity_window(fetch, days: int, max_pages: int) -> tuple[list
     for _ in range(max_pages):
         batch, cursor = await fetch(limit=_PAGE_SIZE, cursor=cursor)
         for row in batch:
-            identity = _freeze_activity_row(row)
+            # A Trade is frozen and compares on every field: it is its own key.
+            identity = row if isinstance(row, Trade) else _freeze_activity_row(row)
             if identity not in seen:
                 seen.add(identity)
                 rows.append(row)
-        if not cursor or not batch:
+        if not cursor:
             return rows, True                    # feed exhausted — full coverage
+        if not batch:
+            return rows, False                   # empty page mid-feed: the rest is unread
         oldest = batch[-1] if not isinstance(batch[-1], dict) else None
         oldest_ts = (oldest.timestamp if oldest is not None
                      else int(batch[-1].get("timestamp") or 0))
