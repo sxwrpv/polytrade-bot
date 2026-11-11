@@ -73,6 +73,9 @@ CURRENT_TERMS_VERSION = "2026-08-14"
 CURRENT_FUNDING_ACK_VERSION = "2026-08-14"
 WALLET_CLAIM_STALE_SECONDS = 300
 WALLET_LEASE_SECONDS = 300
+# The longest display name stored. Settings refuses a longer one; wallet
+# creation cuts the name it takes from the request or from Telegram to it.
+DISPLAY_NAME_MAX_LENGTH = 80
 
 
 class CreateWallet(BaseModel):
@@ -93,7 +96,7 @@ class SettingsBody(BaseModel):
     # across every copied wallet). Slippage and daily-loss limits are PER
     # COPIED WALLET (followed_traders) — the user-level twins were dead
     # columns the engine never consulted, removed 2026-07-12.
-    display_name: str | None = Field(None, max_length=80)
+    display_name: str | None = Field(None, max_length=DISPLAY_NAME_MAX_LENGTH)
     paused: bool | None = None
     max_total_exposure_usd: float | None = Field(None, ge=0, le=100000)
 
@@ -209,6 +212,8 @@ async def create_wallet(body: CreateWallet, request: Request, response: Response
         # Session material is retry-local; only its digest is persisted.
         raw, stored, expires_at = auth.new_session()
         display_name = body.display_name or tg_user.get("username") or tg_user.get("first_name")
+        if isinstance(display_name, str):
+            display_name = display_name[:DISPLAY_NAME_MAX_LENGTH]
         created_at = now_iso()
     except Exception as exc:
         log.error("local wallet preparation failed (%s)", type(exc).__name__)
@@ -610,7 +615,8 @@ def _retrieve(task: asyncio.Task) -> None:
         return
     exc = task.exception()
     if exc is not None and not isinstance(exc, withdraw.WithdrawRefused):
-        log.error("withdrawal request failed after its client left (%s)", type(exc).__name__)
+        log.error("withdrawal request failed after its client left (%s: %s)",
+                  type(exc).__name__, withdraw.redact(exc)[:200])
 
 
 @router.get("/withdrawals")

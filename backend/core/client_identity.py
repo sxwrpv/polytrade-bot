@@ -85,17 +85,34 @@ def is_trusted_proxy(value: str | None) -> bool:
     return any(addr in net for net in _TRUSTED_NETWORKS)
 
 
+def _bucket(ip: str) -> str:
+    """The key a limit counts an address under.
+
+    An IPv4 address is its own key. An IPv6 address is keyed by its /64
+    network ("2001:db8:1:2::/64"): one customer line is assigned a whole /64,
+    so keyed by the full address it would own 2^64 separate buckets.
+    """
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return ip
+    if isinstance(addr, ipaddress.IPv6Address):
+        return str(ipaddress.IPv6Network((int(addr) >> 64 << 64, 64)))
+    return ip
+
+
 def client_identity(request) -> str:
     """The address a per-client limit should be keyed on.
 
     Falls back to the peer address whenever the chain cannot be trusted or
     cannot be parsed, so a malformed header degrades to today's behaviour
-    rather than to a shared or attacker-chosen bucket.
+    rather than to a shared or attacker-chosen bucket. An IPv6 caller is
+    identified by its /64 network (see _bucket).
     """
     client = getattr(request, "client", None)
     peer = _normalize(getattr(client, "host", None)) or UNKNOWN
     if peer == UNKNOWN or not is_trusted_proxy(peer):
-        return peer
+        return _bucket(peer)
     forwarded = ""
     try:
         forwarded = request.headers.get("x-forwarded-for", "") or ""
@@ -104,5 +121,5 @@ def client_identity(request) -> str:
     for candidate in forwarded.split(","):
         resolved = _normalize(candidate)
         if resolved is not None:
-            return resolved
-    return peer
+            return _bucket(resolved)
+    return _bucket(peer)

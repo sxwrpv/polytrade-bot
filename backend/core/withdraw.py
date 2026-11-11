@@ -162,6 +162,7 @@ _STAMPS = {"submitting": "submitting_at", "submitted": "submitted_at",
 
 _HEX_ADDRESS = re.compile(r"^0x[0-9a-fA-F]{40}$")
 _BYTES32 = re.compile(r"^0x[0-9a-fA-F]{64}$")
+_HEX_QUANTITY = re.compile(r"^0x[0-9a-fA-F]+$")       # a JSON-RPC number
 _IDEMPOTENCY_KEY = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 TRANSFER_TOPIC = "0x" + keccak(text="Transfer(address,address,uint256)").hex()
 _BALANCE_OF = "0x" + keccak(text="balanceOf(address)").hex()[:8]
@@ -254,7 +255,12 @@ def parse_amount(value) -> int:
         raise WithdrawRefused(400, "Enter an amount in dollars, for example 25.50.") from None
     if not amount.is_finite() or amount <= 0:
         raise WithdrawRefused(400, "Enter an amount in dollars, for example 25.50.")
-    if amount != amount.quantize(Decimal("0.01")):
+    try:
+        whole_cents = amount == amount.quantize(Decimal("0.01"))
+    except InvalidOperation:
+        # An amount past the decimal context's 28 digits ("1e30") has no cents form.
+        raise WithdrawRefused(400, "Enter an amount in dollars, for example 25.50.") from None
+    if not whole_cents:
         raise WithdrawRefused(400, "Amounts are in whole cents.")
     return int(amount * UNITS_PER_USD)
 
@@ -413,7 +419,12 @@ class PolygonReader:
         return reply.get("result")
 
     async def block_number(self) -> int:
-        return _int(await self._rpc("eth_blockNumber", []))
+        """The head block. An answer that is no 0x hex number raises: read as
+        block 0 it would leave every log search empty."""
+        result = await self._rpc("eth_blockNumber", [])
+        if not isinstance(result, str) or not _HEX_QUANTITY.match(result):
+            raise ChainReadError("eth_blockNumber returned no block number")
+        return int(result, 16)
 
     async def erc20_balance(self, token: str, owner: str) -> int:
         result = await self._rpc("eth_call", [
@@ -429,7 +440,8 @@ class PolygonReader:
     async def transfer_logs(self, token: str, sender: str | None, recipient: str,
                             from_block: int, to_block: int) -> list[dict]:
         """`token` Transfer logs to `recipient` from `sender` (anyone when None),
-        oldest first, asked for LOG_CHUNK_BLOCKS blocks at a time."""
+        oldest first, asked for LOG_CHUNK_BLOCKS blocks at a time. An answer
+        that is no list raises: the blocks are searched again on the next pass."""
         topics = [TRANSFER_TOPIC, _topic(sender) if sender else None, _topic(recipient)]
         out: list[dict] = []
         start = max(0, from_block)
@@ -437,8 +449,9 @@ class PolygonReader:
             end = min(to_block, start + LOG_CHUNK_BLOCKS - 1)
             result = await self._rpc("eth_getLogs", [{
                 "address": token, "fromBlock": hex(start), "toBlock": hex(end), "topics": topics}])
-            if isinstance(result, list):
-                out.extend(result)
+            if not isinstance(result, list):
+                raise ChainReadError("eth_getLogs returned no list")
+            out.extend(result)
             start = end + 1
         return out
 
@@ -694,8 +707,8 @@ class Withdrawer:
             onchain = await self.chain.erc20_balance(PUSD, user["id"])
             clob = int((await client.get_balance_allowance(asset_type="COLLATERAL")).balance)
         except Exception as exc:
-            log.warning("withdraw: balance read failed for %s (%s)", str(user["id"])[:10],
-                        type(exc).__name__)
+            log.warning("withdraw: balance read failed for %s (%s: %s)", str(user["id"])[:10],
+                        type(exc).__name__, redact(exc)[:200])
             raise WithdrawRefused(503, "Your balance could not be read right now. "
                                        "Try again shortly.") from None
         return min(onchain, clob)
@@ -1031,8 +1044,8 @@ class Withdrawer:
                             "the batch expires", withdrawal_id[:8], redact(exc))
                 await self._annotate(withdrawal_id, error=f"Relayer: {redact(exc)[:200]}")
             except Exception as exc:
-                log.warning("withdraw %s: relayer wait ended without an answer (%s)",
-                            withdrawal_id[:8], type(exc).__name__)
+                log.warning("withdraw %s: relayer wait ended without an answer (%s: %s)",
+                            withdrawal_id[:8], type(exc).__name__, redact(exc)[:200])
             stop_at = self._clock() + BATCH_EXPIRY_SECONDS + self.limits.bridge_timeout
             while self._clock() < stop_at:
                 row = await self._row(withdrawal_id)

@@ -76,8 +76,9 @@ class ClientIdentityTests(unittest.TestCase):
             client_identity(_req("172.20.0.3", "::ffff:203.0.113.9")), "203.0.113.9")
 
     def test_bracketed_ipv6_is_unwrapped(self):
+        """Unwrapped, then keyed by its /64 network like every IPv6 caller."""
         self.assertEqual(
-            client_identity(_req("172.20.0.3", "[2001:db8::1]")), "2001:db8::1")
+            client_identity(_req("172.20.0.3", "[2001:db8::1]")), "2001:db8::/64")
 
     def test_a_missing_client_is_unknown_not_a_crash(self):
         self.assertEqual(

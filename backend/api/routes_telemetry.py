@@ -5,14 +5,31 @@ import json
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, UUID4, model_validator
 
 from backend.api.deps import get_current_user, get_db
+from backend.api.routes_user import _rate_limited
 from backend.core.telemetry import enforce_product_event_limits
 from backend.db.database import now_iso
 
 router = APIRouter()
+
+# Events one account may send per window, as "N/seconds", checked in memory
+# before the database is asked anything. The Mini App sends one request per
+# event and four or five events per position close, so 120 a minute is some
+# 25 closes a minute, and twice what the database lets one tab session record.
+EVENT_RATE_LIMIT = "120/60"
+
+# account id -> recent request times. Held in memory only: nothing here is
+# written next to an event.
+_event_hits: dict[str, list[float]] = {}
+
+
+def reset_rate_limits() -> None:
+    """Test helper: drop every bucket."""
+    _event_hits.clear()
+
 
 _SOURCES = {"positions"}
 _DISMISS_STATES = {"confirming", "confirmed", "rejected", "reconciliation_required", "failed"}
@@ -66,8 +83,11 @@ class TelemetryEvent(BaseModel):
 @router.post("/events", status_code=202)
 async def record_event(body: TelemetryEvent,
                        user=Depends(get_current_user), db=Depends(get_db)):
-    # `user` is deliberately used only as an authentication gate. Persisting it
-    # would turn aggregate product telemetry into wallet-linked behavior data.
+    # `user` is deliberately used only as an authentication gate and as the
+    # key of the in-memory rate limit. Persisting it would turn aggregate
+    # product telemetry into wallet-linked behavior data.
+    if _rate_limited(_event_hits, str(user["id"]), EVENT_RATE_LIMIT):
+        raise HTTPException(status_code=429, detail="telemetry rate limit exceeded")
     del user
     session_id = str(body.session_id)
     async with db.transaction(write=True) as tx:
