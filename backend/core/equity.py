@@ -21,9 +21,17 @@ import asyncio
 import datetime as dt
 import logging
 
+import httpx
+from polymarket import errors as pm_errors
+
 from backend.db.database import now_iso
 
 log = logging.getLogger("equity")
+
+# A balance read that failed in transit. The SDK raises its own TransportError
+# for every httpx failure; the httpx and timeout classes cover a client that
+# lets one through.
+_TRANSPORT_ERRORS = (httpx.TransportError, asyncio.TimeoutError, pm_errors.TransportError)
 
 # period -> (window_days, bucket_seconds) for query-time downsampling
 _BUCKETS = {
@@ -93,6 +101,11 @@ async def take_snapshot(db, user_id: str, client, pm) -> dict | None:
     try:
         bal = await client.get_balance_allowance(asset_type="COLLATERAL")
         balance = bal.balance / 1e6
+    except _TRANSPORT_ERRORS as exc:
+        # Transient: the next pass reads the balance again.
+        log.warning("snapshot: balance read failed for %s (%s)", user_id[:10],
+                    type(exc).__name__)
+        return None
     except Exception:
         log.exception("snapshot: balance read failed for %s", user_id[:10])
         return None

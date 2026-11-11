@@ -119,15 +119,18 @@ async def get_pnl_by_wallet(user_id: str, db) -> list[dict]:
         "    (CASE WHEN COALESCE(e.cnt, 0) > 0 THEN e.total "
         "     ELSE COALESCE(p.realized_pnl, 0) END) > 0 THEN 1 ELSE 0 END) AS wins "
         "FROM copy_positions p "
+        # This user's events only: an event carries its position's user_id, so
+        # the totals are the same and the index on (user_id, ts) bounds the scan.
         "LEFT JOIN (SELECT position_id, COUNT(pnl) AS cnt, COALESCE(SUM(pnl), 0) AS total "
-        "           FROM trade_events WHERE pnl IS NOT NULL GROUP BY position_id) e "
+        "           FROM trade_events WHERE user_id = ? AND pnl IS NOT NULL "
+        "           GROUP BY position_id) e "
         "  ON e.position_id = p.id "
         "LEFT JOIN trader_cache c ON c.address = p.trader_address "
         "WHERE p.user_id = ? AND (p.status IN ('closed', 'resolved') OR COALESCE(e.cnt, 0) > 0) "
         # c.display_name grouped too: 1:1 with trader_address, and Postgres
         # (unlike SQLite) rejects a bare non-aggregated column in SELECT.
         "GROUP BY p.trader_address, c.display_name ORDER BY realized_pnl DESC",
-        (user_id,))
+        (user_id, user_id))
     out = []
     for r in rows:
         trades = int(r["closed_trades"] or 0)

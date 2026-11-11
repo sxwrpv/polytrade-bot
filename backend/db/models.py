@@ -500,6 +500,9 @@ CREATE TABLE IF NOT EXISTS user_consents (
     accepted_at      TEXT NOT NULL,
     PRIMARY KEY(user_id, terms_version)
 );
+-- As supabase/migrations/0007 creates it.
+CREATE INDEX IF NOT EXISTS idx_user_consents_telegram
+    ON user_consents(telegram_user_id);
 
 CREATE TABLE IF NOT EXISTS funding_acknowledgements (
     user_id     TEXT NOT NULL REFERENCES users(id),
@@ -603,6 +606,10 @@ CREATE TABLE IF NOT EXISTS equity_snapshots (
     realized_pnl    DOUBLE PRECISION,
     unrealized_pnl  DOUBLE PRECISION
 );
+-- The chart, the snapshot writer and compaction all read by user and time
+-- (supabase/migrations/0015).
+CREATE INDEX IF NOT EXISTS idx_equity_snapshots_user_ts
+    ON equity_snapshots(user_id, ts);
 
 CREATE TABLE IF NOT EXISTS product_events (
     id              TEXT PRIMARY KEY,
@@ -614,6 +621,9 @@ CREATE TABLE IF NOT EXISTS product_events (
 CREATE INDEX IF NOT EXISTS idx_product_events_name_ts
     ON product_events(event_name, ts);
 CREATE INDEX IF NOT EXISTS idx_product_events_ts ON product_events(ts);
+-- As supabase/migrations/0009 creates it.
+CREATE INDEX IF NOT EXISTS idx_product_events_session_ts
+    ON product_events(session_id, ts);
 
 CREATE TABLE IF NOT EXISTS withdrawals (
     id               TEXT PRIMARY KEY,
@@ -772,7 +782,9 @@ ALTER TABLE copy_open_claims ADD COLUMN IF NOT EXISTS reserved_usd DOUBLE PRECIS
 ALTER TABLE copy_open_claims ADD COLUMN IF NOT EXISTS risk_revision INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE copy_open_claims ADD COLUMN IF NOT EXISTS updated_at TEXT;
 ALTER TABLE copy_open_claims ADD COLUMN IF NOT EXISTS last_error TEXT;
-UPDATE copy_open_claims SET claim_id = COALESCE(claim_id, md5(user_id || ':' || token_id)), updated_at = COALESCE(updated_at, claimed_at);
+-- Legacy rows only: once both columns are NOT NULL this matches no row.
+UPDATE copy_open_claims SET claim_id = COALESCE(claim_id, md5(user_id || ':' || token_id)), updated_at = COALESCE(updated_at, claimed_at)
+    WHERE claim_id IS NULL OR updated_at IS NULL;
 ALTER TABLE copy_open_claims ALTER COLUMN claim_id SET NOT NULL;
 ALTER TABLE copy_open_claims ALTER COLUMN updated_at SET NOT NULL;
 -- Capital-share sizing (supabase/migrations/0014). NULL keeps position share.

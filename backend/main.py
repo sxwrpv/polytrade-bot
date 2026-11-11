@@ -66,6 +66,35 @@ for _noisy in ("httpx", "httpcore", "urllib3", "web3", "websockets"):
 
 log = logging.getLogger("main")
 
+
+class _HealthAccessFilter(logging.Filter):
+    """Drops uvicorn's access line for a successful GET /api/health. Compose
+    polls it every 30 s and the proxy forwards monitors to it: 1,649 lines in
+    14 hours. Every other request still logs, and so does a health check that
+    fails."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        # uvicorn logs (client_addr, method, full_path, http_version,
+        # status_code). A record of any other shape passes through.
+        args = record.args
+        if not isinstance(args, tuple) or len(args) != 5:
+            return True
+        _, method, path, _, status = args
+        if method != "GET" or not isinstance(path, str):
+            return True
+        if path.split("?", 1)[0] != "/api/health":
+            return True
+        try:
+            return not 200 <= int(status) < 300
+        except (TypeError, ValueError):
+            return True
+
+
+# On the logger itself, so it holds whichever handler writes the line. uvicorn
+# configures logging before it imports this module, and its dictConfig
+# replaces a logger's handlers and leaves its filters in place.
+logging.getLogger("uvicorn.access").addFilter(_HealthAccessFilter())
+
 # Stamped by the build (Dockerfile ARG GIT_REVISION). "unknown" means the image
 # was not built through the deploy script, which is itself worth seeing.
 BUILD_REVISION = os.environ.get("GIT_REVISION", "unknown")
@@ -417,6 +446,12 @@ async def lifespan(app: FastAPI):
             except Exception as exc:
                 log.error("on-chain claim evidence unavailable (%s); uncertain claims "
                           "will only be adopted or retained", type(exc).__name__)
+        else:
+            # Without the URL no reader is built for a wallet's on-chain share
+            # balance, the one proof that an uncertain order did not fill.
+            log.warning("POLYGON_RPC_URL is unset: uncertain BUY claims cannot settle "
+                        "on-chain until it is set; a claim whose order did not fill "
+                        "stays retained")
         # Capital-share follows size from the leader's free cash on-chain:
         # POLYGON_RPC_URL when set, else the SDK's public endpoint, as the
         # redeemer and withdrawals read. No network until such a follow
