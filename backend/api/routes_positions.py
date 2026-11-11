@@ -165,10 +165,17 @@ async def closed_positions(user=Depends(get_current_user), db=Depends(get_db),
         "SELECT p.*, CASE WHEN "
         "(SELECT COUNT(e.pnl) FROM trade_events e WHERE e.position_id=p.id) > 0 THEN "
         "(SELECT COALESCE(SUM(e.pnl),0) FROM trade_events e WHERE e.position_id=p.id) "
-        "ELSE p.realized_pnl END AS realized_pnl "
+        "ELSE p.realized_pnl END AS ledger_pnl "
         "FROM copy_positions p WHERE p.user_id = ? AND p.closed_at >= ? "
         "AND p.status IN ('closed','resolved') ORDER BY p.closed_at DESC",
         (user["id"], cutoff))
+    # The ledger total is selected under its own name and then takes the place
+    # of the stored realized_pnl. Selected as a second realized_pnl beside p.*,
+    # it reached the row dict on Postgres only: asyncpg keeps the last column
+    # of a repeated name, SQLite the first.
+    for r in rows:
+        if "ledger_pnl" in r:
+            r["realized_pnl"] = r.pop("ledger_pnl")
     # Settled markets whose winnings were never redeemed still sit in the wallet
     # as `redeemable` tokens. The engine normally flips its own rows to
     # 'resolved', but a holding it never opened (or one whose follow was removed
@@ -247,13 +254,16 @@ async def close_external_position(body: CloseExternalBody, request: Request,
             if buy_claim or managed:
                 raise HTTPException(
                     409, "position is already managed, reserved, or awaiting reconciliation")
+            # closing_at stamps the fence like Database.claim_managed_sell does,
+            # so stuck-closing recovery leaves this row alone while its SELL
+            # is in flight.
             await tx.execute(
                 "INSERT INTO copy_positions(id,user_id,trader_address,condition_id,token_id,"
-                "market_slug,market_title,outcome,shares,entry_price,notional_usd,status,opened_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,'closing',?)",
+                "market_slug,market_title,outcome,shares,entry_price,notional_usd,status,"
+                "opened_at,closing_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,'closing',?,?)",
                 (position_id, user["id"], MANUAL_TRADER, p.condition_id, body.token_id,
                  p.slug or p.event_slug, p.title, (p.outcome or "").upper(), p.size,
-                 p.avg_price, round(p.initial_value, 2), ts))
+                 p.avg_price, round(p.initial_value, 2), ts, ts))
     except aiosqlite.IntegrityError:
         raise HTTPException(409, "position is already being closed")
     try:
