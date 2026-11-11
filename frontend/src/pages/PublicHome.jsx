@@ -71,6 +71,7 @@ function useTimelineScrub(ref) {
     const heads = [...figure.querySelectorAll('.cad-playhead')]
     figure.classList.add('is-scrub')
     let raf = 0
+    let drawn = -1   // the progress the figure was last drawn at
     const update = () => {
       raf = 0
       const vh = window.innerHeight
@@ -78,6 +79,10 @@ function useTimelineScrub(ref) {
       // From the figure's top reaching 85% of the screen to its bottom
       // reaching 55%: one comfortable scroll plays the whole timeline.
       const p = Math.min(1, Math.max(0, (vh * 0.85 - rect.top) / (vh * 0.3 + rect.height)))
+      // Everything drawn below follows from p. Away from the figure it rests
+      // at 0 or 1, so those scroll frames write nothing to the page.
+      if (p === drawn) return
+      drawn = p
       const t = p * 15.4
       for (const [node, at] of events) node.classList.toggle('on', at <= t)
       for (const head of heads) {

@@ -1,5 +1,6 @@
-import { useId } from 'react'
+import { useId, useState } from 'react'
 import { nearestStop } from '../copySizing'
+import { draftText, parseDraft } from '../settingDraft'
 
 // Slider + numeric input for one always-on per-wallet setting (unlike a
 // screener filter, there's no "off" — a copy setting always has a value).
@@ -8,7 +9,8 @@ import { nearestStop } from '../copySizing'
 // thumb (--fill), and the number field opens a decimal keypad on phones.
 // With `stops`, the thumb moves over those values in order, so a wide range
 // such as 0.1× to 100× keeps fine steps where they matter; the number field
-// still takes any value.
+// still takes any value. The field keeps its text as typed (see
+// settingDraft.js) and shows the value again on blur or after a drag.
 const formatValue = (v, unit) => {
   if (unit === '$') return `$${v.toLocaleString('en-US')}`
   if (unit === '%') return `${v}%`
@@ -25,6 +27,7 @@ export default function SettingSlider({
     ? (at / (stops.length - 1)) * 100
     : max > min ? Math.min(100, Math.max(0, ((v - min) / (max - min)) * 100)) : 0
   const hintId = useId()
+  const [draft, setDraft] = useState(null)   // text being typed, null = follow the value
 
   return (
     <div className="fld fld-slider">
@@ -43,15 +46,19 @@ export default function SettingSlider({
           aria-label={label}
           aria-valuetext={stops ? formatValue(v, unit) : undefined}
           aria-describedby={hint ? hintId : undefined}
-          onChange={(e) => onChange(stops ? stops[Number(e.target.value)] : Number(e.target.value))}
+          onChange={(e) => {
+            setDraft(null)
+            onChange(stops ? stops[Number(e.target.value)] : Number(e.target.value))
+          }}
           onWheel={(e) => e.currentTarget.blur()}
         />
         <input
           className="slider-num"
           inputMode="decimal"
           aria-label={`${label}, exact value`}
-          value={value ?? ''}
-          onChange={(e) => onChange(e.target.value === '' ? '' : Number(e.target.value))}
+          value={draftText(draft, value)}
+          onChange={(e) => { setDraft(e.target.value); onChange(parseDraft(e.target.value)) }}
+          onBlur={() => setDraft(null)}
         />
       </div>
       {hint && <span className="setting-hint" id={hintId}>{hint}</span>}

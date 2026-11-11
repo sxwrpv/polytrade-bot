@@ -17,10 +17,16 @@ function load() {
   }
 }
 export const getSession = load
-export const getWallet = () => load()?.address || null
 export const saveSession = (s) =>
   localStorage.setItem(KEY, JSON.stringify({ address: s?.address ?? null }))
 export const clearWallet = () => localStorage.removeItem(KEY)
+
+// FastAPI reports a failed validation (422) as a list of {loc, msg} entries;
+// their messages are joined into one line. Any other detail passes through.
+function detailText(detail) {
+  if (!Array.isArray(detail)) return detail
+  return detail.map((entry) => (typeof entry === 'string' ? entry : entry?.msg)).filter(Boolean).join('; ')
+}
 
 async function req(path, opts = {}) {
   const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) }
@@ -29,7 +35,7 @@ async function req(path, opts = {}) {
   const r = await fetch(`/api${path}`, { ...opts, headers, credentials: 'same-origin' })
   if (!r.ok) {
     const body = await r.json().catch(() => ({}))
-    const error = new Error(body.detail || r.statusText)
+    const error = new Error(detailText(body?.detail) || r.statusText)
     error.status = r.status
     throw error
   }

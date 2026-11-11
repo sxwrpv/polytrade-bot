@@ -1,18 +1,16 @@
 import { useEffect, useState } from 'react'
-import { api } from './api'
+import { loadVersion } from './serverVersion.js'
 
-/* Whether this server lets every linked account withdraw in the app, read once
-   from /api/version. Until it answers, or if it cannot, the wording says there
-   is no in-app withdrawal, which is also true while withdrawals are switched
-   off or open only to an allowlist. */
+/* Whether this server lets every linked account withdraw in the app, from the
+   shared /api/version read. Until it answers, or if it cannot, the wording
+   says there is no in-app withdrawal, which is also true while withdrawals are
+   switched off or open only to an allowlist. */
 const CLOSED = { open: false }
-let pending = null
 
 export function loadWithdrawStatus() {
-  pending ||= api.version()
+  return loadVersion()
     .then((v) => ({ ...CLOSED, ...(v?.withdrawals || {}) }))
     .catch(() => CLOSED)
-  return pending
 }
 
 export function useWithdrawStatus() {

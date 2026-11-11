@@ -7,6 +7,7 @@ import Home from './pages/Home'
 import Positions from './pages/Positions'
 import User from './pages/User'
 import Icon from './components/Icon'
+import { StateBlock } from './components/UiState'
 
 const TABS = [['home', 'Home', 'home'], ['positions', 'Positions', 'positions'], ['user', 'Account', 'account']]
 const tg = window.Telegram?.WebApp
@@ -41,6 +42,34 @@ class ChunkBoundary extends Component {
           <a className="btn btn-ghost btn-block" href="https://t.me/cpolytrade_bot">Open the bot</a>
         </div>
       </div>
+    )
+  }
+}
+
+/* A page that throws while rendering would otherwise unmount the whole app to
+   a blank screen. The failure stays inside the page area: the header and the
+   tab bar keep working, and the boundary remounts with the page on a tab
+   change, so the other pages stay in reach. */
+class PageBoundary extends Component {
+  state = { failed: false }
+
+  static getDerivedStateFromError() { return { failed: true } }
+
+  render() {
+    if (!this.state.failed) return this.props.children
+    return (
+      <StateBlock
+        icon="alert"
+        tone="error"
+        title="This page didn’t load"
+        action={(
+          <button type="button" className="btn btn-ghost" onClick={() => window.location.reload()}>
+            <Icon name="refresh" />Reload
+          </button>
+        )}
+      >
+        Something went wrong while showing it. Reload the app, or switch to another tab.
+      </StateBlock>
     )
   }
 }
@@ -85,10 +114,6 @@ export default function App() {
     }).then((result) => { if (current) setLaunch(result) })
     return () => { current = false }
   }, [attempt])
-
-  useEffect(() => {
-    if (launch.mode === 'authenticated') window.location.hash = tab
-  }, [tab, launch.mode])
 
   const finishOnboarding = useCallback((address) => {
     setLaunch({ mode: 'authenticated', session: { address } })
@@ -157,9 +182,11 @@ export default function App() {
         <span className="app-page">{TABS[index][1]}</span>
       </header>
       <main className="content" key={tab}>
-        {tab === 'home' && <Home />}
-        {tab === 'positions' && <Positions onNavigate={goTo} />}
-        {tab === 'user' && <User onLogout={() => setLaunch({ mode: 'public', session: null })} />}
+        <PageBoundary>
+          {tab === 'home' && <Home />}
+          {tab === 'positions' && <Positions onNavigate={goTo} />}
+          {tab === 'user' && <User onLogout={() => setLaunch({ mode: 'public', session: null })} />}
+        </PageBoundary>
       </main>
       <nav className="tab-bar" aria-label="Account navigation" style={{ '--i': index }}>
         {TABS.map(([key, label, icon]) => (

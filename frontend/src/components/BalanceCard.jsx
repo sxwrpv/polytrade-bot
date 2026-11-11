@@ -78,7 +78,10 @@ export default function BalanceCard() {
     const span = hi - lo || Math.max(1, Math.abs(hi) * 0.1)
     const x = (i) => (i / (points.length - 1)) * 100
     const y = (v) => H - PAD - ((v - lo) / span) * (H - PAD * 2)
-    return { x, y, rising: ys[ys.length - 1] >= ys[0] }
+    // The curve as an SVG points list, built once per series; hovering moves
+    // the cursor only.
+    const line = points.map((p, i) => `${x(i)},${y(p.y)}`).join(' ')
+    return { x, y, line, rising: ys[ys.length - 1] >= ys[0] }
   }, [points])
 
   const cursor = at == null ? points.length - 1 : clamp(at, 0, points.length - 1)
@@ -164,11 +167,11 @@ export default function BalanceCard() {
                 </linearGradient>
               </defs>
               <polygon
-                points={`0,${H} ${points.map((p, i) => `${geom.x(i)},${geom.y(p.y)}`).join(' ')} 100,${H}`}
+                points={`0,${H} ${geom.line} 100,${H}`}
                 fill="url(#balance-fill)"
               />
               <polyline
-                points={points.map((p, i) => `${geom.x(i)},${geom.y(p.y)}`).join(' ')}
+                points={geom.line}
                 fill="none"
                 stroke={geom.rising ? UP : DOWN}
                 strokeWidth="2"

@@ -7,7 +7,7 @@ import Folder from '../components/Folder'
 import Icon from '../components/Icon'
 import { FundingAccess } from '../components/DepositAddresses'
 import WithdrawPanel from '../components/Withdraw'
-import { Notice, StateBlock, describeError } from '../components/UiState'
+import { ErrorState, Notice, StateBlock, describeError } from '../components/UiState'
 import { performLogout } from '../authBootstrap'
 import { redeemWithin, useRedeemStatus } from '../redeemStatus'
 import { dollars } from '../money'
@@ -23,6 +23,7 @@ export default function User({ onLogout }) {
   const [pnl, setPnl] = useState(null)
   const [pnlError, setPnlError] = useState(null)
   const [byWallet, setByWallet] = useState(null)
+  const [byWalletError, setByWalletError] = useState(null)
   const [name, setName] = useState('')
   const [nameStatus, setNameStatus] = useState(null)   // null | 'saving' | 'saved' | Error
   const [exp, setExp] = useState(false)
@@ -33,6 +34,7 @@ export default function User({ onLogout }) {
   const [loggingOut, setLoggingOut] = useState(false)
   const [reload, setReload] = useState(0)
   const savedName = useRef(null)
+  const revealSeq = useRef(0)   // the reveal in flight; closing the dialog moves it on
 
   useEffect(() => {
     // paint the profile immediately, upgrade with balance when it lands (the
@@ -49,7 +51,14 @@ export default function User({ onLogout }) {
     setMe(null)
     setMeError(null)
     api.me(true).then(setMe).catch((e) => setMeError(e))
-    api.pnlByWallet().then(setByWallet).catch(() => setByWallet([]))
+    // A failed breakdown read shows as a failure with a retry; the answer to
+    // an earlier reload is dropped so it cannot replace a newer one.
+    let live = true
+    setByWalletError(null)
+    api.pnlByWallet()
+      .then((rows) => { if (live) setByWallet(rows) })
+      .catch((e) => { if (live) setByWalletError(e) })
+    return () => { live = false }
   }, [reload])
 
   useEffect(() => {
@@ -57,6 +66,9 @@ export default function User({ onLogout }) {
     // calendar, and it is a fixed 30-day window.
     api.pnl('30d').then((p) => { setPnl(p); setPnlError(null) }).catch((e) => setPnlError(e))
   }, [reload])
+
+  // Leaving the page drops a reveal still in flight and the key with it.
+  useEffect(() => () => { revealSeq.current += 1; setKey('') }, [])
 
   const saveName = useCallback(async () => {
     if (name === savedName.current) return
@@ -79,15 +91,25 @@ export default function User({ onLogout }) {
       setExpErr('Open the app from the Telegram bot to export your key.')
       return
     }
+    const mine = ++revealSeq.current
     setRevealing(true)
     try {
       const r = await api.exportKey(initData)
-      setKey(r.private_key)
+      // A key that arrives after the dialog closed is dropped unseen.
+      if (mine === revealSeq.current) setKey(r.private_key)
     } catch (e) {
-      setExpErr(String(e.message || e))
+      if (mine === revealSeq.current) setExpErr(String(e.message || e))
     } finally {
-      setRevealing(false)
+      if (mine === revealSeq.current) setRevealing(false)
     }
+  }
+
+  function closeExport() {
+    revealSeq.current += 1
+    setExp(false)
+    setKey('')
+    setExpErr('')
+    setRevealing(false)
   }
 
   async function logOut() {
@@ -214,7 +236,13 @@ export default function User({ onLogout }) {
         </div>
 
         <Folder id="user-breakdown" title="Breakdown by copied wallet" count={byWallet?.length || undefined}>
-          {byWallet == null ? (
+          {byWalletError ? (
+            <ErrorState
+              title="Couldn’t load the breakdown"
+              error={byWalletError}
+              onRetry={() => setReload((n) => n + 1)}
+            />
+          ) : byWallet == null ? (
             <div className="sk-card"><div className="sk sk-title" /><div className="sk sk-line" /></div>
           ) : byWallet.length === 0 ? (
             <StateBlock icon="positions" title="No closed positions yet">
@@ -275,7 +303,7 @@ export default function User({ onLogout }) {
         <Modal
           title="Export private key"
           accent="red"
-          onClose={() => { setExp(false); setKey(''); setExpErr('') }}
+          onClose={closeExport}
         >
           <Notice tone="error">
             <b>Your private key gives full access to your funds.</b> Never share it, never paste it

@@ -1,17 +1,15 @@
 import { useEffect, useState } from 'react'
-import { api } from './api'
+import { loadVersion } from './serverVersion.js'
 
-/* Whether this server redeems resolved positions by itself, read once from
-   /api/version. Until it answers, or if it cannot, the wording sends people to
-   polymarket.com, which works whatever the server does. */
+/* Whether this server redeems resolved positions by itself, from the shared
+   /api/version read. Until it answers, or if it cannot, the wording sends
+   people to polymarket.com, which works whatever the server does. */
 const MANUAL = { auto: false, losses: false, every_minutes: null }
-let pending = null
 
 export function loadRedeemStatus() {
-  pending ||= api.version()
+  return loadVersion()
     .then((v) => ({ ...MANUAL, ...(v?.redeem || {}) }))
     .catch(() => MANUAL)
-  return pending
 }
 
 export function useRedeemStatus() {

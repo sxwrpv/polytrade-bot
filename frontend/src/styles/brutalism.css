@@ -62,7 +62,6 @@
   --mono: 'JetBrains Mono', 'Consolas', monospace;
   --ease: cubic-bezier(.16, 1, .3, 1);      /* kit expo-out */
   --ease-pop: cubic-bezier(.2, 1.1, .3, 1); /* kit pill / segment */
-  --ease-exit: cubic-bezier(.4, 0, 1, 1);
   --shadow-float: 0 12px 32px rgba(20, 32, 26, 0.14);   /* floating layers only */
 }
 
@@ -326,7 +325,6 @@ button { font: inherit; color: inherit; }
 /* Positive / negative PnL colors */
 .pos { color: var(--green-text); }
 .neg { color: var(--red); }
-.neutral { color: var(--yellow); }
 
 /* Section headers — sentence case, ink, a short green tick instead of a
    terminal prompt. */
@@ -588,29 +586,6 @@ input[aria-invalid='true'] { border-color: var(--red-line); box-shadow: 0 0 0 3p
   color: var(--red); padding: 12px 14px; font-size: 14px;
   line-height: 1.55;
 }
-
-/* chips, segmented controls */
-.sort-row, .toggle-row { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
-.chip {
-  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-  min-height: 40px;
-  background: rgba(255, 255, 255, 0.5);
-  border: 1px solid var(--border);
-  color: var(--muted);
-  font-family: inherit; font-size: 14px; font-weight: 600;
-  padding: 6px 14px; cursor: pointer; border-radius: 999px;
-  transition: color .2s ease, background .2s ease, border-color .2s ease, transform .3s var(--ease);
-}
-.chip:active { transform: scale(.96); }
-.chip.active {
-  /* --green (#0b9e63) on a 10% tint is 3.05:1 — under AA at this size. The
-     deep token on the same tint is 6.08:1, so the state reads without the
-     label getting harder to see. */
-  color: var(--green-deep);
-  border-color: rgba(11, 158, 99, 0.45);
-  background: var(--green-soft);
-}
-.chip-icon { display: inline-flex; align-items: center; gap: 6px; }
 
 /* Segmented control with the kit's sliding pill. --n segments, --i selected;
    both are set inline as custom properties (CSSOM, so the CSP allows them). */
@@ -915,7 +890,6 @@ button.hm-cell.is-pinned { box-shadow: 0 0 0 2px var(--green-deep); z-index: 3; 
 .pc-data b { display: block; font-family: var(--mono); font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .pc-foot { display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
 .pc-foot .btn { min-width: 132px; }
-.pc-row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; font-size: 13px; }
 
 /* ---------- activity feed ------------------------------------------------- */
 .feed { border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--surface); overflow: hidden; }
@@ -1049,11 +1023,9 @@ a { color: inherit; }
 .notice-box { padding: 12px 14px; border: 1px solid var(--amber-line); border-radius: var(--r-md); background: var(--amber-wash); color: #6b4805; font-size: 14px; line-height: 1.6; }
 .funding-disclosure { margin-bottom: 12px; }
 .funding-instructions { font-size: 14px; line-height: 1.6; margin-bottom: 12px; }
-.funding-note { margin-top: 9px; border-top: 1px solid var(--border); padding-top: 9px; }
 .funding-address { display: grid; gap: 6px; margin-top: 12px; }
 .logout-note { font-size: 14px; line-height: 1.55; }
 .center { text-align: center; }
-.center-link { text-align: center; }
 .launch-state, .launch-loading { min-height: 100vh; min-height: 100dvh; justify-content: center; }
 .launch-state .launch-actions { display: grid; gap: 10px; margin-top: 8px; }
 .launch-loading { align-items: center; text-align: center; gap: 18px; }
