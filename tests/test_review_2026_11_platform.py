@@ -215,14 +215,17 @@ class _IdleEngine:
 
 
 class ClaimEvidenceStartupLogTests(unittest.TestCase):
-    def boot(self, rpc_url: str):
+    def boot(self, rpc_url: str, *, onchain_detection: bool = False,
+             detector_error: Exception | None = None):
         """Start the app with the copy engine on. Returns what the engine was
         built with and everything logged meanwhile."""
         from backend.core import ctf, detection, leader_cash
+        self.detector_cls = MagicMock(side_effect=detector_error)
         with patch.object(config, "POLYGON_RPC_URL", rpc_url), \
+                patch.object(config, "ONCHAIN_DETECTION", onchain_detection), \
                 patch.object(main, "CopyEngine", _IdleEngine), \
                 patch.object(leader_cash, "LeaderCashReader", MagicMock()), \
-                patch.object(detection, "OnChainDetector", MagicMock()), \
+                patch.object(detection, "OnChainDetector", self.detector_cls), \
                 patch.object(ctf, "CtfReader", MagicMock()), \
                 patch.dict(os.environ, {"COPY_ENGINE_AUTOSTART": "1"}), \
                 self.assertLogs(level="INFO") as logs:
@@ -254,6 +257,69 @@ class ClaimEvidenceStartupLogTests(unittest.TestCase):
         self.assertNotIn("rpc.example.invalid", text)
         self.assertNotIn("key-0123456789", text)
         self.assertIn("uncertain BUY claims settle from on-chain balances", text)
+
+
+# ---------------------------------------------------------------------------
+# ONCHAIN_DETECTION: the RPC URL by itself turns on claim evidence only
+# ---------------------------------------------------------------------------
+class TradeDetectionFlagTests(unittest.TestCase):
+    boot = ClaimEvidenceStartupLogTests.boot
+    URL = "https://rpc.example.invalid/v2/key-0123456789"
+
+    def test_a_set_rpc_url_leaves_leader_trades_on_the_activity_poll(self):
+        built, logs = self.boot(self.URL)
+        # detector=None is the engine's default, the activity poll.
+        self.assertIsNone(built["detector"])
+        self.assertIsNotNone(built["ctf"])
+        self.detector_cls.assert_not_called()
+        text = "\n".join(logs.output)
+        self.assertNotIn("using on-chain OrderFilled detector", text)
+        self.assertIn("leader trades are read from the activity poll", text)
+
+    def test_the_flag_with_a_url_reads_leader_trades_on_chain(self):
+        built, logs = self.boot(self.URL, onchain_detection=True)
+        self.detector_cls.assert_called_once_with(self.URL)
+        self.assertIs(self.detector_cls.return_value, built["detector"])
+        self.assertIsNotNone(built["ctf"])
+        self.assertIn("using on-chain OrderFilled detector", "\n".join(logs.output))
+
+    def test_the_flag_without_a_url_is_warned_about_and_changes_nothing(self):
+        built, logs = self.boot("", onchain_detection=True)
+        self.assertIsNone(built["detector"])
+        self.assertIsNone(built["ctf"])
+        self.detector_cls.assert_not_called()
+        warnings = [r.getMessage() for r in logs.records
+                    if r.name == "main" and r.levelno == logging.WARNING
+                    and "ONCHAIN_DETECTION" in r.getMessage()]
+        self.assertEqual(1, len(warnings))
+        self.assertIn("leader trades stay on the activity poll", warnings[0])
+
+    def test_a_detector_that_fails_to_start_keeps_the_poll_and_claim_evidence(self):
+        built, _ = self.boot(self.URL, onchain_detection=True,
+                             detector_error=RuntimeError("no chain"))
+        self.detector_cls.assert_called_once_with(self.URL)
+        self.assertIsNone(built["detector"])
+        self.assertIsNotNone(built["ctf"])
+
+    def test_an_engine_built_without_a_detector_polls_the_activity_feed(self):
+        from backend.core import detection
+        from backend.core.copy_engine import CopyEngine
+        engine = CopyEngine(SimpleNamespace(), SimpleNamespace(), detector=None)
+        self.assertIsInstance(engine.detector, detection.ActivityPollDetector)
+
+    def test_the_flag_is_on_only_when_the_environment_sets_it_to_one(self):
+        for value, expected in ((None, "False"), ("0", "False"), ("1", "True"), ("yes", "False")):
+            with self.subTest(value=value):
+                env = {k: v for k, v in os.environ.items() if k != "ONCHAIN_DETECTION"}
+                env["PYTHONPATH"] = str(ROOT)
+                if value is not None:
+                    env["ONCHAIN_DETECTION"] = value
+                done = subprocess.run(
+                    [sys.executable, "-c",
+                     "from backend import config; print(config.ONCHAIN_DETECTION)"],
+                    capture_output=True, text=True, cwd=ROOT, env=env, timeout=60)
+                self.assertEqual(0, done.returncode, done.stderr)
+                self.assertEqual(expected, done.stdout.strip())
 
 
 # ---------------------------------------------------------------------------

@@ -429,16 +429,23 @@ async def lifespan(app: FastAPI):
     tasks: list[asyncio.Task] = []
     tasks.append(asyncio.create_task(_telemetry_retention_loop(db, stop)))
     if os.environ.get("COPY_ENGINE_AUTOSTART", "1") == "1":
-        from backend.config import POLYGON_RPC_URL
+        from backend.config import ONCHAIN_DETECTION, POLYGON_RPC_URL
         from backend.core import ctf, detection, leader_cash
         detector = None
         ctf_reader = None
         if POLYGON_RPC_URL:
-            try:
-                detector = detection.OnChainDetector(POLYGON_RPC_URL)
-                log.info("using on-chain OrderFilled detector")
-            except Exception:
-                log.exception("on-chain detector init failed; falling back to activity poll")
+            # The URL by itself turns on claim evidence. Leader trades stay on
+            # the activity poll until ONCHAIN_DETECTION asks for the
+            # OrderFilled detector as well.
+            if ONCHAIN_DETECTION:
+                try:
+                    detector = detection.OnChainDetector(POLYGON_RPC_URL)
+                    log.info("using on-chain OrderFilled detector")
+                except Exception:
+                    log.exception("on-chain detector init failed; falling back to activity poll")
+            else:
+                log.info("leader trades are read from the activity poll "
+                         "(ONCHAIN_DETECTION is off)")
             try:
                 # No network here: the reader verifies the chain on first use.
                 ctf_reader = ctf.CtfReader(POLYGON_RPC_URL)
@@ -452,6 +459,9 @@ async def lifespan(app: FastAPI):
             log.warning("POLYGON_RPC_URL is unset: uncertain BUY claims cannot settle "
                         "on-chain until it is set; a claim whose order did not fill "
                         "stays retained")
+            if ONCHAIN_DETECTION:
+                log.warning("ONCHAIN_DETECTION is set and the RPC URL is missing: "
+                            "leader trades stay on the activity poll")
         # Capital-share follows size from the leader's free cash on-chain:
         # POLYGON_RPC_URL when set, else the SDK's public endpoint, as the
         # redeemer and withdrawals read. No network until such a follow

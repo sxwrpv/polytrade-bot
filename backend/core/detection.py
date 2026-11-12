@@ -9,9 +9,9 @@ Two tiers behind one interface:
   - ActivityPollDetector (default): polls /activity?type=TRADE per leader.
     ~3-8s end-to-end, bounded by Polymarket's indexer lag. No extra
     dependencies.
-  - OnChainDetector (used when POLYGON_RPC_URL is set): polls Polygon
-    OrderFilled logs filtered by the leader's address over HTTP JSON-RPC.
-    ~2-4s and attributed.
+  - OnChainDetector (ONCHAIN_DETECTION=1 with POLYGON_RPC_URL set): polls
+    Polygon OrderFilled logs filtered by the leader's address over HTTP
+    JSON-RPC. ~2-4s and attributed.
 """
 from __future__ import annotations
 

@@ -36,7 +36,8 @@ Used for Telegram login validation, account linking, export step-up, and alerts.
 
 - `DETECTION_POLL_SECONDS` — fast activity cadence; default `2`.
 - `COPY_ENGINE_POLL_SECONDS` — full reconciliation cadence; default `30`.
-- `POLYGON_RPC_URL` — optional HTTP RPC for on-chain polling, and the only evidence that lets the engine release an uncertain buy claim (it reads the wallet's own share balance). Without it, uncertain claims are only adopted or kept.
+- `POLYGON_RPC_URL` — optional HTTP RPC, and the only evidence that lets the engine release an uncertain buy claim (it reads the wallet's own share balance). Without it, uncertain claims are only adopted or kept. Once set, the redeem loop, deposit alerts, withdrawals and leader-cash reads use this endpoint too, so it has to answer `eth_getLogs` over a 100-block range and `eth_getBlockByNumber("finalized")`.
+- `ONCHAIN_DETECTION` — default `0`: leader trades are found by activity polling. Set to `1`, with `POLYGON_RPC_URL` set, to detect them from OrderFilled logs on Polygon. The on-chain detector needs the `web3` package, which `requirements.txt` leaves out.
 - `UNCERTAIN_CLAIM_EVIDENCE_SECONDS` — how long after its last change an uncertain claim waits before the on-chain balance may settle it; default `900`.
 - `LEADER_CASH_CACHE_SECONDS` — how long one reading of a source wallet's free cash (pUSD, USDC.e and native USDC) serves cash-share sizing; default `30`. The reading comes from `POLYGON_RPC_URL` when set, otherwise the SDK's public Polygon endpoint.
 - `COPY_ENGINE_AUTOSTART` — direct runtime defaults on; base Compose defaults off for safety.

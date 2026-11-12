@@ -32,11 +32,17 @@ HTTP_USER_AGENT = os.environ.get(
 )
 HTTP_TIMEOUT = float(os.environ.get("HTTP_TIMEOUT", "15"))
 
-# --- On-chain detection (optional, faster tier) ---
-# Polygon JSON-RPC HTTP URL. If set, the engine uses the on-chain OrderFilled
-# detector (~2-4s, attributed) instead of activity polling (~3-8s). Use your own
-# Alchemy/Infura endpoint for reliability; a public RPC works for light use.
+# --- Polygon RPC (optional) ---
+# Polygon JSON-RPC HTTP URL. With it set, the engine reads a wallet's on-chain
+# share balance, the one proof that lets it release an uncertain BUY claim.
+# Use your own Alchemy/Infura endpoint for reliability; a public RPC works for
+# light use.
 POLYGON_RPC_URL = os.environ.get("POLYGON_RPC_URL", "").strip()
+# Leader trades are found by polling the activity feed (~3-8s). Set to 1,
+# together with POLYGON_RPC_URL, to read them from OrderFilled logs on Polygon
+# (~2-4s, attributed). That detector needs the web3 package, which
+# requirements.txt leaves out.
+ONCHAIN_DETECTION = os.environ.get("ONCHAIN_DETECTION", "0") == "1"
 
 # --- Database ---
 # When DATABASE_URL is set (a Postgres/Supabase DSN) the app uses Postgres via
