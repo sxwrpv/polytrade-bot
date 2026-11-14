@@ -1289,10 +1289,22 @@ class CopyEngine:
                 "WHERE user_id = ? AND status IN ('open','closing','reconciliation_required')",
                 (user_id,))
             trader_open_rows = [r for r in all_open if r["trader_address"] == trader]
-            if frisk["max_open"] is not None and len(trader_open_rows) >= frisk["max_open"]:
-                log.info("fast-open skipped %s reason=max_open (%d) trader=%s",
-                         token, frisk["max_open"], trader[:10])
-                return
+            if frisk["max_open"] is not None:
+                # The claim gate also counts opens still reserved, in flight or
+                # uncertain as taken slots. Without them here, a follow whose
+                # slots were all held by uncertain claims logged a candidate
+                # that the gate then refused with no reason (2026-11-14: 101
+                # copies of one leader, each one silent).
+                claims = await self.db.fetchall(
+                    "SELECT trader_address FROM copy_open_claims WHERE user_id = ? "
+                    "AND action = 'open' AND state IN ('reserved','submitting','uncertain')",
+                    (user_id,))
+                claimed = sum(1 for r in claims
+                              if r["trader_address"].lower() == trader.lower())
+                if len(trader_open_rows) + claimed >= frisk["max_open"]:
+                    log.info("fast-open skipped %s reason=max_open (%d, %d held by claims) "
+                             "trader=%s", token, frisk["max_open"], claimed, trader[:10])
+                    return
             sizing = {}
             if capital:
                 # CAPITAL SHARE: the share of their cash the bet took, of

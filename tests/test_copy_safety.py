@@ -753,6 +753,41 @@ class CapitalShareEngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("leader cash unavailable", text)
         self.assertIn("reason=leader_cash_unknown", text)
 
+    async def claim(self, token: str, *, trader: str = TRADER, action: str = "open",
+                    state: str = "uncertain") -> None:
+        await self.db.execute(
+            "INSERT INTO copy_open_claims(user_id,token_id,trader_address,claim_id,action,"
+            "state,reserved_usd,claimed_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            (USER, token, trader, f"claim-{token}", action, state, 10.0, now_iso(), now_iso()))
+
+    async def test_fast_path_counts_claimed_opens_against_max_open(self):
+        # 2026-11-14: four uncertain BUY claims held all four slots of a follow,
+        # and every copy logged a candidate the claim gate refused silently.
+        await self.db.execute(
+            "UPDATE followed_traders SET max_open_positions=2 WHERE id='follow-1'")
+        await self.claim("other-token-1")
+        await self.claim("other-token-2", state="reserved")
+        engine = self.engine(cash=FakeLeaderCash(8000.0))
+
+        with self.assertLogs("copy_engine", level="INFO") as logs:
+            await engine._handle_leader_trade(await self.follow(), leader_buy())
+
+        self.assertEqual([], self.orders)
+        text = "\n".join(logs.output)
+        self.assertIn("reason=max_open (2, 2 held by claims)", text)
+        self.assertNotIn("fast-open candidate", text)
+
+    async def test_claims_holding_no_open_slot_of_this_follow_leave_max_open_alone(self):
+        await self.db.execute(
+            "UPDATE followed_traders SET max_open_positions=1 WHERE id='follow-1'")
+        await self.claim("other-token-1", action="resize")
+        await self.claim("other-token-2", trader="0x" + "9" * 40)
+        engine = self.engine(cash=FakeLeaderCash(8000.0))
+
+        await engine._handle_leader_trade(await self.follow(), leader_buy())
+
+        self.assertEqual([("BUY", 30.0)], self.orders)
+
     async def test_without_a_reader_capital_share_copies_nothing(self):
         engine = self.engine(cash=None)
         with self.assertLogs("copy_engine", level="WARNING"):
